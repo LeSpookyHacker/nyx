@@ -1366,6 +1366,6 @@ For repositories with thousands of findings:
 
 <br/>
 
-Built with [FastAPI](https://fastapi.tiangolo.com) · [React](https://react.dev) · [Claude](https://anthropic.com) · [GitHub](https://github.com)
+Co-Authored by Le Spooky Hacker (wanderersgrimoire@gmail.com) and Claude Sonnet 4.6
 
 </div>
