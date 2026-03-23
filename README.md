@@ -1366,6 +1366,6 @@ For repositories with thousands of findings:
 
 <br/>
 
-Co-Authored by Le Spooky Hacker (wanderersgrimoire@gmail.com) and Claude Sonnet 4.6
+Built by Le Spooky Hacker (wanderersgrimoire@gmail.com)
 
 </div>
