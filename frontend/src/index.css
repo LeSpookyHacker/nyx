@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #4f46e5 #0d0d1a;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #0d0d1a;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background-color: #4f46e5;
+    border-radius: 3px;
+  }
+}
+
+@layer components {
+  .nyx-card {
+    @apply bg-nyx-midnight border border-nyx-iris/20 rounded-xl shadow-nyx;
+  }
+
+  .nyx-btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm
+           transition-all duration-150 focus:outline-none focus:ring-2 focus:ring-nyx-amethyst/50;
+  }
+
+  .nyx-btn-primary {
+    @apply nyx-btn bg-nyx-iris hover:bg-nyx-amethyst text-white;
+  }
+
+  .nyx-btn-ghost {
+    @apply nyx-btn bg-transparent hover:bg-nyx-twilight text-nyx-mist hover:text-nyx-moonbeam;
+  }
+
+  .nyx-btn-danger {
+    @apply nyx-btn bg-red-900/30 hover:bg-red-900/50 text-red-400 border border-red-800/50;
+  }
+
+  .nyx-input {
+    @apply bg-nyx-dusk border border-nyx-iris/20 rounded-lg px-3 py-2 text-sm text-nyx-moonbeam
+           placeholder:text-nyx-mist/50 focus:outline-none focus:border-nyx-amethyst focus:ring-1
+           focus:ring-nyx-amethyst/30 transition-all;
+  }
+
+  .nyx-badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold;
+  }
+
+  .severity-critical {
+    @apply bg-red-900/40 text-red-400 border border-red-800/40;
+  }
+
+  .severity-high {
+    @apply bg-orange-900/40 text-orange-400 border border-orange-800/40;
+  }
+
+  .severity-medium {
+    @apply bg-yellow-900/40 text-yellow-400 border border-yellow-800/40;
+  }
+
+  .severity-low {
+    @apply bg-green-900/40 text-green-400 border border-green-800/40;
+  }
+
+  .severity-info {
+    @apply bg-slate-800/60 text-slate-400 border border-slate-700/40;
+  }
+}

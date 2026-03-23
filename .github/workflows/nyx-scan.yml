@@ -1,0 +1,207 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Nyx Reusable Security Scan Workflow
+#
+# Call this from any repository to run all scanners and ship results to Nyx:
+#
+#   jobs:
+#     nyx:
+#       uses: your-org/nyx/.github/workflows/nyx-scan.yml@main
+#       with:
+#         nyx_url:       ${{ vars.NYX_URL }}
+#         repository_id: ${{ vars.NYX_REPO_ID }}
+#       secrets:
+#         nyx_api_key:   ${{ secrets.NYX_API_KEY }}
+#
+# GitHub repository settings needed (Settings → Variables / Secrets):
+#   vars.NYX_URL       — https://nyx.yourcompany.com   (your Nyx instance)
+#   vars.NYX_REPO_ID   — UUID from GET /api/v1/repositories
+#   secrets.NYX_API_KEY — your NYX_API_KEY (omit if auth is disabled)
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Nyx Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      nyx_url:
+        description: 'Base URL of your Nyx instance (no trailing slash)'
+        required: true
+        type: string
+      repository_id:
+        description: 'Nyx repository ID (from GET /api/v1/repositories)'
+        required: true
+        type: string
+      scanners:
+        description: 'Comma-separated list of scanners to run'
+        required: false
+        default: 'SEMGREP,BANDIT,TRIVY,GRYPE,CHECKOV'
+        type: string
+      semgrep_config:
+        description: 'Semgrep config (auto | p/security-audit | path/to/.semgrep/)'
+        required: false
+        default: 'auto'
+        type: string
+      python_version:
+        description: 'Python version used for Bandit / Semgrep / Checkov'
+        required: false
+        default: '3.12'
+        type: string
+    secrets:
+      nyx_api_key:
+        description: 'Nyx API key. Omit if NYX_API_KEY is not set.'
+        required: false
+
+jobs:
+  nyx-scan:
+    name: Nyx Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      # ── Semgrep ─────────────────────────────────────────────────────────────
+      - name: Run Semgrep
+        if: contains(inputs.scanners, 'SEMGREP')
+        env:
+          SEMGREP_SEND_METRICS: 'off'
+        run: |
+          pip install semgrep --quiet
+          semgrep --config=${{ inputs.semgrep_config }} \
+            --json --output semgrep.json . || true
+
+      - name: Report Semgrep → Nyx
+        if: contains(inputs.scanners, 'SEMGREP') && hashFiles('semgrep.json') != ''
+        env:
+          NYX_URL: ${{ inputs.nyx_url }}
+          NYX_API_KEY: ${{ secrets.nyx_api_key }}
+          REPO_ID: ${{ inputs.repository_id }}
+        run: |
+          jq -n \
+            --arg repo    "$REPO_ID" \
+            --arg scanner "SEMGREP" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d semgrep.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -d @-
+          echo "✓ Semgrep results sent to Nyx"
+
+      # ── Bandit (Python) ─────────────────────────────────────────────────────
+      - name: Run Bandit
+        if: contains(inputs.scanners, 'BANDIT')
+        run: |
+          pip install bandit --quiet
+          bandit -r . -f json -o bandit.json --exit-zero \
+            --exclude ./.git,./node_modules,./venv,./.venv || true
+
+      - name: Report Bandit → Nyx
+        if: contains(inputs.scanners, 'BANDIT') && hashFiles('bandit.json') != ''
+        env:
+          NYX_URL: ${{ inputs.nyx_url }}
+          NYX_API_KEY: ${{ secrets.nyx_api_key }}
+          REPO_ID: ${{ inputs.repository_id }}
+        run: |
+          jq -n \
+            --arg repo    "$REPO_ID" \
+            --arg scanner "BANDIT" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d bandit.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -d @-
+          echo "✓ Bandit results sent to Nyx"
+
+      # ── Trivy ────────────────────────────────────────────────────────────────
+      - name: Run Trivy
+        if: contains(inputs.scanners, 'TRIVY')
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'json'
+          output: 'trivy.json'
+          exit-code: '0'
+
+      - name: Report Trivy → Nyx
+        if: contains(inputs.scanners, 'TRIVY') && hashFiles('trivy.json') != ''
+        env:
+          NYX_URL: ${{ inputs.nyx_url }}
+          NYX_API_KEY: ${{ secrets.nyx_api_key }}
+          REPO_ID: ${{ inputs.repository_id }}
+        run: |
+          jq -n \
+            --arg repo    "$REPO_ID" \
+            --arg scanner "TRIVY" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d trivy.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -d @-
+          echo "✓ Trivy results sent to Nyx"
+
+      # ── Grype ────────────────────────────────────────────────────────────────
+      - name: Run Grype
+        if: contains(inputs.scanners, 'GRYPE')
+        run: |
+          curl -sSfL \
+            https://raw.githubusercontent.com/anchore/grype/main/install.sh \
+            | sh -s -- -b /usr/local/bin
+          grype dir:. -o json --file grype.json || true
+
+      - name: Report Grype → Nyx
+        if: contains(inputs.scanners, 'GRYPE') && hashFiles('grype.json') != ''
+        env:
+          NYX_URL: ${{ inputs.nyx_url }}
+          NYX_API_KEY: ${{ secrets.nyx_api_key }}
+          REPO_ID: ${{ inputs.repository_id }}
+        run: |
+          jq -n \
+            --arg repo    "$REPO_ID" \
+            --arg scanner "GRYPE" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d grype.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -d @-
+          echo "✓ Grype results sent to Nyx"
+
+      # ── Checkov ──────────────────────────────────────────────────────────────
+      - name: Run Checkov
+        if: contains(inputs.scanners, 'CHECKOV')
+        run: |
+          pip install checkov --quiet
+          checkov -d . --output json --soft-fail 2>/dev/null > checkov.json || true
+
+      - name: Report Checkov → Nyx
+        if: contains(inputs.scanners, 'CHECKOV') && hashFiles('checkov.json') != ''
+        env:
+          NYX_URL: ${{ inputs.nyx_url }}
+          NYX_API_KEY: ${{ secrets.nyx_api_key }}
+          REPO_ID: ${{ inputs.repository_id }}
+        run: |
+          jq -n \
+            --arg repo    "$REPO_ID" \
+            --arg scanner "CHECKOV" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d checkov.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -d @-
+          echo "✓ Checkov results sent to Nyx"

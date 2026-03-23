@@ -1,0 +1,173 @@
+"""Scans API router."""
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from typing import List, Optional
+
+from typing import Any
+
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.constants import ScanStatus, ScanTrigger
+from app.core.limiter import limiter
+from app.core.security import require_api_key
+from app.database import get_db
+from app.models.repository import Repository
+from app.models.scan import Scan
+from app.schemas.scan import ScanResponse, ScanTriggerRequest
+from app.workers.scan_worker import process_scan_results
+
+router = APIRouter(prefix="/scans", tags=["scans"])
+
+
+@router.get("", response_model=List[ScanResponse])
+async def list_scans(
+    repository_id: Optional[str] = Query(None, max_length=36, pattern=r"^[0-9a-f-]{36}$"),
+    scanner: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    stmt = select(Scan).order_by(desc(Scan.created_at)).limit(200)
+    if repository_id:
+        stmt = stmt.where(Scan.repository_id == repository_id)
+    if scanner:
+        stmt = stmt.where(Scan.scanner == scanner.upper())
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+
+class ScanImportJsonRequest(BaseModel):
+    repository_id: str
+    scanner: str
+    git_ref: Optional[str] = None
+    data: Any  # raw scanner output — dict or list
+
+
+@router.post("/import-json", response_model=ScanResponse, status_code=202)
+@limiter.limit("30/minute")
+async def import_scan_results_json(
+    request: Request,
+    body: ScanImportJsonRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Import raw scanner JSON output via a JSON body (CI/CD-friendly alternative to multipart).
+
+    Accepts the same scanner output formats as /import.
+
+    Example (GitHub Actions / curl):
+        jq -n --arg repo "$REPO_ID" --arg scanner "SEMGREP" --arg ref "$GIT_REF" \\
+               --slurpfile data results.json \\
+           '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$data[0]}' | \\
+        curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
+             -H "Content-Type: application/json" -H "X-API-Key: $NYX_API_KEY" -d @-
+    """
+    repo_result = await db.execute(select(Repository).where(Repository.id == body.repository_id))
+    if not repo_result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    scan = Scan(
+        repository_id=body.repository_id,
+        scanner=body.scanner.upper(),
+        trigger=ScanTrigger.IMPORT.value,
+        status=ScanStatus.PENDING.value,
+        git_ref=body.git_ref,
+        raw_output=json.dumps(body.data),
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(scan)
+    await db.commit()
+    await db.refresh(scan)
+
+    background_tasks.add_task(process_scan_results, scan.id, body.data)
+    return scan
+
+
+@router.get("/{scan_id}", response_model=ScanResponse)
+async def get_scan(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    result = await db.execute(select(Scan).where(Scan.id == scan_id))
+    scan = result.scalar_one_or_none()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    return scan
+
+
+@router.post("/import", response_model=ScanResponse, status_code=202)
+@limiter.limit("30/minute")
+async def import_scan_results(
+    request: Request,
+    repository_id: str = Form(...),
+    scanner: str = Form(...),
+    git_ref: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Import raw scanner JSON output for a repository.
+    The file should be the direct JSON output from the scanner
+    (e.g., `semgrep --json`, `trivy fs --format json`).
+    """
+    # Verify repo exists
+    repo_result = await db.execute(select(Repository).where(Repository.id == repository_id))
+    repo = repo_result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    # Parse uploaded JSON — enforce 10 MB cap to prevent memory exhaustion (H-5)
+    _MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+    try:
+        content = await file.read(_MAX_UPLOAD_BYTES + 1)
+        if len(content) > _MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Upload exceeds 10 MB limit")
+        raw_data = json.loads(content)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON file")
+
+    # Create scan record
+    scan = Scan(
+        repository_id=repository_id,
+        scanner=scanner.upper(),
+        trigger=ScanTrigger.IMPORT.value,
+        status=ScanStatus.PENDING.value,
+        git_ref=git_ref,
+        raw_output=json.dumps(raw_data),
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(scan)
+    await db.commit()
+    await db.refresh(scan)
+
+    # Process in background
+    background_tasks.add_task(process_scan_results, scan.id, raw_data)
+
+    return scan
+
+
+@router.get("/{scan_id}/raw")
+async def get_scan_raw_output(
+    scan_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """Download the original scanner JSON output."""
+    result = await db.execute(select(Scan).where(Scan.id == scan_id))
+    scan = result.scalar_one_or_none()
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    if not scan.raw_output:
+        raise HTTPException(status_code=404, detail="No raw output stored for this scan")
+    return json.loads(scan.raw_output)

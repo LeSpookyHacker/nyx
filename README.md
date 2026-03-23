@@ -1,0 +1,1371 @@
+<div align="center">
+
+<br/>
+
+# 🌙 Nyx
+
+### Security Intelligence Platform
+
+**Unified findings management, AI-powered remediation, and compliance visibility for engineering teams.**
+
+<br/>
+
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.2-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://typescriptlang.org)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
+[![Claude AI](https://img.shields.io/badge/AI-Claude%20Sonnet-CC785C?style=for-the-badge)](https://anthropic.com)
+
+<br/>
+
+</div>
+
+---
+
+## What is Nyx?
+
+Security tooling generates noise. **Nyx converts it into signal.**
+
+Engineering and security teams face a common problem: dozens of scanners produce thousands of findings across hundreds of repositories, with no coherent view of what matters, what is progressing, or what has regressed. Tickets fall through the cracks. Critical vulnerabilities linger unfixed for months. Compliance audits become crisis events.
+
+**Nyx is the platform that sits between your scanners and your engineers.** It ingests results from every scanner you already use — SAST, DAST, SCA, container, IaC — deduplicates them, scores them by real-world exploitability, surfaces what matters first, automatically creates fix PRs using Claude AI, tracks SLA compliance, maps everything to regulatory frameworks, and gives leadership clean executive reports.
+
+> **Zero-friction path from vulnerability detected to vulnerability fixed** — with full audit trail and compliance visibility at every step.
+
+---
+
+## Table of Contents
+
+- [Features](#features)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Organization Setup Guide](#organization-setup-guide)
+  - [GitHub Setup](#1-github-setup)
+  - [Expose Nyx Publicly](#2-expose-nyx-publicly)
+  - [JIRA Integration](#3-jira-integration)
+  - [Scanner Integrations](#4-scanner-integrations)
+  - [Register Repositories](#5-register-repositories)
+  - [Configure SLA Policies](#6-configure-sla-policies)
+  - [Set Up Scan Schedules](#7-set-up-scan-schedules)
+  - [CI/CD Integration](#8-cicd-integration)
+- [Configuration Reference](#configuration-reference)
+- [Scanners Reference](#scanners-reference)
+- [Feature Walkthrough](#feature-walkthrough)
+- [API Reference](#api-reference)
+- [Production Deployment](#production-deployment)
+- [Development Guide](#development-guide)
+- [Troubleshooting](#troubleshooting)
+- [Security Considerations](#security-considerations)
+
+---
+
+## Features
+
+### Core Platform
+
+| | Feature | Description |
+|---|---|---|
+| 🔍 | **Multi-Scanner Ingestion** | SEMGREP, Bandit, Trivy, Snyk, Grype, Checkov, OWASP ZAP, GitHub Code Scanning |
+| 🧠 | **Intelligent Deduplication** | Cross-scanner fingerprinting eliminates duplicate findings from overlapping tools |
+| 📊 | **Priority Scoring** | Composite 0–100 score combining CVSS, EPSS exploit probability, fix age, and SLA status |
+| 🤖 | **AI-Powered Remediation** | Claude generates pull requests with actual code fixes, including explanation and test suggestions |
+| ⚡ | **Bulk AI Fix Requests** | Select up to 20 findings and queue fix PRs in a single action |
+| 🔀 | **PR Merge Detection** | GitHub webhooks automatically close findings when a fix PR is merged |
+| 🎫 | **JIRA Integration** | Auto-create tickets per finding, sync status bidirectionally, bulk ticket creation |
+| 🚫 | **False Positive Learning** | Suppression patterns are learned and surfaced as hints on similar future findings |
+| 👤 | **Finding Assignment** | Assign findings to engineers; assignments reflect on linked JIRA tickets |
+| 🔄 | **Regression Detection** | Re-opened previously fixed findings are flagged and alerted immediately |
+| ⏱️ | **SLA Policy Engine** | Per-severity, per-repository SLA deadlines with auto-escalation via Slack or JIRA |
+| 📅 | **Scan Schedules** | Recurring automated scans on a configurable interval (6h – 1 week) |
+| ✅ | **GitHub Check Runs** | Inline PR annotations with security findings as GitHub status checks |
+| 📦 | **SBOM Generation** | Software Bill of Materials per repository from scan data |
+
+### Visibility & Reporting
+
+| | Feature | Description |
+|---|---|---|
+| 📄 | **Executive PDF Report** | Print-ready HTML report covering KPIs, trends, top vulns, repo risk, compliance |
+| 📈 | **Risk Score Over Time** | Daily risk score snapshots per repository and organization-wide trend |
+| 🔥 | **Hot Repos Detection** | Surface repositories with the most new findings in the last 7 days |
+| 🕵️ | **Scanner Coverage Gaps** | Identify stale, unconfigured, or partially-covered repositories |
+| 📋 | **Compliance Mapping** | PCI DSS, SOC 2, NIST 800-53, CIS Controls, OWASP Top 10 — findings mapped to controls |
+| 📉 | **Compliance Trend Analysis** | Weekly coverage percentage trend per framework over 30/60/90 days |
+| ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level |
+| 🚨 | **Regression Alerts** | Dashboard banner and KPI card for recently re-appeared findings |
+| 📝 | **Audit Log** | Immutable record of every action: suppression, assignment, AI fix, status change |
+
+---
+
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                          Developer Workflow                             │
+│   git push → GitHub Webhook → Nyx → Run Scanners → Ingest Findings    │
+└───────────────────────────────────┬────────────────────────────────────┘
+                                    │
+                   ┌────────────────▼────────────────┐
+                   │          Nyx Backend             │
+                   │         (FastAPI + Python)        │
+                   │                                  │
+                   │  ┌──────────┐  ┌─────────────┐  │
+                   │  │ Webhooks │  │   Routers   │  │
+                   │  │ Receiver │  │  (REST API) │  │
+                   │  └────┬─────┘  └──────┬──────┘  │
+                   │       │               │          │
+                   │  ┌────▼───────────────▼──────┐  │
+                   │  │       Core Services        │  │
+                   │  │  Deduplication  │ Priority  │  │
+                   │  │  AI Service     │ JIRA      │  │
+                   │  │  GitHub         │ Notify    │  │
+                   │  │  Compliance     │ SBOM      │  │
+                   │  └────────────────┬───────────┘  │
+                   │                  │               │
+                   │  ┌───────────────▼─────────────┐ │
+                   │  │   Background Workers         │ │
+                   │  │  SLA Checker    (hourly)     │ │
+                   │  │  Risk Snapshots (daily)      │ │
+                   │  │  Scan Schedules (5 min)      │ │
+                   │  │  Suppression Expiry (hourly) │ │
+                   │  └───────────────┬─────────────┘ │
+                   │                  │               │
+                   │  ┌───────────────▼─────────────┐ │
+                   │  │  Database (SQLite/Postgres)  │ │
+                   │  │  Findings · Repos · Scans    │ │
+                   │  │  Remediations · JiraLinks    │ │
+                   │  │  SLAPolicies · Schedules     │ │
+                   │  │  SuppressionPatterns · SBOM  │ │
+                   │  └─────────────────────────────┘ │
+                   └───────────────┬─────────────────┘
+                                   │
+           ┌───────────────────────┼───────────────────────┐
+           │                       │                       │
+   ┌───────▼──────┐    ┌──────────▼──────────┐    ┌───────▼──────┐
+   │   Nyx UI     │    │     GitHub API       │    │  Jira API    │
+   │ (React SPA)  │    │  Webhooks · PRs      │    │  Tickets     │
+   │  Dashboard   │    │  Check Runs · Code   │    │  Status sync │
+   │  Reports     │    │  Scanning            │    │              │
+   └──────────────┘    └─────────────────────┘    └──────────────┘
+```
+
+**External Scanners** (push results via API):
+`SEMGREP` · `BANDIT` · `TRIVY` · `SNYK` · `GRYPE` · `CHECKOV` · `ZAP`
+
+### End-to-End Data Flow
+
+```
+1.  Developer pushes code to GitHub
+2.  GitHub webhook fires → Nyx webhook receiver
+3.  Nyx triggers configured scanner(s) against the new commit
+4.  Scanners push JSON results to POST /scans/import
+5.  scan_worker processes results:
+      a. Normalise raw output → Finding schema
+      b. Deduplicate against existing findings (fingerprint match)
+      c. Detect regressions (FIXED finding reappears → is_regression=True)
+      d. Calculate priority score (CVSS + EPSS + age + SLA breach factor)
+      e. Calculate SLA deadline based on active policy
+      f. Update GitHub Check Run with inline annotations on the PR
+6.  Security engineer reviews findings in Nyx dashboard
+7.  Engineer clicks "Request AI Fix" (single or bulk)
+8.  Claude analyzes the finding, code context, and generates a targeted fix
+9.  Nyx creates a GitHub PR with the fix and a JIRA ticket with full details
+10. Developer reviews, approves, and merges the PR
+11. GitHub webhook fires (PR merged) → Nyx closes finding + updates JIRA → Done
+```
+
+---
+
+## Quick Start
+
+> [!NOTE]
+> Nyx requires Docker with Compose v2. Get it running in under 5 minutes for local evaluation.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/your-org/nyx.git
+cd nyx
+
+# 2. Copy and configure the environment file
+cp .env.example .env
+```
+
+Edit `.env` with your credentials:
+
+```bash
+# Required — AI fix generation
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Required — GitHub integration
+GITHUB_TOKEN=ghp_...
+GITHUB_WEBHOOK_ENDPOINT=https://your-public-url.example.com
+
+# Optional — Authentication (strongly recommended in production)
+NYX_API_KEY=your-secret-key
+```
+
+```bash
+# 3. Start all services
+docker compose up -d
+
+# 4. Verify both containers are healthy
+docker compose ps
+```
+
+| Service | URL |
+|---|---|
+| **Dashboard** | http://localhost:3000 |
+| **Backend API** | http://localhost:8000 |
+| **Interactive API Docs** | http://localhost:8000/docs |
+
+---
+
+## Organization Setup Guide
+
+A step-by-step walkthrough for deploying Nyx across an organization with multiple GitHub repositories and JIRA.
+
+---
+
+### 1. GitHub Setup
+
+#### 1a. Create a Personal Access Token
+
+1. Go to **GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens**
+2. Click **Generate new token**
+3. Name it `nyx-security-platform`, set expiration to 1 year
+4. Under **Repository access**, select **All repositories** (or specific ones)
+5. Grant the following permissions:
+
+| Permission | Access |
+|---|---|
+| **Contents** | Read and write — to create fix PRs |
+| **Metadata** | Read-only |
+| **Pull requests** | Read and write |
+| **Webhooks** | Read and write |
+| **Checks** | Read and write — for PR annotations |
+| **Security events** | Read-only — for Code Scanning sync |
+
+6. Click **Generate token** and save it as `GITHUB_TOKEN` in your `.env`
+
+> [!TIP]
+> For production deployments at scale, use **GitHub App** authentication instead of a PAT for higher rate limits and org-wide installation. Set `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY_PATH` in your `.env`.
+
+#### 1b. Webhook Installation
+
+Nyx automatically installs webhooks on every repository you register. The webhook secret is auto-generated per repository and stored in the database. You only need the public URL ready before registering repos.
+
+---
+
+### 2. Expose Nyx Publicly
+
+GitHub must be able to reach Nyx's webhook endpoint over the internet. Choose an option:
+
+<details>
+<summary><strong>Option A — ngrok (Development / Testing)</strong></summary>
+
+```bash
+# Install ngrok: https://ngrok.com/download
+ngrok http 8000
+
+# ngrok gives you a URL like: https://abc123.ngrok.io
+# Set in .env:
+# GITHUB_WEBHOOK_ENDPOINT=https://abc123.ngrok.io
+```
+
+> [!WARNING]
+> Free ngrok URLs change on restart. Use a paid ngrok account with a static domain for persistent testing.
+
+</details>
+
+<details>
+<summary><strong>Option B — Cloudflare Tunnel (Free, Persistent)</strong></summary>
+
+```bash
+# Install cloudflared
+brew install cloudflare/cloudflare/cloudflared  # macOS
+
+# Authenticate and create a tunnel
+cloudflared tunnel login
+cloudflared tunnel create nyx
+cloudflared tunnel run --url http://localhost:8000 nyx
+
+# Set in .env:
+# GITHUB_WEBHOOK_ENDPOINT=https://nyx.your-domain.com
+```
+
+</details>
+
+<details>
+<summary><strong>Option C — Cloud Deployment (Production)</strong></summary>
+
+Deploy Nyx behind a load balancer or reverse proxy with a real domain and TLS certificate. See [Production Deployment](#production-deployment) for the full Nginx + Let's Encrypt configuration.
+
+</details>
+
+---
+
+### 3. JIRA Integration
+
+Nyx integrates with Jira Cloud to automatically create, update, and close tickets as findings move through their lifecycle.
+
+#### 3a. Create a JIRA API Token
+
+1. Go to **https://id.atlassian.com/manage-profile/security/api-tokens**
+2. Click **Create API token**, name it `nyx-security-platform`
+3. Copy the token
+
+#### 3b. Configure JIRA in `.env`
+
+```bash
+# Your Jira instance URL (no trailing slash)
+JIRA_URL=https://your-org.atlassian.net
+
+# Email address of the user who owns the API token
+JIRA_USER_EMAIL=security-bot@your-org.com
+
+# The API token
+JIRA_API_TOKEN=your-jira-api-token
+
+# Default project key (e.g. "SEC" for SEC-1234)
+JIRA_DEFAULT_PROJECT_KEY=SEC
+
+# Set to false for real tickets; true for testing
+JIRA_MOCK_MODE=false
+```
+
+#### 3c. Verify Connection
+
+```bash
+curl -u "security-bot@your-org.com:your-api-token" \
+  "https://your-org.atlassian.net/rest/api/3/myself"
+```
+
+#### 3d. How the Integration Works
+
+Once configured, Nyx will:
+
+- **Auto-create tickets** when an AI fix PR is generated (includes severity, CVSS score, remediation diff, and a link to the PR)
+- **Manual ticket creation** from any finding detail page with a single click
+- **Bulk ticket creation** for all CRITICAL and HIGH findings in a repository
+- **Sync status bidirectionally** — Nyx polls Jira for status, assignee, and priority updates
+- **Auto-close tickets** when a fix PR is merged on GitHub (status → Done)
+- **Per-SLA-policy routing** — route findings from different repos or severities to different Jira projects
+
+---
+
+### 4. Scanner Integrations
+
+Nyx does not run scanners directly — it receives their JSON output via the REST API. This keeps Nyx scanner-agnostic and works with your existing CI/CD pipeline.
+
+#### Import Endpoint
+
+All scanners push to the same endpoint:
+
+```
+POST /api/v1/scans/import
+Content-Type: application/json
+X-API-Key: your-nyx-api-key
+
+{
+  "repository_id": "<nyx-repo-uuid>",
+  "scanner": "SEMGREP",
+  "git_ref": "main",
+  "git_sha": "abc123...",
+  "trigger": "push",
+  "results": { ...raw scanner JSON output... }
+}
+```
+
+<details>
+<summary><strong>SEMGREP — SAST, all languages</strong></summary>
+
+```bash
+pip install semgrep
+semgrep --config=auto --json --output=semgrep-results.json .
+
+curl -s -X POST "https://your-nyx-url/api/v1/scans/import" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $NYX_API_KEY" \
+  -d "{
+    \"repository_id\": \"$NYX_REPO_ID\",
+    \"scanner\": \"SEMGREP\",
+    \"git_ref\": \"$(git branch --show-current)\",
+    \"git_sha\": \"$(git rev-parse HEAD)\",
+    \"trigger\": \"push\",
+    \"results\": $(cat semgrep-results.json)
+  }"
+```
+
+**Recommended rulesets:** `p/owasp-top-ten` · `p/secrets` · `p/python` · `p/javascript` · `p/supply-chain`
+
+</details>
+
+<details>
+<summary><strong>Bandit — Python SAST</strong></summary>
+
+```bash
+pip install bandit
+bandit -r . -f json -o bandit-results.json
+
+# Push with scanner: "BANDIT"
+```
+
+</details>
+
+<details>
+<summary><strong>Trivy — Container & IaC</strong></summary>
+
+```bash
+brew install aquasecurity/trivy/trivy  # macOS
+
+# Scan a Docker image
+trivy image --format json --output trivy-results.json your-org/your-image:latest
+
+# Scan filesystem / IaC
+trivy fs --format json --output trivy-results.json .
+
+# Scan Kubernetes manifests
+trivy config --format json --output trivy-results.json ./k8s/
+
+# Push with scanner: "TRIVY"
+```
+
+</details>
+
+<details>
+<summary><strong>Grype — SCA, dependency vulnerabilities</strong></summary>
+
+```bash
+brew install anchore/grype/grype  # macOS
+
+grype dir:. -o json > grype-results.json
+# or: grype your-org/your-image:latest -o json > grype-results.json
+
+# Push with scanner: "GRYPE"
+```
+
+</details>
+
+<details>
+<summary><strong>Snyk — SCA</strong></summary>
+
+```bash
+npm install -g snyk
+snyk auth
+snyk test --json > snyk-results.json
+
+# Push with scanner: "SNYK"
+```
+
+> [!TIP]
+> Snyk also supports direct webhook delivery. Set `SNYK_WEBHOOK_SECRET` in `.env` and configure a Snyk webhook pointing to `https://your-nyx-url/api/v1/webhooks/snyk`.
+
+</details>
+
+<details>
+<summary><strong>Checkov — IaC misconfigurations</strong></summary>
+
+```bash
+pip install checkov
+
+checkov -d ./terraform --output json > checkov-results.json
+checkov -d ./k8s --output json > checkov-results.json
+checkov -f Dockerfile --output json > checkov-results.json
+
+# Push with scanner: "CHECKOV"
+```
+
+</details>
+
+<details>
+<summary><strong>OWASP ZAP — DAST</strong></summary>
+
+```bash
+docker run --rm -v $(pwd):/zap/wrk owasp/zap2docker-stable \
+  zap-baseline.py -t https://your-app.example.com -J zap-results.json
+
+# Push with scanner: "ZAP"
+```
+
+</details>
+
+<details>
+<summary><strong>GitHub Code Scanning — Automatic sync</strong></summary>
+
+Enable in `.env`:
+
+```bash
+CODE_SCANNING_SYNC_ENABLED=true
+CODE_SCANNING_POLL_INTERVAL=3600  # seconds
+```
+
+Nyx will automatically poll the GitHub Code Scanning API for all registered repositories and import findings — no manual push required.
+
+</details>
+
+---
+
+### 5. Register Repositories
+
+#### Via the UI
+
+1. Go to **Nyx Dashboard → Repositories → Add Repository**
+2. Enter the full GitHub name (e.g., `acme-corp/backend-api`)
+3. Select which scanners to enable
+4. Click **Add Repository**
+
+Nyx automatically installs a GitHub webhook on the repository.
+
+#### Via the API
+
+```bash
+curl -X POST "https://your-nyx-url/api/v1/repositories" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: $NYX_API_KEY" \
+  -d '{
+    "github_full_name": "acme-corp/backend-api",
+    "enabled_scanners": ["SEMGREP", "BANDIT", "TRIVY", "GRYPE"]
+  }'
+```
+
+#### Bulk Register an Entire Organization
+
+```bash
+#!/bin/bash
+ORG="acme-corp"
+NYX_URL="https://your-nyx-url"
+NYX_API_KEY="your-api-key"
+GITHUB_TOKEN="ghp_..."
+SCANNERS='["SEMGREP","BANDIT","TRIVY","GRYPE","CHECKOV"]'
+
+REPOS=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+  "https://api.github.com/orgs/$ORG/repos?per_page=100&type=all" \
+  | jq -r '.[].full_name')
+
+for REPO in $REPOS; do
+  echo "Registering $REPO..."
+  curl -s -X POST "$NYX_URL/api/v1/repositories" \
+    -H "Content-Type: application/json" \
+    -H "X-API-Key: $NYX_API_KEY" \
+    -d "{\"github_full_name\": \"$REPO\", \"enabled_scanners\": $SCANNERS}"
+  sleep 1
+done
+```
+
+---
+
+### 6. Configure SLA Policies
+
+SLA Policies define how long findings may remain open before automatic escalation. You can define org-wide policies and override per repository.
+
+#### Via the UI
+
+Go to **Nyx → SLA Policies → Add Policy** and fill in:
+
+- **Policy Name** — e.g., "Org Critical 7-day SLA"
+- **Scope** — Org-wide or a specific repository
+- **Severity** — CRITICAL / HIGH / MEDIUM / LOW / INFO / ALL
+- **Max Days** — Days before escalation triggers
+- **Escalation** — NOTIFY (Slack), JIRA, BOTH, or NONE
+- **JIRA Project Key** — Which project to create the escalation ticket in
+
+#### Recommended Starting Policies
+
+| Severity | Max Days | Escalation | Notes |
+|---|---|---|---|
+| **CRITICAL** | 7 | BOTH | Mirrors PCI DSS Requirement 6 |
+| **HIGH** | 30 | BOTH | Standard SOC 2 expectation |
+| **MEDIUM** | 90 | NOTIFY | Balance coverage with noise |
+| **LOW** | 180 | NONE | Track but don't alert |
+
+#### How Escalation Works
+
+Every hour, Nyx's SLA checker:
+
+1. Queries all open findings where `sla_breach_at < now()` and `sla_notified_at IS NULL`
+2. Looks up the most specific matching policy (repo-specific first, then org-wide)
+3. Executes the escalation action (Slack message, JIRA update, or both)
+4. Sets `sla_notified_at = now()` to prevent duplicate notifications
+
+---
+
+### 7. Set Up Scan Schedules
+
+Scheduled scanning ensures repositories with infrequent commits are still regularly checked for newly discovered vulnerabilities in unchanged dependencies.
+
+#### Via the UI
+
+1. Go to **Nyx → Schedules → Add Schedule**
+2. Select the repository and scanners to include
+3. Choose an interval: `6h` / `12h` / `24h` / `48h` / `72h` / `1 week`
+4. Click **Create Schedule**
+
+You can manually trigger any schedule immediately using the **▶** button in the Schedules table.
+
+#### How Schedules Work
+
+Every 5 minutes, Nyx's schedule worker:
+1. Queries all enabled schedules where `next_run_at <= now()`
+2. Triggers the scanner invocation and creates a Scan record
+3. Updates `last_run_at` and computes `next_run_at = now() + interval_hours`
+
+---
+
+### 8. CI/CD Integration
+
+#### Full GitHub Actions Pipeline
+
+Create `.github/workflows/nyx-security.yml` in your repository:
+
+```yaml
+name: Nyx Security Scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  NYX_URL: https://your-nyx-url
+  NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+
+jobs:
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get repository ID from Nyx
+        id: nyx-repo
+        run: |
+          REPO_ID=$(curl -s \
+            -H "X-API-Key: $NYX_API_KEY" \
+            "$NYX_URL/api/v1/repositories" | \
+            jq -r '.[] | select(.github_full_name == "${{ github.repository }}") | .id')
+          echo "repo_id=$REPO_ID" >> $GITHUB_OUTPUT
+
+      - name: Run Semgrep
+        if: steps.nyx-repo.outputs.repo_id != ''
+        run: |
+          pip install semgrep
+          semgrep --config=auto --json --output=semgrep-results.json . || true
+
+      - name: Push Semgrep results to Nyx
+        if: steps.nyx-repo.outputs.repo_id != ''
+        run: |
+          curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $NYX_API_KEY" \
+            -d "{
+              \"repository_id\": \"${{ steps.nyx-repo.outputs.repo_id }}\",
+              \"scanner\": \"SEMGREP\",
+              \"git_ref\": \"${{ github.ref_name }}\",
+              \"git_sha\": \"${{ github.sha }}\",
+              \"trigger\": \"push\",
+              \"results\": $(cat semgrep-results.json)
+            }"
+
+      - name: Run Trivy
+        if: steps.nyx-repo.outputs.repo_id != ''
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: json
+          output: trivy-results.json
+          exit-code: 0
+
+      - name: Push Trivy results to Nyx
+        if: steps.nyx-repo.outputs.repo_id != ''
+        run: |
+          curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $NYX_API_KEY" \
+            -d "{
+              \"repository_id\": \"${{ steps.nyx-repo.outputs.repo_id }}\",
+              \"scanner\": \"TRIVY\",
+              \"git_ref\": \"${{ github.ref_name }}\",
+              \"git_sha\": \"${{ github.sha }}\",
+              \"trigger\": \"push\",
+              \"results\": $(cat trivy-results.json)
+            }"
+
+      - name: Run Grype
+        if: steps.nyx-repo.outputs.repo_id != ''
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+          grype dir:. -o json > grype-results.json || true
+
+      - name: Push Grype results to Nyx
+        if: steps.nyx-repo.outputs.repo_id != ''
+        run: |
+          curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+            -H "Content-Type: application/json" \
+            -H "X-API-Key: $NYX_API_KEY" \
+            -d "{
+              \"repository_id\": \"${{ steps.nyx-repo.outputs.repo_id }}\",
+              \"scanner\": \"GRYPE\",
+              \"git_ref\": \"${{ github.ref_name }}\",
+              \"git_sha\": \"${{ github.sha }}\",
+              \"trigger\": \"push\",
+              \"results\": $(cat grype-results.json)
+            }"
+```
+
+Add `NYX_API_KEY` to **GitHub → Repository → Settings → Secrets → Actions**.
+
+#### Block Merges on Critical Findings
+
+Nyx creates GitHub Check Runs on every PR. To block merges when critical findings are detected:
+
+1. Go to **GitHub → Repository → Settings → Branches**
+2. Add a branch protection rule for `main`
+3. Enable **Require status checks to pass before merging**
+4. Add `Nyx Security` as a required check
+
+When Nyx detects new CRITICAL or HIGH findings in a PR, the check fails with inline annotations at the exact lines. Otherwise it passes.
+
+---
+
+## Configuration Reference
+
+All configuration is via environment variables. Copy `.env.example` to `.env`.
+
+<details>
+<summary><strong>Required</strong></summary>
+
+| Variable | Description |
+|---|---|
+| `ANTHROPIC_API_KEY` | Anthropic Claude API key — get one at https://console.anthropic.com |
+| `GITHUB_TOKEN` | GitHub PAT or App installation token |
+| `GITHUB_WEBHOOK_ENDPOINT` | Public HTTPS URL where GitHub can reach Nyx (no trailing slash) |
+
+</details>
+
+<details>
+<summary><strong>Database</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/nyx.db` | SQLite for dev, PostgreSQL for production. Format: `postgresql+asyncpg://user:pass@host:5432/nyx` |
+
+</details>
+
+<details>
+<summary><strong>Security</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `NYX_API_KEY` | _(blank)_ | Master API key. Leave blank to disable auth (dev only) |
+| `CORS_ORIGINS_STR` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed CORS origins |
+| `HTTPS_ONLY` | `false` | Set `true` in production to enforce HTTPS + HSTS |
+| `ENVIRONMENT` | `development` | Set `production` to enable stricter security defaults |
+
+</details>
+
+<details>
+<summary><strong>AI / Claude</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Claude model for fix generation |
+| `AI_MAX_TOKENS` | `4096` | Maximum tokens for AI-generated fixes |
+
+</details>
+
+<details>
+<summary><strong>GitHub</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `GITHUB_APP_ID` | _(blank)_ | GitHub App ID (alternative to PAT) |
+| `GITHUB_PRIVATE_KEY_PATH` | _(blank)_ | Path to GitHub App private key PEM |
+| `GITHUB_CHECK_RUNS_ENABLED` | `true` | Create PR check runs with inline annotations |
+
+</details>
+
+<details>
+<summary><strong>JIRA</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `JIRA_URL` | _(blank)_ | Jira Cloud URL, e.g. `https://acme.atlassian.net` |
+| `JIRA_USER_EMAIL` | _(blank)_ | Email of the Jira user who owns the API token |
+| `JIRA_API_TOKEN` | _(blank)_ | Jira API token |
+| `JIRA_DEFAULT_PROJECT_KEY` | `SEC` | Default Jira project key |
+| `JIRA_MOCK_MODE` | `false` | Log Jira actions without creating real tickets |
+
+</details>
+
+<details>
+<summary><strong>SLA Defaults</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `SLA_CRITICAL_DAYS` | `7` | Days before a CRITICAL finding breaches SLA |
+| `SLA_HIGH_DAYS` | `30` | Days before a HIGH finding breaches SLA |
+| `SLA_MEDIUM_DAYS` | `90` | Days before a MEDIUM finding breaches SLA |
+| `SLA_LOW_DAYS` | `180` | Days before a LOW finding breaches SLA |
+
+</details>
+
+<details>
+<summary><strong>Notifications, Scanners, Logging</strong></summary>
+
+| Variable | Default | Description |
+|---|---|---|
+| `NOTIFICATION_WEBHOOK_URL` | _(blank)_ | Slack (or any webhook) URL for SLA breach alerts |
+| `DEFAULT_ENABLED_SCANNERS_STR` | `SEMGREP,BANDIT,TRIVY,GRYPE,CHECKOV` | Default scanners for new repositories |
+| `EPSS_API_ENABLED` | `true` | Fetch EPSS exploit probability scores for CVEs |
+| `CODE_SCANNING_SYNC_ENABLED` | `false` | Periodically poll GitHub Code Scanning API |
+| `CODE_SCANNING_POLL_INTERVAL` | `3600` | Seconds between Code Scanning polls |
+| `SNYK_WEBHOOK_SECRET` | _(blank)_ | Snyk webhook HMAC secret |
+| `SCAN_SCHEDULES_ENABLED` | `true` | Enable recurring scan schedules |
+| `SLA_CHECK_ENABLED` | `true` | Enable SLA breach detection background task |
+| `LOG_LEVEL` | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
+| `LOG_FORMAT` | `json` | `json` for log aggregators, `text` for human-readable |
+| `DEBUG` | `false` | FastAPI debug mode — never use in production |
+
+</details>
+
+---
+
+## Scanners Reference
+
+| Scanner | Type | Languages / Targets | Key Detections |
+|---|---|---|---|
+| **SEMGREP** | SAST | 30+ languages | SQL injection, XSS, secrets, OWASP Top 10, custom rules |
+| **Bandit** | SAST | Python | Dangerous functions, weak crypto, shell injection, hardcoded passwords |
+| **Trivy** | SCA + IaC | Containers, Terraform, K8s | CVE-matched OS/library vulnerabilities, misconfigurations |
+| **Grype** | SCA | All ecosystems | CVE-matched dependency vulnerabilities using Syft SBOM |
+| **Snyk** | SCA | All package managers | Dependency vulnerabilities, fix advice, license risk |
+| **Checkov** | IaC | Terraform, Helm, K8s, Docker | 1000+ IaC misconfigurations, CIS benchmarks |
+| **OWASP ZAP** | DAST | Web applications | Runtime XSS, SQLi, CSRF, broken authentication |
+| **GitHub Code Scanning** | SAST | CodeQL — 9 languages | Deep semantic analysis, high-confidence findings |
+
+---
+
+## Feature Walkthrough
+
+<details>
+<summary><strong>Dashboard</strong></summary>
+
+The main dashboard gives a real-time operational view of your organization's security posture:
+
+- **KPI Cards** — Total open findings, Critical count, SLA Breached count, Repository count, Regression count — all clickable, navigate to the filtered findings list
+- **Regression Alert Banner** — Appears when previously fixed findings have re-appeared in the last 7 days
+- **Open by Severity Donut** — Click any segment to jump to the filtered findings list
+- **Findings by Scanner** — Bar chart showing which scanners produce the most findings
+- **MTTR by Severity** — Mean time to remediate, measuring response effectiveness
+- **30-Day Trend Chart** — New vs. fixed findings over time; shows whether the backlog is growing or shrinking
+- **Top Vulnerability Types** — Most prevalent finding patterns across all repositories
+- **Repository Risk Table** — Risk-scored repos with clickable critical/high counts
+- **Org Risk Over Time** — 30-day area chart of the aggregated organization risk score
+- **Hot Repos (7d)** — Repositories generating the most new findings recently
+- **Scanner Coverage Gaps** — Warning panel listing stale repos, repos with no scanners, and partially-covered repos
+
+</details>
+
+<details>
+<summary><strong>Findings List</strong></summary>
+
+The findings list is the core operational view for security engineers:
+
+- **Filters** — Severity, Scanner, Status (multi-select toggles). Regression-only toggle. Repository context from URL deep-links.
+- **Search** — Full-text search across finding title, rule ID, file path, CVE ID
+- **Sorting** — Priority score (default), first seen, severity
+- **Bulk AI Fix** — Select multiple findings (up to 20) and request fixes in a single action
+- **REGRESSION badge** — Orange badge on findings that have re-appeared after being fixed
+- **Assignee display** — Shows the assigned engineer directly in the list
+- **Export** — Download as CSV for reporting
+
+</details>
+
+<details>
+<summary><strong>Finding Detail</strong></summary>
+
+Each finding has a dedicated page:
+
+- **Header** — Severity badge, scanner badge, status badge, REGRESSION badge (if applicable)
+- **Description** — Full finding description with OWASP category tag
+- **Vulnerable Code** — Syntax-highlighted code snippet with line numbers
+- **Remediation Guidance** — Static guidance from the scanner or Nyx
+- **Engineer Notes** — Free-text notes field for context, workarounds, or investigation notes
+- **Suppress** — Suppress with a required reason; creates a learned pattern for future similar findings
+- **Accept Risk** — Mark as accepted risk without fixing
+- **Sidebar — Details** — Rule ID, category, priority score, CVSS, EPSS, CVE link, first seen, SLA deadline
+- **Sidebar — Assignment** — Assign to an engineer (email/username); syncs to linked JIRA ticket
+- **Sidebar — Suppression Suggestion** — If this rule has been suppressed before, shows count and previous reason
+- **Sidebar — Fix PR** — Link to the AI-generated pull request
+- **Sidebar — JIRA** — Create, view, sync, or unlink a JIRA ticket
+
+</details>
+
+<details>
+<summary><strong>AI Remediation Flow</strong></summary>
+
+The remediation flow keeps engineers in control at every step:
+
+1. **Request Fix** — Engineer clicks "Request AI Fix" on any OPEN finding
+2. **Generation** — Claude analyzes the finding, code snippet, and context; generates a targeted code fix
+3. **Review** — Engineer sees a diff view of the proposed change with an AI explanation
+4. **Approve** — Nyx creates the GitHub PR and a JIRA ticket with full fix details
+5. **Merge** — Developer merges the PR; GitHub webhook fires; finding → FIXED; JIRA → Done
+6. **Regenerate** — If the first fix is inadequate, regenerate with additional context
+
+> [!IMPORTANT]
+> The AI service includes prompt injection protection to prevent malicious finding content from altering fix instructions.
+
+</details>
+
+<details>
+<summary><strong>Compliance</strong></summary>
+
+The compliance module maps findings to regulatory frameworks automatically:
+
+- **Framework cards** — PCI DSS, SOC 2, NIST 800-53, CIS Controls, OWASP Top 10. Each shows a gauge ring with the overall compliance percentage.
+- **Control breakdown** — Click any control to see its description, CWE and OWASP category mappings, a fixed/open bar, and the full list of open findings by repository (linked directly to the finding and repo detail pages).
+- **Compliance Trend** — In the Reports page; weekly coverage percentage over 30/60/90 days to demonstrate improvement to auditors.
+
+</details>
+
+<details>
+<summary><strong>Reports</strong></summary>
+
+- **Executive Security Report** — Click "Generate Report" to open a print-ready HTML page covering: KPIs, MTTR by severity, weekly trends table, top 10 vulnerability types, per-repository risk table, compliance summary across all frameworks. Use **Cmd+P / Ctrl+P → Save as PDF** to produce a PDF for leadership or auditors.
+- **Compliance Trend Analysis** — Select a framework and date range; see current coverage %, change over the period, and open finding count.
+
+</details>
+
+---
+
+## API Reference
+
+All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header.
+
+> [!TIP]
+> Full interactive documentation is available at **`http://your-nyx-url:8000/docs`**
+
+<details>
+<summary><strong>Findings</strong></summary>
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/findings` | List findings with filters (severity, scanner, status, repo, search, pagination) |
+| `GET` | `/findings/{id}` | Get a single finding with full details |
+| `PATCH` | `/findings/{id}/status` | Update finding status |
+| `PATCH` | `/findings/{id}/notes` | Update engineer notes |
+| `POST` | `/findings/{id}/suppress` | Suppress a finding with reason |
+| `DELETE` | `/findings/{id}/suppress` | Unsuppress a finding |
+| `PATCH` | `/findings/{id}/assign` | Assign a finding to an engineer |
+| `GET` | `/findings/{id}/suppression-suggestion` | Get suppression pattern suggestion |
+| `GET` | `/findings/suppression-patterns` | List all learned suppression patterns |
+| `POST` | `/findings/bulk/status` | Bulk update status for multiple findings |
+| `GET` | `/findings/export` | Export findings as CSV or JSON |
+
+</details>
+
+<details>
+<summary><strong>Repositories</strong></summary>
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/repositories` | List all registered repositories |
+| `POST` | `/repositories` | Register a new repository (auto-installs webhook) |
+| `GET` | `/repositories/{id}` | Get repository details with risk metrics |
+| `PATCH` | `/repositories/{id}` | Update repository scanners or default branch |
+| `DELETE` | `/repositories/{id}` | Remove repository and all associated data |
+| `POST` | `/repositories/{id}/webhook` | Refresh / reinstall the GitHub webhook |
+| `POST` | `/repositories/{id}/sync-code-scanning` | Manually trigger GitHub Code Scanning sync |
+| `GET` | `/repositories/{id}/risk-history` | Get 30-day risk score history |
+
+</details>
+
+<details>
+<summary><strong>Scans</strong></summary>
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/scans` | List scans (filter by repository, status, scanner) |
+| `POST` | `/scans/import` | Import scanner JSON results |
+
+</details>
+
+<details>
+<summary><strong>Remediation</strong></summary>
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/remediation` | List all remediation requests |
+| `POST` | `/remediation` | Request an AI fix for a finding |
+| `POST` | `/remediation/bulk` | Request AI fixes for up to 20 findings at once |
+| `GET` | `/remediation/{id}` | Get remediation details with diff |
+| `POST` | `/remediation/{id}/approve` | Approve and create the GitHub PR |
+| `POST` | `/remediation/{id}/reject` | Reject the proposed fix |
+| `POST` | `/remediation/{id}/regenerate` | Regenerate the fix with new context |
+
+</details>
+
+<details>
+<summary><strong>Dashboard</strong></summary>
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/dashboard/summary` | KPI summary |
+| `GET` | `/dashboard/trends` | Daily new/fixed/open findings for N days |
+| `GET` | `/dashboard/mttr` | Mean time to remediate by severity |
+| `GET` | `/dashboard/repo-risk` | Risk-scored repository list |
+| `GET` | `/dashboard/top-vulnerabilities` | Most frequent vulnerability types |
+| `GET` | `/dashboard/hot-repos` | Repos with most new findings in last N days |
+| `GET` | `/dashboard/coverage-gaps` | Stale, unconfigured, partial-coverage repos |
+| `GET` | `/dashboard/regressions` | Recent regression findings |
+| `GET` | `/dashboard/org-risk-history` | 30-day aggregated org risk score history |
+| `GET` | `/dashboard/compliance-trends` | Weekly compliance coverage % per framework |
+| `GET` | `/dashboard/severity-trend` | Open counts by severity over time |
+
+</details>
+
+<details>
+<summary><strong>Schedules, SLA Policies, Reports, Compliance, JIRA, SBOM, Webhooks, Audit</strong></summary>
+
+**Schedules**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/schedules` | List all scan schedules |
+| `POST` | `/schedules` | Create a new scan schedule |
+| `PATCH` | `/schedules/{id}` | Update schedule (enable/disable, interval, scanners) |
+| `DELETE` | `/schedules/{id}` | Delete a schedule |
+| `POST` | `/schedules/{id}/trigger` | Manually trigger a schedule immediately |
+
+**SLA Policies**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/sla-policies` | List all SLA policies |
+| `POST` | `/sla-policies` | Create a new SLA policy |
+| `PATCH` | `/sla-policies/{id}` | Update policy |
+| `DELETE` | `/sla-policies/{id}` | Delete a policy |
+
+**Reports**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/reports/executive` | Generate executive HTML report (printable to PDF) |
+
+**Compliance**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/compliance/summary` | Compliance summary across all frameworks |
+| `GET` | `/compliance/report/{framework_id}` | Detailed report for a specific framework |
+| `GET` | `/compliance/report/{framework_id}/controls/{control_id}/findings` | Open findings mapped to a specific control |
+| `GET` | `/compliance/frameworks` | List all supported frameworks |
+
+**JIRA**
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/jira/tickets/{finding_id}` | Create a JIRA ticket for a finding |
+| `GET` | `/jira/tickets/{finding_id}` | Get the linked JIRA ticket |
+| `POST` | `/jira/tickets/{finding_id}/sync` | Sync ticket status from JIRA |
+| `DELETE` | `/jira/tickets/{finding_id}` | Unlink the ticket (does not delete from Jira) |
+| `GET` | `/jira/repository/{repo_id}/tickets` | List all tickets for a repository |
+| `POST` | `/jira/repository/{repo_id}/bulk-create` | Bulk create tickets for CRITICAL & HIGH findings |
+
+**SBOM**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/sbom/{repository_id}` | Get SBOM for a repository |
+| `POST` | `/sbom/{repository_id}/generate` | Generate or regenerate SBOM |
+
+**Webhooks**
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/webhooks/github` | GitHub webhook receiver (push, PR, check suite events) |
+| `POST` | `/webhooks/snyk` | Snyk webhook receiver |
+
+**Audit**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/audit` | Get audit log entries (filter by entity, action, user) |
+
+</details>
+
+---
+
+## Production Deployment
+
+### Switch to PostgreSQL
+
+```bash
+# .env
+DATABASE_URL=postgresql+asyncpg://nyx:your-password@postgres:5432/nyx
+```
+
+Add PostgreSQL to `docker-compose.yml`:
+
+```yaml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: nyx
+      POSTGRES_USER: nyx
+      POSTGRES_PASSWORD: your-password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nyx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+```
+
+### Nginx Reverse Proxy
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name nyx.your-org.com;
+
+    ssl_certificate /etc/letsencrypt/live/nyx.your-org.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/nyx.your-org.com/privkey.pem;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+    }
+
+    location /api/ {
+        proxy_pass http://localhost:8000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 50M;
+    }
+}
+
+server {
+    listen 80;
+    server_name nyx.your-org.com;
+    return 301 https://$server_name$request_uri;
+}
+```
+
+```bash
+# TLS certificate
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d nyx.your-org.com
+```
+
+### Production Environment Settings
+
+```bash
+ENVIRONMENT=production
+HTTPS_ONLY=true
+DEBUG=false
+LOG_FORMAT=json
+LOG_LEVEL=INFO
+```
+
+### Database Migrations
+
+Migrations run automatically on container startup. To run manually:
+
+```bash
+# Apply all pending migrations
+docker compose exec backend alembic upgrade head
+
+# Check current status
+docker compose exec backend alembic current
+
+# Rollback one migration
+docker compose exec backend alembic downgrade -1
+```
+
+### Backups
+
+```bash
+# SQLite
+docker compose exec backend cp /app/data/nyx.db /app/data/nyx.db.backup.$(date +%Y%m%d)
+
+# PostgreSQL
+docker compose exec postgres pg_dump -U nyx nyx | gzip > nyx-backup-$(date +%Y%m%d).sql.gz
+
+# Restore PostgreSQL
+gunzip < nyx-backup-20260101.sql.gz | docker compose exec -T postgres psql -U nyx nyx
+```
+
+---
+
+## Development Guide
+
+### Local Setup (without Docker)
+
+**Backend:**
+
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+alembic upgrade head
+python ../scripts/seed_demo_data.py  # optional demo data
+uvicorn app.main:app --reload --port 8000
+```
+
+**Frontend:**
+
+```bash
+cd frontend
+npm install
+npm run dev  # proxies /api to localhost:8000
+```
+
+### Running Tests
+
+```bash
+cd backend
+pip install -e ".[dev]"
+pytest
+pytest --cov=app --cov-report=html  # with coverage
+```
+
+### Code Quality
+
+```bash
+cd backend
+ruff check .
+ruff format .
+```
+
+### Adding a New Scanner
+
+1. Create `backend/app/services/normalizers/your_scanner.py`
+2. Implement `normalize(raw: dict, repository_id: str, git_ref: str) -> list[FindingCreate]`
+3. Register in `backend/app/services/normalizers/__init__.py`
+4. Add the scanner name to `ScannerType` enum in `backend/app/constants.py`
+5. Add to `DEFAULT_ENABLED_SCANNERS_STR` in `.env.example`
+
+---
+
+## Troubleshooting
+
+<details>
+<summary><strong>Webhook not firing</strong></summary>
+
+1. Verify the public URL is reachable:
+   ```bash
+   curl -I https://your-nyx-url/api/v1/webhooks/github
+   ```
+2. Check the webhook is installed: **GitHub → Repository → Settings → Webhooks**
+3. Review recent webhook deliveries in GitHub — failed deliveries show the full response body
+4. Check backend logs:
+   ```bash
+   docker compose logs backend -f --tail=50
+   ```
+
+</details>
+
+<details>
+<summary><strong>JIRA ticket creation failing</strong></summary>
+
+1. Verify credentials:
+   ```bash
+   curl -u "your-email:your-api-token" \
+     "https://your-org.atlassian.net/rest/api/3/project/SEC"
+   ```
+2. Ensure the Jira user has **Create Issues** permission in the target project
+3. Confirm `JIRA_DEFAULT_PROJECT_KEY` matches a real project key exactly (case-sensitive)
+4. Temporarily enable `JIRA_MOCK_MODE=true` to test the rest of the flow without real tickets
+
+</details>
+
+<details>
+<summary><strong>AI fix generation failing</strong></summary>
+
+1. Verify the Anthropic API key:
+   ```bash
+   curl -X POST "https://api.anthropic.com/v1/messages" \
+     -H "x-api-key: $ANTHROPIC_API_KEY" \
+     -H "anthropic-version: 2023-06-01" \
+     -H "content-type: application/json" \
+     -d '{"model":"claude-sonnet-4-6","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
+   ```
+2. Check account credit balance at https://console.anthropic.com
+3. Review logs for prompt or token limit errors
+
+</details>
+
+<details>
+<summary><strong>Findings not deduplicating</strong></summary>
+
+Nyx deduplicates by fingerprint: `(rule_id, scanner, file_path, line_start, repository_id)`.
+
+- Verify that scanner and rule ID are consistent between scans
+- Ensure the file path is relative, not absolute
+- Review scan worker logs for deduplication skip messages
+
+</details>
+
+<details>
+<summary><strong>High memory / CPU usage</strong></summary>
+
+For repositories with thousands of findings:
+
+1. Switch to PostgreSQL (SQLite is not optimized for high concurrency)
+2. Increase Docker resource limits in `docker-compose.yml`
+3. Disable unused background tasks: `CODE_SCANNING_SYNC_ENABLED=false`
+
+> [!WARNING]
+> If you see "database is locked" errors, migrate to PostgreSQL immediately — SQLite does not handle high concurrency. Set `DATABASE_URL=postgresql+asyncpg://...`.
+
+</details>
+
+---
+
+## Security Considerations
+
+| Area | Guidance |
+|---|---|
+| **API Key** | Always set `NYX_API_KEY` in production. Without it, the API is unauthenticated. |
+| **GitHub Token** | Store in `.env` only — never commit it. Rotate annually. Use GitHub Apps for better security at scale. |
+| **JIRA Token** | Treat as a password — it has write access to your Jira projects. |
+| **Webhook Secrets** | Each repository gets a unique HMAC webhook secret; Nyx verifies all incoming webhook signatures. |
+| **Prompt Injection** | The AI service sanitizes finding content to prevent malicious scanner output from altering fix instructions. |
+| **CORS** | Set `CORS_ORIGINS_STR` to only your frontend domain in production. |
+| **HTTPS** | Set `HTTPS_ONLY=true` in production to enforce HTTPS and add security headers (HSTS, CSP, X-Frame-Options). |
+
+---
+
+<div align="center">
+
+<br/>
+
+**Nyx** — *goddess of night, illuminating what others cannot see*
+
+<br/>
+
+Built with [FastAPI](https://fastapi.tiangolo.com) · [React](https://react.dev) · [Claude](https://anthropic.com) · [GitHub](https://github.com)
+
+</div>

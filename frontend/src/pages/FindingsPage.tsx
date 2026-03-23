@@ -1,0 +1,347 @@
+import { useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { findingsApi } from '../api/findings'
+import type { Finding } from '../types'
+import SeverityBadge from '../components/findings/SeverityBadge'
+import ScannerBadge from '../components/findings/ScannerBadge'
+import StatusBadge from '../components/findings/StatusBadge'
+import { formatDistanceToNow } from 'date-fns'
+import { ChevronDown, ChevronUp, Download, Filter, RotateCcw, Wand2, X } from 'lucide-react'
+import { clsx } from 'clsx'
+
+const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
+const SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV']
+const STATUSES = ['OPEN', 'IN_REMEDIATION', 'FIXED', 'SUPPRESSED', 'ACCEPTED_RISK']
+
+export default function FindingsPage() {
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const [searchParams] = useSearchParams()
+
+  // Initialise filters from URL search params — allows deep-linking from dashboard tiles
+  // and repository severity badges (e.g. /findings?severity=CRITICAL&repository_id=<uuid>)
+  const [severity, setSeverity] = useState<string[]>(
+    searchParams.getAll('severity').length ? searchParams.getAll('severity') : []
+  )
+  const [repositoryId] = useState<string>(searchParams.get('repository_id') ?? '')
+  const [scanner, setScanner] = useState<string[]>([])
+  const [status, setStatus] = useState<string[]>(['OPEN'])
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
+  const [sortBy, setSortBy] = useState('priority_score')
+  const [sortDesc, setSortDesc] = useState(true)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showFilters, setShowFilters] = useState(severity.length > 0)
+  const [isRegressionOnly, setIsRegressionOnly] = useState(searchParams.get('is_regression') === 'true')
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['findings', { severity, scanner, status, search, page, sortBy, sortDesc, repositoryId, isRegressionOnly }],
+    queryFn: () => findingsApi.list({
+      severity, scanner, status, search, page, page_size: 50,
+      sort_by: sortBy, sort_desc: sortDesc,
+      ...(repositoryId ? { repository_id: repositoryId } : {}),
+      ...(isRegressionOnly ? { is_regression: true } : {}),
+    }),
+  })
+
+  const bulkRequestFix = useMutation({
+    mutationFn: (ids: string[]) => findingsApi.bulkRequestFix(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['findings'] })
+      setSelectedIds(new Set())
+    },
+  })
+
+  const findings = data?.items || []
+  const total = data?.total || 0
+
+  const toggleFilter = (arr: string[], setArr: (v: string[]) => void, val: string) => {
+    setArr(arr.includes(val) ? arr.filter(v => v !== val) : [...arr, val])
+    setPage(1)
+  }
+
+  const toggleSort = (col: string) => {
+    if (sortBy === col) setSortDesc(!sortDesc)
+    else { setSortBy(col); setSortDesc(true) }
+    setPage(1)
+  }
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedIds)
+    next.has(id) ? next.delete(id) : next.add(id)
+    setSelectedIds(next)
+  }
+
+  const SortIcon = ({ col }: { col: string }) => {
+    if (sortBy !== col) return null
+    return sortDesc ? <ChevronDown size={12} /> : <ChevronUp size={12} />
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Repository context banner — shown when deep-linked from a repo */}
+      {repositoryId && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-nyx-iris/10 border border-nyx-iris/20 text-sm">
+          <span className="text-nyx-mist">Showing findings for repository</span>
+          <span className="text-nyx-amethyst font-medium">{searchParams.get('repo_name') ?? repositoryId}</span>
+          <button
+            onClick={() => navigate('/findings')}
+            className="ml-auto text-nyx-mist hover:text-nyx-moonbeam transition-colors"
+            title="Clear repository filter"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Severity filter banner — shown when deep-linked from a severity tile */}
+      {!repositoryId && severity.length === 1 && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-nyx-iris/10 border border-nyx-iris/20 text-sm">
+          <span className="text-nyx-mist">Filtered to</span>
+          <span className="font-semibold" style={{ color: severity[0] === 'CRITICAL' ? '#ef4444' : severity[0] === 'HIGH' ? '#f97316' : severity[0] === 'MEDIUM' ? '#eab308' : severity[0] === 'LOW' ? '#22c55e' : '#64748b' }}>
+            {severity[0]}
+          </span>
+          <span className="text-nyx-mist">findings</span>
+          <button
+            onClick={() => { setSeverity([]); setPage(1) }}
+            className="ml-auto text-nyx-mist hover:text-nyx-moonbeam transition-colors"
+            title="Clear severity filter"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
+      {/* Toolbar */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <input
+          type="text"
+          placeholder="Search findings..."
+          value={search}
+          onChange={e => { setSearch(e.target.value); setPage(1) }}
+          className="nyx-input w-64"
+        />
+        <button
+          onClick={() => setShowFilters(!showFilters)}
+          className={clsx('nyx-btn-ghost gap-2', showFilters && 'bg-nyx-twilight text-nyx-moonbeam')}
+        >
+          <Filter size={14} />
+          Filters
+          {(severity.length + scanner.length) > 0 && (
+            <span className="ml-1 bg-nyx-iris rounded-full px-1.5 py-0.5 text-[10px] text-white">
+              {severity.length + scanner.length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => { setIsRegressionOnly(r => !r); setPage(1) }}
+          className={clsx('nyx-btn-ghost gap-2', isRegressionOnly && 'bg-orange-900/30 text-orange-300 border border-orange-500/30')}
+          title="Show only regressions"
+        >
+          <RotateCcw size={14} />
+          Regressions
+        </button>
+        <button onClick={() => findingsApi.export('csv', { severity, scanner, status })} className="nyx-btn-ghost gap-2">
+          <Download size={14} />
+          Export
+        </button>
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-2 ml-auto">
+            <span className="text-nyx-mist text-sm">{selectedIds.size} selected</span>
+            <button
+              onClick={() => bulkRequestFix.mutate(Array.from(selectedIds))}
+              className="nyx-btn-primary gap-2"
+              disabled={bulkRequestFix.isPending}
+            >
+              <Wand2 size={14} />
+              {bulkRequestFix.isPending ? 'Requesting...' : 'Request AI Fix'}
+            </button>
+          </div>
+        )}
+        <span className="ml-auto text-nyx-mist text-sm">{total.toLocaleString()} findings</span>
+      </div>
+
+      {/* Filter Panel */}
+      {showFilters && (
+        <div className="nyx-card p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-nyx-mist text-xs uppercase tracking-wide">Severity</span>
+            <div className="flex gap-1 flex-wrap">
+              {SEVERITIES.map(s => (
+                <button
+                  key={s}
+                  onClick={() => toggleFilter(severity, setSeverity, s)}
+                  className={clsx(
+                    'nyx-badge cursor-pointer border transition-opacity',
+                    `severity-${s.toLowerCase()}`,
+                    !severity.includes(s) && 'opacity-40'
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-nyx-mist text-xs uppercase tracking-wide">Scanner</span>
+            <div className="flex gap-1 flex-wrap">
+              {SCANNERS.map(s => (
+                <button
+                  key={s}
+                  onClick={() => toggleFilter(scanner, setScanner, s)}
+                  className={clsx('nyx-badge cursor-pointer border bg-nyx-dusk text-nyx-mist border-nyx-iris/20 transition-opacity',
+                    !scanner.includes(s) && scanner.length > 0 && 'opacity-40')}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-nyx-mist text-xs uppercase tracking-wide">Status</span>
+            <div className="flex gap-1 flex-wrap">
+              {STATUSES.map(s => (
+                <button
+                  key={s}
+                  onClick={() => toggleFilter(status, setStatus, s)}
+                  className={clsx('nyx-badge cursor-pointer border bg-nyx-dusk text-nyx-mist border-nyx-iris/20 transition-opacity',
+                    !status.includes(s) && 'opacity-40')}
+                >
+                  {s.replace('_', ' ')}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="nyx-card overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="border-b border-nyx-iris/10 bg-nyx-dusk/30">
+              <tr>
+                <th className="px-4 py-3 w-8">
+                  <input type="checkbox" className="rounded"
+                    onChange={e => setSelectedIds(e.target.checked ? new Set(findings.map(f => f.id)) : new Set())}
+                  />
+                </th>
+                <th className="px-4 py-3 text-left text-nyx-mist font-medium">Finding</th>
+                <th className="px-4 py-3 text-left text-nyx-mist font-medium">Location</th>
+                <th className="px-4 py-3 text-left text-nyx-mist font-medium cursor-pointer hover:text-nyx-moonbeam"
+                  onClick={() => toggleSort('priority_score')}>
+                  <span className="flex items-center gap-1">Score <SortIcon col="priority_score" /></span>
+                </th>
+                <th className="px-4 py-3 text-left text-nyx-mist font-medium cursor-pointer hover:text-nyx-moonbeam"
+                  onClick={() => toggleSort('first_seen_at')}>
+                  <span className="flex items-center gap-1">Age <SortIcon col="first_seen_at" /></span>
+                </th>
+                <th className="px-4 py-3 text-left text-nyx-mist font-medium">Status</th>
+                <th className="px-4 py-3 w-10" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-nyx-iris/5">
+              {isLoading && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-nyx-mist">Loading...</td></tr>
+              )}
+              {!isLoading && findings.length === 0 && (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-nyx-mist">No findings match your filters.</td></tr>
+              )}
+              {findings.map((f: Finding) => (
+                <tr
+                  key={f.id}
+                  className={clsx(
+                    'hover:bg-nyx-twilight/30 cursor-pointer transition-colors',
+                    selectedIds.has(f.id) && 'bg-nyx-eclipse/20'
+                  )}
+                  onClick={() => navigate(`/findings/${f.id}`)}
+                >
+                  <td className="px-4 py-3" onClick={e => { e.stopPropagation(); toggleSelect(f.id) }}>
+                    <input type="checkbox" className="rounded" checked={selectedIds.has(f.id)} readOnly />
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-2 mb-1">
+                      <SeverityBadge severity={f.severity} size="sm" />
+                      <ScannerBadge scanner={f.scanner} />
+                      {f.is_regression && (
+                        <span className="nyx-badge text-[10px] bg-orange-900/30 text-orange-400 border border-orange-500/30">
+                          REGRESSION
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-nyx-moonbeam font-medium truncate max-w-xs">{f.title}</p>
+                    {f.cve_id && <p className="text-nyx-mist text-xs">{f.cve_id}</p>}
+                    {f.assigned_to && <p className="text-nyx-mist/60 text-xs">→ {f.assigned_to}</p>}
+                  </td>
+                  <td className="px-4 py-3">
+                    {f.file_path ? (
+                      <p className="text-nyx-mist text-xs font-mono truncate max-w-[180px]">
+                        {f.file_path}
+                        {f.line_start && <span className="text-nyx-lavender">:{f.line_start}</span>}
+                      </p>
+                    ) : f.url ? (
+                      <p className="text-nyx-mist text-xs truncate max-w-[180px]">{f.url}</p>
+                    ) : null}
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={clsx(
+                      'font-bold',
+                      f.priority_score >= 70 ? 'text-red-400' :
+                      f.priority_score >= 40 ? 'text-orange-400' : 'text-nyx-mist'
+                    )}>
+                      {f.priority_score.toFixed(0)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-nyx-mist text-xs whitespace-nowrap">
+                    {formatDistanceToNow(new Date(f.first_seen_at))} ago
+                  </td>
+                  <td className="px-4 py-3">
+                    <StatusBadge status={f.status} />
+                  </td>
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                    {f.status === 'OPEN' && (
+                      <button
+                        onClick={() => bulkRequestFix.mutate([f.id])}
+                        className="nyx-btn-ghost p-1.5 rounded"
+                        title="Request AI Fix"
+                        disabled={bulkRequestFix.isPending}
+                      >
+                        <Wand2 size={14} className="text-nyx-amethyst" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        {total > 50 && (
+          <div className="flex items-center justify-between px-4 py-3 border-t border-nyx-iris/10">
+            <span className="text-nyx-mist text-sm">
+              Page {page} of {Math.ceil(total / 50)}
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="nyx-btn-ghost disabled:opacity-40"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setPage(p => p + 1)}
+                disabled={page * 50 >= total}
+                className="nyx-btn-ghost disabled:opacity-40"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
