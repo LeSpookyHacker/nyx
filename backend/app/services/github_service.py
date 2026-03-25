@@ -592,6 +592,36 @@ async def complete_check_run(
         pass
 
 
+def _fix_hunk_headers(diff: str) -> str:
+    """
+    Recount actual source/target lines in each hunk and rewrite the @@ header.
+    Claude occasionally emits wrong line counts which cause unidiff to reject
+    an otherwise valid diff.
+    """
+    import re
+    result: list[str] = []
+    i = 0
+    lines = diff.split("\n")
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$", line)
+        if m:
+            src_start, tgt_start, rest = m.group(1), m.group(2), m.group(3)
+            i += 1
+            hunk: list[str] = []
+            while i < len(lines) and not re.match(r"^(@@|--- |\+\+\+ )", lines[i]):
+                hunk.append(lines[i])
+                i += 1
+            src_count = sum(1 for l in hunk if l.startswith(" ") or l.startswith("-"))
+            tgt_count = sum(1 for l in hunk if l.startswith(" ") or l.startswith("+"))
+            result.append(f"@@ -{src_start},{src_count} +{tgt_start},{tgt_count} @@{rest}")
+            result.extend(hunk)
+        else:
+            result.append(line)
+            i += 1
+    return "\n".join(result)
+
+
 def apply_unified_diff(original: str, diff: str) -> Optional[str]:
     """
     Apply a unified diff string to original file content.
@@ -604,7 +634,7 @@ def apply_unified_diff(original: str, diff: str) -> Optional[str]:
 
     try:
         import unidiff
-        patch = unidiff.PatchSet(diff)
+        patch = unidiff.PatchSet(_fix_hunk_headers(diff))
         lines = original.splitlines(keepends=True)
 
         for patched_file in patch:

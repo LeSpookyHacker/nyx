@@ -225,9 +225,9 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
   )
 }
 
-const ACTIVE_STATUSES = ['PENDING', 'GENERATING', 'REVIEW', 'PR_CREATING', 'PR_OPEN']
+const ACTIVE_STATUSES = ['PENDING', 'GENERATING', 'REVIEW', 'PR_CREATING', 'PR_OPEN', 'FAILED']
 const ALL_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'MERGED', 'FAILED']
-const ACTIVE_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN']
+const ACTIVE_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'FAILED']
 
 export default function RemediationPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
