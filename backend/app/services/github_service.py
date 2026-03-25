@@ -101,9 +101,23 @@ jobs:
         uses: zaproxy/action-baseline@v0.14.0
         with:
           target: ${{{{ vars.NYX_ZAP_TARGET }}}}
-          cmd_options: '-J zap.json'
+          # -t 3  = spider/passive scan timeout in minutes (default 1 — too short for SPAs)
+          # -a    = include alpha-quality passive scan rules for more coverage
+          # -J    = write traditional JSON report to this file in the workspace
+          cmd_options: '-t 3 -a -J zap.json'
           allow_issue_writing: false
           fail_action: false
+
+      - name: Debug — show ZAP output
+        if: vars.NYX_ZAP_TARGET != ''
+        run: |
+          if [ -f zap.json ]; then
+            echo "zap.json exists, size=$(wc -c < zap.json) bytes"
+            echo "site count=$(jq '.site | length' zap.json 2>/dev/null || echo 'parse error')"
+            jq '.site[] | {{host: .["@host"], alerts: (.alerts | length)}}' zap.json 2>/dev/null || true
+          else
+            echo "WARNING: zap.json was NOT created — ZAP may have failed to start or write output"
+          fi
 
       - name: Report ZAP → Nyx
         if: hashFiles('zap.json') != ''
@@ -112,6 +126,12 @@ jobs:
           NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
         run: |
           NYX_URL="${{NYX_URL// /}}"
+          # Skip submission if ZAP produced no sites (empty scan — don't create a blank scan record)
+          SITE_COUNT=$(jq '.site | length' zap.json 2>/dev/null || echo 0)
+          if [ "$SITE_COUNT" -eq 0 ]; then
+            echo "⚠ ZAP returned no site data — skipping submission (check Debug step above)"
+            exit 0
+          fi
           jq -n \\
             --arg repo    "{repo_id}" \\
             --arg scanner "ZAP" \\
@@ -123,7 +143,7 @@ jobs:
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "ngrok-skip-browser-warning: true" \\
               -d @-
-          echo "✓ ZAP results sent to Nyx"
+          echo "✓ ZAP results sent to Nyx ($SITE_COUNT site(s) scanned)"
 
       # ── Trivy ────────────────────────────────────────────────────────────────
       - name: Run Trivy
