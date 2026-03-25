@@ -1,55 +1,9 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Nyx Reusable Security Scan Workflow
-#
-# Call this from any repository to run all scanners and ship results to Nyx:
-#
-#   jobs:
-#     nyx:
-#       uses: your-org/nyx/.github/workflows/nyx-scan.yml@main
-#       with:
-#         nyx_url:       ${{ vars.NYX_URL }}
-#         repository_id: ${{ vars.NYX_REPO_ID }}
-#       secrets:
-#         nyx_api_key:   ${{ secrets.NYX_API_KEY }}
-#
-# GitHub repository settings needed (Settings → Variables / Secrets):
-#   vars.NYX_URL       — https://nyx.yourcompany.com   (your Nyx instance)
-#   vars.NYX_REPO_ID   — UUID from GET /api/v1/repositories
-#   secrets.NYX_API_KEY — your NYX_API_KEY (omit if auth is disabled)
-# ─────────────────────────────────────────────────────────────────────────────
-
 name: Nyx Security Scan
 
 on:
-  workflow_call:
-    inputs:
-      nyx_url:
-        description: 'Base URL of your Nyx instance (no trailing slash)'
-        required: true
-        type: string
-      repository_id:
-        description: 'Nyx repository ID (from GET /api/v1/repositories)'
-        required: true
-        type: string
-      scanners:
-        description: 'Comma-separated list of scanners to run'
-        required: false
-        default: 'SEMGREP,BANDIT,TRIVY,GRYPE,CHECKOV'
-        type: string
-      semgrep_config:
-        description: 'Semgrep config (auto | p/security-audit | path/to/.semgrep/)'
-        required: false
-        default: 'auto'
-        type: string
-      python_version:
-        description: 'Python version used for Bandit / Semgrep / Checkov'
-        required: false
-        default: '3.12'
-        type: string
-    secrets:
-      nyx_api_key:
-        description: 'Nyx API key. Omit if NYX_API_KEY is not set.'
-        required: false
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   nyx-scan:
@@ -61,31 +15,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
         with:
-          python-version: ${{ inputs.python_version }}
+          fetch-depth: 0  # Gitleaks needs full history to scan all commits
 
-      # ── Semgrep ─────────────────────────────────────────────────────────────
+      # ── Semgrep (SAST) ────────────────────────────────────────────────────────
       - name: Run Semgrep
-        if: contains(inputs.scanners, 'SEMGREP')
-        env:
-          SEMGREP_SEND_METRICS: 'off'
         run: |
           pip install semgrep --quiet
-          semgrep --config=${{ inputs.semgrep_config }} \
+          semgrep --config=p/javascript --config=p/secrets --config=p/security-audit \
             --json --output semgrep.json . || true
 
       - name: Report Semgrep → Nyx
-        if: contains(inputs.scanners, 'SEMGREP') && hashFiles('semgrep.json') != ''
+        if: hashFiles('semgrep.json') != ''
         env:
-          NYX_URL: ${{ inputs.nyx_url }}
-          NYX_API_KEY: ${{ secrets.nyx_api_key }}
-          REPO_ID: ${{ inputs.repository_id }}
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
         run: |
+          NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "$REPO_ID" \
+            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
             --arg scanner "SEMGREP" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d semgrep.json \
@@ -93,55 +41,182 @@ jobs:
           | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
               -d @-
           echo "✓ Semgrep results sent to Nyx"
 
-      # ── Bandit (Python) ─────────────────────────────────────────────────────
-      - name: Run Bandit
-        if: contains(inputs.scanners, 'BANDIT')
+      # ── Gitleaks (Secrets) — always runs ─────────────────────────────────────
+      - name: Run Gitleaks
         run: |
-          pip install bandit --quiet
-          bandit -r . -f json -o bandit.json --exit-zero \
-            --exclude ./.git,./node_modules,./venv,./.venv || true
+          curl -sSfL \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar -xz gitleaks
+          ./gitleaks detect --source . --report-format json \
+            --report-path gitleaks.json --exit-code 0 || true
 
-      - name: Report Bandit → Nyx
-        if: contains(inputs.scanners, 'BANDIT') && hashFiles('bandit.json') != ''
+      - name: Report Gitleaks → Nyx
+        if: hashFiles('gitleaks.json') != ''
         env:
-          NYX_URL: ${{ inputs.nyx_url }}
-          NYX_API_KEY: ${{ secrets.nyx_api_key }}
-          REPO_ID: ${{ inputs.repository_id }}
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
         run: |
+          COUNT=$(jq 'if type == "array" then length else 0 end' gitleaks.json 2>/dev/null || echo 0)
+          if [ "$COUNT" -eq 0 ]; then echo "✓ Gitleaks: no secrets found"; exit 0; fi
+          NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "$REPO_ID" \
-            --arg scanner "BANDIT" \
+            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg scanner "GITLEAKS" \
             --arg ref     "$GITHUB_REF_NAME" \
-            --slurpfile d bandit.json \
+            --slurpfile d gitleaks.json \
             '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
           | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
               -d @-
-          echo "✓ Bandit results sent to Nyx"
+          echo "✓ Gitleaks: $COUNT secret(s) sent to Nyx"
 
-      # ── Trivy ────────────────────────────────────────────────────────────────
+      # ── Hadolint (Dockerfile linting) — auto-activates when Dockerfile exists ─
+      - name: Run Hadolint
+        if: hashFiles('**/Dockerfile', '**/Dockerfile.*') != ''
+        run: |
+          wget -qO /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+          find . \( -name 'Dockerfile' -o -name 'Dockerfile.*' -o -name '*.dockerfile' \) \
+            | head -20 | xargs hadolint --format json 2>/dev/null > hadolint.json || true
+
+      - name: Report Hadolint → Nyx
+        if: hashFiles('hadolint.json') != ''
+        env:
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+        run: |
+          COUNT=$(jq 'if type == "array" then length else 0 end' hadolint.json 2>/dev/null || echo 0)
+          if [ "$COUNT" -eq 0 ]; then echo "✓ Hadolint: no issues found"; exit 0; fi
+          NYX_URL="${NYX_URL// /}"
+          jq -n \
+            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg scanner "HADOLINT" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d hadolint.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
+              -d @-
+          echo "✓ Hadolint: $COUNT issue(s) sent to Nyx"
+
+      # ── Snyk (SCA) — activates when SNYK_TOKEN secret is set ─────────────────
+      - name: Run Snyk
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "⏭ SNYK_TOKEN not set — skipping Snyk (add it to repo secrets to enable)"
+            exit 0
+          fi
+          npm install -g snyk --quiet
+          snyk test --json --all-projects > snyk.json 2>/dev/null || true
+          echo "Snyk scan complete"
+
+      - name: Report Snyk → Nyx
+        if: hashFiles('snyk.json') != ''
+        env:
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then exit 0; fi
+          NYX_URL="${NYX_URL// /}"
+          jq -n \
+            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg scanner "SNYK" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d snyk.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
+              -d @-
+          echo "✓ Snyk results sent to Nyx"
+
+      # ── ZAP (DAST — optional) ─────────────────────────────────────────────────
+      # Set vars.NYX_ZAP_TARGET to your deployed app URL to enable DAST scanning.
+      - name: Fix workspace permissions for ZAP container
+        if: vars.NYX_ZAP_TARGET != ''
+        run: chmod -R 777 .
+
+      - name: Run ZAP Baseline Scan
+        if: vars.NYX_ZAP_TARGET != ''
+        continue-on-error: true  # ZAP failure must not abort Trivy/Gitleaks/Hadolint steps
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: ${{ vars.NYX_ZAP_TARGET }}
+          # -m 3  = spider for 3 minutes (SPAs need more than the 1m default; NOTE: use -m not -t)
+          # -a    = include alpha passive rules for better header/cookie coverage
+          # -J    = write traditional JSON report to this file (distinct from the action's -J)
+          cmd_options: '-m 3 -a -J zap.json'
+          allow_issue_writing: false
+          fail_action: false
+
+      - name: Debug — show ZAP output
+        if: always() && vars.NYX_ZAP_TARGET != ''
+        run: |
+          if [ -f zap.json ]; then
+            echo "zap.json exists, size=$(wc -c < zap.json) bytes"
+            echo "site count=$(jq '.site | length' zap.json 2>/dev/null || echo 'parse error')"
+            jq '.site[] | {host: .["@host"], alerts: (.alerts | length)}' zap.json 2>/dev/null || true
+          else
+            echo "WARNING: zap.json was NOT created — ZAP may have failed to start or write output"
+          fi
+
+      - name: Report ZAP → Nyx
+        if: hashFiles('zap.json') != ''
+        env:
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+        run: |
+          NYX_URL="${NYX_URL// /}"
+          SITE_COUNT=$(jq '.site | length' zap.json 2>/dev/null || echo 0)
+          if [ "$SITE_COUNT" -eq 0 ]; then
+            echo "⚠ ZAP returned no site data — skipping submission (check Debug step above)"
+            exit 0
+          fi
+          jq -n \
+            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg scanner "ZAP" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d zap.json \
+            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
+              -d @-
+          echo "✓ ZAP results sent to Nyx ($SITE_COUNT site(s) scanned)"
+
+      # ── Trivy (SCA + IaC + Container) ────────────────────────────────────────
       - name: Run Trivy
-        if: contains(inputs.scanners, 'TRIVY')
+        if: always()  # Run even if ZAP failed
         uses: aquasecurity/trivy-action@master
         with:
-          scan-type: 'fs'
-          format: 'json'
-          output: 'trivy.json'
-          exit-code: '0'
+          scan-type: "fs"
+          format: "json"
+          output: "trivy.json"
+          exit-code: "0"
 
       - name: Report Trivy → Nyx
-        if: contains(inputs.scanners, 'TRIVY') && hashFiles('trivy.json') != ''
+        if: always() && hashFiles('trivy.json') != ''
         env:
-          NYX_URL: ${{ inputs.nyx_url }}
-          NYX_API_KEY: ${{ secrets.nyx_api_key }}
-          REPO_ID: ${{ inputs.repository_id }}
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
         run: |
+          NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "$REPO_ID" \
+            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
             --arg scanner "TRIVY" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d trivy.json \
@@ -149,59 +224,29 @@ jobs:
           | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
               -d @-
           echo "✓ Trivy results sent to Nyx"
 
-      # ── Grype ────────────────────────────────────────────────────────────────
-      - name: Run Grype
-        if: contains(inputs.scanners, 'GRYPE')
-        run: |
-          curl -sSfL \
-            https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-            | sh -s -- -b /usr/local/bin
-          grype dir:. -o json --file grype.json || true
+      # ── SBOM (CycloneDX via Trivy) ────────────────────────────────────────────
+      - name: Generate SBOM (CycloneDX)
+        if: always()
+        run: trivy fs --format cyclonedx --output sbom-cdx.json . || true
 
-      - name: Report Grype → Nyx
-        if: contains(inputs.scanners, 'GRYPE') && hashFiles('grype.json') != ''
+      - name: Submit SBOM → Nyx
+        if: always() && hashFiles('sbom-cdx.json') != ''
         env:
-          NYX_URL: ${{ inputs.nyx_url }}
-          NYX_API_KEY: ${{ secrets.nyx_api_key }}
-          REPO_ID: ${{ inputs.repository_id }}
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
         run: |
+          NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "$REPO_ID" \
-            --arg scanner "GRYPE" \
-            --arg ref     "$GITHUB_REF_NAME" \
-            --slurpfile d grype.json \
-            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
-          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
+            --arg ref "$GITHUB_REF_NAME" \
+            --slurpfile s sbom-cdx.json \
+            '{"git_ref":$ref,"sbom":$s[0]}' \
+          | curl -sf -X POST "$NYX_URL/api/v1/sbom/repositories/7b2c2390-caa8-49b1-a1e2-dcd9f6630b68/submit" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
+              -H "ngrok-skip-browser-warning: true" \
               -d @-
-          echo "✓ Grype results sent to Nyx"
-
-      # ── Checkov ──────────────────────────────────────────────────────────────
-      - name: Run Checkov
-        if: contains(inputs.scanners, 'CHECKOV')
-        run: |
-          pip install checkov --quiet
-          checkov -d . --output json --soft-fail 2>/dev/null > checkov.json || true
-
-      - name: Report Checkov → Nyx
-        if: contains(inputs.scanners, 'CHECKOV') && hashFiles('checkov.json') != ''
-        env:
-          NYX_URL: ${{ inputs.nyx_url }}
-          NYX_API_KEY: ${{ secrets.nyx_api_key }}
-          REPO_ID: ${{ inputs.repository_id }}
-        run: |
-          jq -n \
-            --arg repo    "$REPO_ID" \
-            --arg scanner "CHECKOV" \
-            --arg ref     "$GITHUB_REF_NAME" \
-            --slurpfile d checkov.json \
-            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}' \
-          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
-              -H "Content-Type: application/json" \
-              -H "X-API-Key: $NYX_API_KEY" \
-              -d @-
-          echo "✓ Checkov results sent to Nyx"
+          echo "✓ SBOM submitted to Nyx"
