@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { repositoriesApi } from '../api/repositories'
 import type { Repository } from '../types'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertOctagon, Building2, GitBranch, Globe, Lock, Plus, RefreshCw, ScanLine, Trash2, Webhook, Upload, CheckCircle, Search } from 'lucide-react'
+import { AlertOctagon, Building2, Check, ClipboardCopy, GitBranch, Globe, Lock, Plus, RefreshCw, ScanLine, Trash2, Webhook, Upload, CheckCircle, Search, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const ALL_SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV', 'HADOLINT', 'GITLEAKS']
@@ -18,17 +18,19 @@ function RiskBar({ score }: { score: number }) {
   )
 }
 
-function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPushWorkflow, onDetectScanners, syncingId, pushingId, pushedId, detectingId }: {
+function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPushWorkflow, onDetectScanners, onGeneratePrompt, syncingId, pushingId, pushedId, detectingId, promptingId }: {
   repo: Repository
   onDelete: (id: string) => void
   onRefreshWebhook: (id: string) => void
   onSyncCodeScanning: (id: string) => void
   onPushWorkflow: (id: string) => void
   onDetectScanners: (id: string) => void
+  onGeneratePrompt: (id: string) => void
   syncingId: string | null
   pushingId: string | null
   pushedId: string | null
   detectingId: string | null
+  promptingId: string | null
 }) {
   const navigate = useNavigate()
   const repoName = repo.github_full_name.split('/')[1]
@@ -169,6 +171,14 @@ function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPush
           <Search size={11} /> {detectingId === repo.id ? 'Detecting...' : 'Detect Scanners'}
         </button>
         <button
+          onClick={() => onGeneratePrompt(repo.id)}
+          disabled={promptingId === repo.id}
+          className="nyx-btn-ghost text-xs py-1 px-2 gap-1 border-nyx-amethyst/30 text-nyx-amethyst hover:bg-nyx-amethyst/10"
+          title="Generate a Claude Code prompt for all open findings in this repo"
+        >
+          <ClipboardCopy size={11} /> {promptingId === repo.id ? 'Generating...' : 'Claude Prompt'}
+        </button>
+        <button
           onClick={() => {
             if (confirm('Remove this repository from Nyx? This will delete all associated findings.')) {
               onDelete(repo.id)
@@ -195,6 +205,9 @@ export default function RepositoriesPage() {
   const [pushResult, setPushResult] = useState<{ id: string; message: string; error?: boolean } | null>(null)
   const [detectingId, setDetectingId] = useState<string | null>(null)
   const [detectResult, setDetectResult] = useState<{ id: string; added: string[]; reasons: Record<string, string>; applied: boolean; error?: boolean } | null>(null)
+  const [promptingId, setPromptingId] = useState<string | null>(null)
+  const [claudePrompt, setClaudePrompt] = useState<{ repoName: string; text: string } | null>(null)
+  const [promptCopied, setPromptCopied] = useState(false)
 
   const { data: repos = [], isLoading } = useQuery({
     queryKey: ['repositories'],
@@ -274,6 +287,28 @@ export default function RepositoriesPage() {
     } finally {
       setDetectingId(null)
     }
+  }
+
+  const handleGeneratePrompt = async (id: string) => {
+    const repo = (repos as Repository[]).find(r => r.id === id)
+    setPromptingId(id)
+    try {
+      const result = await repositoriesApi.generateClaudePrompt(id)
+      setClaudePrompt({ repoName: repo?.github_full_name ?? id, text: result.prompt })
+      queryClient.invalidateQueries({ queryKey: ['repositories'] })
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+      alert(detail || 'No open findings found for this repository')
+    } finally {
+      setPromptingId(null)
+    }
+  }
+
+  const copyPrompt = () => {
+    if (!claudePrompt) return
+    navigator.clipboard.writeText(claudePrompt.text)
+    setPromptCopied(true)
+    setTimeout(() => setPromptCopied(false), 2000)
   }
 
   const toggleScanner = (s: string) => {
@@ -419,15 +454,55 @@ export default function RepositoriesPage() {
                 onSyncCodeScanning={handleSyncCodeScanning}
                 onPushWorkflow={handlePushWorkflow}
                 onDetectScanners={handleDetectScanners}
+                onGeneratePrompt={handleGeneratePrompt}
                 syncingId={syncingId}
                 pushingId={pushingId}
                 pushedId={pushedId}
                 detectingId={detectingId}
+                promptingId={promptingId}
               />
             ))}
           </div>
         </div>
       ))}
+
+      {/* Claude Code Prompt Modal */}
+      {claudePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="nyx-card w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-nyx-iris/20">
+              <div>
+                <h2 className="text-nyx-moonbeam font-semibold">Claude Code Remediation Prompt</h2>
+                <p className="text-nyx-mist text-xs mt-0.5">
+                  All open findings for <span className="text-nyx-amethyst">{claudePrompt.repoName}</span> marked as{' '}
+                  <span className="text-nyx-amethyst">In Remediation</span>. Copy and paste into Claude Code.
+                </p>
+              </div>
+              <button onClick={() => { setClaudePrompt(null); setPromptCopied(false) }}
+                className="text-nyx-mist hover:text-nyx-moonbeam transition-colors ml-4">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              <pre className="text-xs text-nyx-mist/90 whitespace-pre-wrap font-mono leading-relaxed bg-nyx-eclipse/40 rounded-lg p-4 border border-nyx-iris/10">
+                {claudePrompt.text}
+              </pre>
+            </div>
+            <div className="flex items-center gap-3 px-5 py-4 border-t border-nyx-iris/20">
+              <button
+                onClick={copyPrompt}
+                className={clsx('nyx-btn-primary gap-2 flex-1', promptCopied && 'bg-green-700 border-green-600')}
+              >
+                {promptCopied ? <Check size={14} /> : <ClipboardCopy size={14} />}
+                {promptCopied ? 'Copied!' : 'Copy to Clipboard'}
+              </button>
+              <button onClick={() => { setClaudePrompt(null); setPromptCopied(false) }} className="nyx-btn-ghost">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

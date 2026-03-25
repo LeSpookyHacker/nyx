@@ -68,6 +68,39 @@ def _build_filter_query(
     return stmt
 
 
+@router.post("/generate-claude-prompt/repository/{repo_id}")
+async def generate_claude_prompt_for_repo(
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """Generate a Claude Code remediation prompt for all open findings in a repository."""
+    from app.models.repository import Repository
+
+    repo_result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = repo_result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    result = await db.execute(
+        select(Finding).where(
+            Finding.repository_id == repo_id,
+            Finding.status == FindingStatus.OPEN.value,
+        ).order_by(Finding.severity, Finding.priority_score.desc()).limit(100)
+    )
+    findings = result.scalars().all()
+    if not findings:
+        raise HTTPException(status_code=404, detail="No open findings for this repository")
+
+    for f in findings:
+        f.status = FindingStatus.IN_REMEDIATION.value
+    await db.commit()
+
+    repos = {repo.id: repo}
+    prompt = _build_claude_prompt(findings, repos)
+    return {"prompt": prompt, "updated": len(findings)}
+
+
 @router.get("", response_model=dict)
 async def list_findings(
     severity: Optional[List[str]] = Query(None),

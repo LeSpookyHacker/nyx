@@ -2,7 +2,8 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { findingsApi } from '../api/findings'
-import type { Finding } from '../types'
+import { repositoriesApi } from '../api/repositories'
+import type { Finding, Repository } from '../types'
 import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
@@ -33,7 +34,7 @@ export default function FindingsPage() {
   const [severity, setSeverity] = useState<string[]>(
     searchParams.getAll('severity').length ? searchParams.getAll('severity') : []
   )
-  const [repositoryId] = useState<string>(searchParams.get('repository_id') ?? '')
+  const [repositoryId, setRepositoryId] = useState<string>(searchParams.get('repository_id') ?? '')
   const [scanner, setScanner] = useState<string[]>([])
   const [status, setStatus] = useState<string[]>(['OPEN', 'IN_REMEDIATION'])
   const [search, setSearch] = useState('')
@@ -45,6 +46,12 @@ export default function FindingsPage() {
   const [isRegressionOnly, setIsRegressionOnly] = useState(searchParams.get('is_regression') === 'true')
   const [claudePrompt, setClaudePrompt] = useState<string | null>(null)
   const [promptCopied, setPromptCopied] = useState(false)
+
+  const { data: reposData = [] } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: repositoriesApi.list,
+  })
+  const repos = reposData as Repository[]
 
   const { data, isLoading } = useQuery({
     queryKey: ['findings', { severity, scanner, status, search, page, sortBy, sortDesc, repositoryId, isRegressionOnly }],
@@ -170,6 +177,17 @@ export default function FindingsPage() {
           onChange={e => { setSearch(e.target.value); setPage(1) }}
           className="nyx-input w-64"
         />
+        <select
+          value={repositoryId}
+          onChange={e => { setRepositoryId(e.target.value); setPage(1) }}
+          className="nyx-input text-sm"
+          style={{ minWidth: '180px', maxWidth: '260px' }}
+        >
+          <option value="">All repositories</option>
+          {repos.map((r: Repository) => (
+            <option key={r.id} value={r.id}>{r.github_full_name}</option>
+          ))}
+        </select>
         <button
           onClick={() => setShowFilters(!showFilters)}
           className={clsx('nyx-btn-ghost gap-2', showFilters && 'bg-nyx-twilight text-nyx-moonbeam')}

@@ -54,6 +54,11 @@ export const repositoriesApi = {
     return response.data
   },
 
+  generateClaudePrompt: async (id: string): Promise<{ prompt: string; updated: number }> => {
+    const response = await client.post(`/findings/generate-claude-prompt/repository/${id}`)
+    return response.data
+  },
+
   detectScanners: async (id: string, autoApply = false): Promise<{
     repository: string
     current_scanners: string[]
