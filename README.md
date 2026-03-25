@@ -82,12 +82,22 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | 📦 | **SBOM Generation** | CycloneDX SBOM per repository via Trivy in GitHub Actions; diff alerts on component changes |
 | 🚀 | **One-Click Workflow Push** | Push the canonical `nyx-scan.yml` to any registered repo via GitHub API — no manual workflow maintenance |
 | 🔁 | **Autoheal** | Docker healthcheck + autoheal container automatically restarts the backend if it becomes unhealthy |
+| 🧬 | **Auto Scanner Detection** | Nyx inspects repository contents and recommends the optimal scanner set — apply with one click or automatically |
+| 📜 | **Log Persistence** | Backend logs survive container restarts and `docker compose down` via a named Docker volume; rotating file handler caps at 50 MB × 5 files |
+
+### AI Prompt Generation
+
+| | Feature | Description |
+|---|---|---|
+| 🪄 | **Claude Code Prompt Generator** | Select any findings in the Findings list and generate a structured, copy-ready prompt for Claude Code — grouped by scanner category with full finding context, code snippets, CVE data, and a built-in completion report template |
+| 📋 | **Bulk Repository Prompt** | Generate a Claude Code prompt covering all open findings in a specific repository in one click from the Repositories page or the repository detail view |
+| 🔄 | **IN_REMEDIATION Status** | Findings used to generate a Claude prompt are automatically flipped to `IN_REMEDIATION` status so the team knows active work is in progress |
 
 ### Visibility & Reporting
 
 | | Feature | Description |
 |---|---|---|
-| 📄 | **Executive PDF Report** | Print-ready HTML report covering KPIs, trends, top vulns, repo risk, compliance |
+| 📄 | **Executive PDF Report** | Print-ready HTML report covering KPIs, trends, scanner breakdown by severity, SLA status (overdue / due soon / on track), per-repository findings breakdown, and compliance summary |
 | 📈 | **Risk Score Over Time** | Daily risk score snapshots per repository and organization-wide trend |
 | 🔥 | **Hot Repos Detection** | Surface repositories with the most new findings in the last 7 days |
 | 🕵️ | **Scanner Coverage Gaps** | Identify stale, unconfigured, or partially-covered repositories |
@@ -630,13 +640,21 @@ The easiest way to integrate any repository with Nyx is to use the **Push Workfl
 | `NYX_URL` | Your Nyx public URL (no trailing slash) | Repository → Settings → Variables → Actions |
 | `NYX_API_KEY` | Your Nyx API key | Repository → Settings → Secrets → Actions |
 | `NYX_ZAP_TARGET` | Full URL to scan for DAST (optional) | Repository → Settings → Variables → Actions |
+| `SNYK_TOKEN` | Snyk API token — get one at https://snyk.io | Repository → Settings → Secrets → Actions |
 
-The generated workflow:
-- Runs Semgrep (SAST), Trivy (SCA + SBOM), and optionally OWASP ZAP (DAST)
-- Pushes findings to Nyx automatically
-- Submits a CycloneDX SBOM after each scan
+The generated workflow runs the full scanner suite:
+- **Semgrep** — SAST across all languages
+- **Trivy** — SCA vulnerability scan + CycloneDX SBOM submission
+- **OWASP ZAP** — DAST baseline scan (only if `NYX_ZAP_TARGET` is set; uses `-m 3` spider minutes)
+- **Snyk** — SCA dependency vulnerabilities (requires `SNYK_TOKEN`)
+- **Gitleaks** — Secrets detection across the full commit history
+- **Hadolint** — Dockerfile best-practice linting (skipped if no Dockerfile present)
 - Includes `chmod -R 777 .` before ZAP to avoid Docker permission errors
+- ZAP runs with `continue-on-error: true` so Trivy and SBOM always complete even if ZAP fails
 - Has the `repository_id` hardcoded — no need to look it up at runtime
+
+> [!NOTE]
+> If `SNYK_TOKEN` is not set, the Snyk step is skipped gracefully — all other scanners still run.
 
 > [!TIP]
 > After clicking **Push Workflow**, run the workflow once manually in GitHub to confirm it's working: **Actions → nyx-scan → Run workflow**.
@@ -904,10 +922,12 @@ The main dashboard gives a real-time operational view of your organization's sec
 
 The findings list is the core operational view for security engineers:
 
-- **Filters** — Severity, Scanner, Status (multi-select toggles). Regression-only toggle. Repository context from URL deep-links.
+- **Filters** — Severity, Scanner, Status (multi-select toggles). Regression-only toggle.
+- **Repository Filter** — Dropdown to scope the view to a single repository; updates the URL for deep-linking
 - **Search** — Full-text search across finding title, rule ID, file path, CVE ID
 - **Sorting** — Priority score (default), first seen, severity
 - **Bulk AI Fix** — Select multiple findings (up to 20) and request fixes in a single action
+- **Bulk Claude Prompt** — Select any findings and generate a structured Claude Code remediation prompt; findings are flipped to `IN_REMEDIATION`
 - **REGRESSION badge** — Orange badge on findings that have re-appeared after being fixed
 - **Assignee display** — Shows the assigned engineer directly in the list
 - **Export** — Download as CSV for reporting
@@ -952,6 +972,35 @@ The remediation flow keeps engineers in control at every step:
 </details>
 
 <details>
+<summary><strong>Claude Code Prompt Generator</strong></summary>
+
+Use this feature when you want to hand off a batch of findings to Claude Code running locally — particularly useful for dependency updates (Snyk/Trivy SCA findings), IaC misconfigurations, or any fix that requires changes across multiple files.
+
+**From the Findings list:**
+1. Select any findings using the checkboxes
+2. Click **Claude Prompt (N)** in the toolbar
+3. A modal displays the structured prompt — click **Copy** and paste it into a Claude Code session
+4. Selected findings are automatically set to `IN_REMEDIATION`
+
+**From the Repositories page:**
+- Each repository card has a **Claude Prompt** button that generates a prompt covering all open findings for that repo in one action
+
+**From the Repository detail page:**
+- The header card has a **Claude Prompt** button for all open findings in the repository
+- The Findings tab also has per-selection **Claude Prompt (N)** in the bulk-action toolbar
+
+**What the prompt includes:**
+- Findings grouped by scanner category (SAST, SCA, IaC, Secrets, DAST)
+- Per-finding tables: severity, CVE/CWE, CVSS score, file location, code snippet, remediation guidance
+- Category-specific instructions (e.g., "update package manifests", "rotate exposed secrets")
+- A completion report template for Claude to fill in when done
+
+> [!TIP]
+> For dependency-heavy repositories, filter to SCA findings only before generating the prompt to keep it focused and within Claude's context window.
+
+</details>
+
+<details>
 <summary><strong>Compliance</strong></summary>
 
 The compliance module maps findings to regulatory frameworks automatically:
@@ -965,7 +1014,7 @@ The compliance module maps findings to regulatory frameworks automatically:
 <details>
 <summary><strong>Reports</strong></summary>
 
-- **Executive Security Report** — Click "Generate Report" to download a print-ready HTML report covering: KPIs, MTTR by severity, weekly trends table, top 10 vulnerability types, per-repository risk table, compliance summary across all frameworks. The report is fetched securely via the API (key sent as a header, never in the URL) and opened in a new tab. Use **Cmd+P / Ctrl+P → Save as PDF** for leadership or auditors.
+- **Executive Security Report** — Click "Generate Report" to download a print-ready HTML report covering: KPIs, MTTR by severity, weekly trends table, top 10 vulnerability types, scanner breakdown by severity, SLA status breakdown (overdue / due in 7 days / on track with visual bars), per-repository findings breakdown by scanner and severity, and compliance summary across all frameworks. The report is fetched securely via the API (key sent as a header, never in the URL) and opened in a new tab. Use **Cmd+P / Ctrl+P → Save as PDF** for leadership or auditors.
 - **Compliance Trend Analysis** — Select a framework and date range; see current coverage %, change over the period, and open finding count.
 
 </details>
@@ -1023,6 +1072,8 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | `GET` | `/findings/suppression-patterns` | List all learned suppression patterns |
 | `POST` | `/findings/bulk/status` | Bulk update status for multiple findings |
 | `GET` | `/findings/export` | Export findings as CSV or JSON |
+| `POST` | `/findings/generate-claude-prompt` | Generate a Claude Code remediation prompt for specific finding IDs (max 100); sets status to `IN_REMEDIATION` |
+| `POST` | `/findings/generate-claude-prompt/repository/{id}` | Generate a Claude Code prompt for all open findings in a repository; sets status to `IN_REMEDIATION` |
 
 </details>
 
@@ -1040,6 +1091,7 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | `POST` | `/repositories/{id}/sync-code-scanning` | Manually trigger GitHub Code Scanning sync |
 | `POST` | `/repositories/{id}/push-workflow` | Push the canonical `nyx-scan.yml` to the repository via GitHub API |
 | `GET` | `/repositories/{id}/risk-history` | Get 30-day risk score history |
+| `POST` | `/repositories/{id}/detect-scanners` | Inspect repository contents and return recommended scanner set; pass `?auto_apply=true` to apply automatically |
 
 </details>
 
@@ -1431,6 +1483,43 @@ docker logs nyx-backend-1 --tail=50
 
 > [!NOTE]
 > The `autoheal` container mounts `/var/run/docker.sock`. This is standard for container management sidecars but means the autoheal container has host-level Docker access. On multi-tenant or production hardened hosts, consider restricting socket permissions or using a Docker socket proxy.
+
+</details>
+
+<details>
+<summary><strong>Accessing persistent backend logs</strong></summary>
+
+Nyx writes logs to both stdout (Docker logs) and a rotating file at `/app/logs/nyx.log` inside the backend container. The file is stored in the `nyx_logs` Docker volume, which survives `docker compose down`.
+
+```bash
+# Stream live logs (stdout)
+docker compose logs backend -f --tail=100
+
+# Read the persistent log file directly
+docker compose exec backend tail -f /app/logs/nyx.log
+
+# Copy logs to the host for analysis
+docker compose cp backend:/app/logs/nyx.log ./nyx.log
+```
+
+Log rotation: 50 MB max file size, 5 backup files. Log format is JSON when `LOG_FORMAT=json` (default) for easy ingestion into Loki, Datadog, or any log aggregator.
+
+</details>
+
+<details>
+<summary><strong>Scanner auto-detection not suggesting expected scanners</strong></summary>
+
+Nyx inspects files in the repository via the GitHub API. If the detection misses a scanner:
+
+1. Ensure `GITHUB_TOKEN` has **Contents: Read** access on the repository
+2. Use the **Detect Scanners** button in the repository card (Repositories page) to re-run detection and review the `detection_reasons` in the response
+3. Manually override via the repository edit dialog or:
+   ```bash
+   curl -X PATCH "https://your-nyx-url/api/v1/repositories/{id}" \
+     -H "X-API-Key: $NYX_API_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"enabled_scanners": ["SEMGREP","TRIVY","SNYK","GITLEAKS"]}'
+   ```
 
 </details>
 
