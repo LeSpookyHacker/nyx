@@ -15,8 +15,41 @@ from app.database import get_db
 from app.models.repository import Repository
 from app.models.sbom import Sbom, SbomAlert
 from app.services import sbom_service
+from app.services import github_service
+from app.services.audit_service import log_event
+from app.core.exceptions import GitHubError
 
 router = APIRouter(prefix="/sbom", tags=["sbom"])
+
+
+# ── SBOM generation trigger ───────────────────────────────────────────────────
+
+@router.post("/repositories/{repo_id}/generate", status_code=202)
+async def trigger_sbom_generation(
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Dispatch the nyx-scan.yml workflow on the repository's GitHub Actions,
+    which will generate a CycloneDX SBOM with Trivy and submit it here.
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    try:
+        await github_service.trigger_workflow_dispatch(
+            repo.github_full_name,
+            workflow_file="nyx-scan.yml",
+            ref=repo.default_branch,
+        )
+    except GitHubError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    await log_event(db, actor=_key, action="sbom.generation_triggered", resource_type="repository",
+        resource_id=repo_id, metadata={"github_full_name": repo.github_full_name})
+    await db.commit()
+    return {"triggered": True, "repository": repo.github_full_name, "workflow": "nyx-scan.yml"}
 
 
 # ── Submission ────────────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ from app.models.repository import Repository
 from app.models.scan import Scan
 from app.schemas.scan import ScanResponse, ScanTriggerRequest
 from app.workers.scan_worker import process_scan_results
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/scans", tags=["scans"])
 
@@ -86,6 +87,10 @@ async def import_scan_results_json(
     await db.refresh(scan)
 
     background_tasks.add_task(process_scan_results, scan.id, body.data)
+    await log_event(db, actor=_key, action="scan.imported", resource_type="scan",
+        resource_id=scan.id,
+        metadata={"scanner": scan.scanner, "repository_id": body.repository_id, "git_ref": body.git_ref})
+    await db.commit()
     return scan
 
 

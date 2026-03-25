@@ -8,11 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import require_api_key
+from app.core.exceptions import GitHubError
 from app.database import get_db
 from app.models.repo_risk_history import RepoRiskHistory
 from app.models.repository import Repository
 from app.schemas.repository import RepositoryCreate, RepositoryResponse, RepositoryUpdate
 from app.services import github_service
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
@@ -70,6 +72,9 @@ async def add_repository(
     db.add(repo)
     await db.commit()
     await db.refresh(repo)
+    await log_event(db, actor=_key, action="repository.registered", resource_type="repository",
+        resource_id=repo.id, metadata={"github_full_name": repo.github_full_name})
+    await db.commit()
     return repo
 
 
@@ -125,6 +130,8 @@ async def delete_repository(
         except Exception:
             pass
 
+    await log_event(db, actor=_key, action="repository.deleted", resource_type="repository",
+        resource_id=repo_id, metadata={"github_full_name": repo.github_full_name})
     await db.delete(repo)
     await db.commit()
 
@@ -174,6 +181,40 @@ async def refresh_webhook(
     await db.commit()
     await db.refresh(repo)
     return repo
+
+
+@router.post("/{repo_id}/push-workflow")
+async def push_workflow(
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Push (create or update) the canonical nyx-scan.yml workflow file into the
+    repository via the GitHub API.  The repo_id is hardcoded in the file so
+    users only need NYX_URL (var) and NYX_API_KEY (secret) configured in GitHub.
+    ZAP DAST is enabled by setting the NYX_ZAP_TARGET repository variable.
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    try:
+        outcome = await github_service.push_nyx_workflow(
+            repo.github_full_name,
+            repo_id,
+            repo.default_branch,
+        )
+    except GitHubError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    await log_event(db, actor=_key, action="repository.workflow_pushed", resource_type="repository",
+        resource_id=repo_id, metadata={"github_full_name": repo.github_full_name, "created": outcome["created"]})
+    await db.commit()
+    return {
+        "created": outcome["created"],
+        "html_url": outcome["html_url"],
+        "repository": repo.github_full_name,
+    }
 
 
 @router.get("/{repo_id}/risk-history")

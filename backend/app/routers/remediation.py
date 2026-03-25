@@ -24,6 +24,7 @@ from app.schemas.remediation import (
     RemediationResponse,
 )
 from app.services import ai_service, github_service, jira_service
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
 
@@ -126,6 +127,10 @@ async def request_remediation(
     # Update finding status
     finding.status = FindingStatus.IN_REMEDIATION.value
 
+    await db.flush()
+    await log_event(db, actor=_key, action="remediation.requested", resource_type="remediation",
+        resource_id=remediation.id,
+        metadata={"finding_id": body.finding_id, "requested_by": body.requested_by})
     await db.commit()
     await db.refresh(remediation)
 
@@ -174,10 +179,13 @@ async def approve_remediation(
     rem.engineer_approved = True
     rem.engineer_notes = body.engineer_notes
     rem.status = RemediationStatus.PR_CREATING.value
+    await log_event(db, actor=_key, action="remediation.approved", resource_type="remediation",
+        resource_id=remediation_id,
+        metadata={"auto_merge": body.auto_merge, "jira_assignee": body.jira_assignee})
     await db.commit()
 
-    # Create PR in background
-    background_tasks.add_task(_create_pr, remediation_id)
+    # Create PR in background (optionally auto-merge)
+    background_tasks.add_task(_create_pr, remediation_id, body.auto_merge, body.jira_assignee)
 
     await db.refresh(rem)
     return rem
@@ -205,9 +213,32 @@ async def reject_remediation(
     if finding and finding.status == FindingStatus.IN_REMEDIATION.value:
         finding.status = FindingStatus.OPEN.value
 
+    await log_event(db, actor=_key, action="remediation.rejected", resource_type="remediation",
+        resource_id=remediation_id,
+        metadata={"notes": body.engineer_notes})
     await db.commit()
     await db.refresh(rem)
     return rem
+
+
+@router.delete("/{remediation_id}", status_code=204)
+async def dismiss_remediation(
+    remediation_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """Dismiss (delete) a FAILED or REJECTED remediation record."""
+    result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
+    rem = result.scalar_one_or_none()
+    if not rem:
+        raise HTTPException(status_code=404, detail="Remediation not found")
+    if rem.status not in (RemediationStatus.FAILED.value, RemediationStatus.REJECTED.value):
+        raise HTTPException(status_code=400, detail="Only FAILED or REJECTED remediations can be dismissed")
+    await log_event(db, actor=_key, action="remediation.dismissed", resource_type="remediation",
+        resource_id=remediation_id,
+        metadata={"status": rem.status})
+    await db.delete(rem)
+    await db.commit()
 
 
 @router.post("/{remediation_id}/regenerate", response_model=RemediationResponse, status_code=202)
@@ -231,6 +262,9 @@ async def regenerate_remediation(
     rem.ai_explanation = None
     rem.ai_fix_diff = None
     rem.error_message = None
+    await log_event(db, actor=_key, action="remediation.regenerated", resource_type="remediation",
+        resource_id=remediation_id,
+        metadata={"context": body.engineer_context})
     await db.commit()
 
     background_tasks.add_task(
@@ -315,7 +349,7 @@ async def get_pr_status(
         return {"status": rem.status, "pr": None, "error": "Failed to fetch PR status from GitHub"}
 
 
-async def _create_pr(remediation_id: str) -> None:
+async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assignee: str | None = None) -> None:
     """Background task: apply unified diff and create GitHub PR."""
     from app.database import AsyncSessionLocal
     from app.models.jira_link import JiraLink
@@ -370,6 +404,21 @@ async def _create_pr(remediation_id: str) -> None:
             rem.status = RemediationStatus.PR_OPEN.value
             finding.fix_pr_url = pr_url
 
+            # Auto-merge if requested
+            if auto_merge:
+                try:
+                    from datetime import datetime, timezone as tz
+                    merged = await github_service.merge_pr(
+                        repo.github_full_name, pr_number, branch_name
+                    )
+                    if merged:
+                        rem.status = RemediationStatus.MERGED.value
+                        rem.pr_merged_at = datetime.now(tz.utc)
+                        finding.status = FindingStatus.FIXED.value
+                except Exception as merge_err:
+                    # Merge failed (e.g. branch protection) — leave PR open, log warning
+                    rem.error_message = f"PR created but auto-merge failed: {merge_err}"
+
             # Auto-create JIRA ticket for this AI fix
             try:
                 existing_link = await db.execute(
@@ -382,7 +431,7 @@ async def _create_pr(remediation_id: str) -> None:
                     rem.jira_issue_key = jira_link.jira_issue_key
                     rem.jira_issue_url = jira_link.jira_issue_url
                 else:
-                    ticket = await jira_service.create_remediation_ticket(finding, rem)
+                    ticket = await jira_service.create_remediation_ticket(finding, rem, assignee=jira_assignee)
                     rem.jira_issue_key = ticket["key"]
                     rem.jira_issue_url = ticket["url"]
                     new_link = JiraLink(
