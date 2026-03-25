@@ -4,11 +4,12 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { findingsApi } from '../api/findings'
 import { remediationApi } from '../api/remediation'
 import { jiraApi } from '../api/jira'
+import { repositoriesApi } from '../api/repositories'
 import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow, format } from 'date-fns'
-import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw } from 'lucide-react'
+import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw, GitBranch } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -155,6 +156,12 @@ export default function FindingDetailPage() {
     queryKey: ['finding', id],
     queryFn: () => findingsApi.get(id!),
     enabled: !!id,
+  })
+
+  const { data: repository } = useQuery({
+    queryKey: ['repository', finding?.repository_id],
+    queryFn: () => repositoriesApi.get(finding!.repository_id),
+    enabled: !!finding?.repository_id,
   })
 
   const requestFix = useMutation({
@@ -372,6 +379,18 @@ export default function FindingDetailPage() {
             <h3 className="text-nyx-moonbeam font-semibold mb-4">Details</h3>
             <dl className="space-y-2.5 text-sm">
               {[
+                repository ? {
+                  label: 'Repository',
+                  value: (
+                    <button
+                      onClick={() => navigate(`/repositories/${repository.id}`)}
+                      className="text-nyx-stardust hover:text-nyx-amethyst flex items-center gap-1 text-xs font-mono"
+                    >
+                      <GitBranch size={11} />
+                      {repository.github_full_name}
+                    </button>
+                  )
+                } : null,
                 { label: 'Rule ID', value: <code className="text-nyx-amethyst text-xs">{finding.rule_id}</code> },
                 { label: 'Category', value: finding.category },
                 { label: 'Priority Score', value: <span className="text-nyx-amethyst font-bold">{finding.priority_score.toFixed(1)}</span> },

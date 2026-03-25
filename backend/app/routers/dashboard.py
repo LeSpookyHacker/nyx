@@ -308,7 +308,11 @@ async def get_regressions(
     since = datetime.now(timezone.utc) - timedelta(days=days)
     result = await db.execute(
         select(Finding)
-        .where(Finding.is_regression == True, Finding.regression_detected_at >= since)  # noqa: E712
+        .where(
+            Finding.is_regression == True,  # noqa: E712
+            Finding.regression_detected_at >= since,
+            Finding.status.in_([FindingStatus.OPEN.value, FindingStatus.IN_REMEDIATION.value]),
+        )
         .order_by(desc(Finding.regression_detected_at))
         .limit(limit)
     )
