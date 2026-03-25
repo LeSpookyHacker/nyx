@@ -217,6 +217,55 @@ async def push_workflow(
     }
 
 
+@router.post("/{repo_id}/detect-scanners")
+async def detect_scanners(
+    repo_id: str,
+    auto_apply: bool = Query(False, description="Automatically update enabled_scanners with detected tools"),
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Analyse the repository's file tree on GitHub and detect which scanners
+    are applicable.  Pass auto_apply=true to update enabled_scanners in the DB.
+
+    The canonical nyx-scan.yml uses hashFiles() conditions so Hadolint/Snyk/etc
+    activate automatically when their trigger files exist — this endpoint keeps
+    the DB in sync so Nyx's UI and scan records stay accurate.
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    from app.services.scanner_detection_service import (
+        detect_from_github_tree, merge_scanners, SCANNER_TRIGGERS
+    )
+
+    detections = await detect_from_github_tree(repo.github_full_name)
+    current = repo.scanner_list
+    updated, added = merge_scanners(current, detections)
+
+    if auto_apply and added:
+        repo.enabled_scanners = ",".join(sorted(updated))
+        await log_event(
+            db, actor=_key,
+            action="repository.scanners_auto_detected",
+            resource_type="repository",
+            resource_id=repo_id,
+            metadata={"added": added, "reasons": detections, "github_full_name": repo.github_full_name},
+        )
+        await db.commit()
+
+    return {
+        "repository": repo.github_full_name,
+        "current_scanners": current,
+        "recommended_scanners": sorted(updated),
+        "newly_detected": added,
+        "detection_reasons": detections,
+        "applied": auto_apply and bool(added),
+    }
+
+
 @router.get("/{repo_id}/risk-history")
 async def get_risk_history(
     repo_id: str,

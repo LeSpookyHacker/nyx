@@ -53,4 +53,18 @@ export const repositoriesApi = {
     const response = await client.post(`/repositories/${id}/push-workflow`)
     return response.data
   },
+
+  detectScanners: async (id: string, autoApply = false): Promise<{
+    repository: string
+    current_scanners: string[]
+    recommended_scanners: string[]
+    newly_detected: string[]
+    detection_reasons: Record<string, string>
+    applied: boolean
+  }> => {
+    const response = await client.post(`/repositories/${id}/detect-scanners`, null, {
+      params: { auto_apply: autoApply },
+    })
+    return response.data
+  },
 }

@@ -36,13 +36,17 @@ def generate_nyx_workflow(repo_id: str) -> str:
     """
     Generate the canonical nyx-scan.yml workflow content for a repository.
 
-    The repo_id is hardcoded so users only need two GitHub secrets:
-      - NYX_URL  (vars)      — the Nyx base URL (e.g. ngrok URL)
-      - NYX_API_KEY (secrets) — the Nyx API key
+    The workflow is self-detecting: most scanner steps include hashFiles()
+    or env-var conditions so they activate automatically when relevant files
+    appear — no re-push needed.
 
-    ZAP DAST is opt-in via a GitHub Actions variable:
-      - NYX_ZAP_TARGET (vars) — full URL of the deployed app, e.g. https://myapp.com
-        If not set, the ZAP steps are skipped automatically.
+    Required GitHub settings:
+      vars.NYX_URL        — Nyx public URL (no trailing slash)
+      secrets.NYX_API_KEY — Nyx API key
+
+    Optional:
+      vars.NYX_ZAP_TARGET  — full URL for DAST scan (e.g. https://myapp.com)
+      secrets.SNYK_TOKEN   — enables Snyk SCA step
     """
     return f"""\
 name: Nyx Security Scan
@@ -62,8 +66,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Gitleaks needs full history to scan all commits
 
-      # ── Semgrep ──────────────────────────────────────────────────────────────
+      # ── Semgrep (SAST) ────────────────────────────────────────────────────────
       - name: Run Semgrep
         run: |
           pip install semgrep --quiet
@@ -90,8 +96,106 @@ jobs:
               -d @-
           echo "✓ Semgrep results sent to Nyx"
 
+      # ── Gitleaks (Secrets) — always runs ─────────────────────────────────────
+      - name: Run Gitleaks
+        run: |
+          curl -sSfL \\
+            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \\
+            | tar -xz gitleaks
+          ./gitleaks detect --source . --report-format json \\
+            --report-path gitleaks.json --exit-code 0 || true
+
+      - name: Report Gitleaks → Nyx
+        if: hashFiles('gitleaks.json') != ''
+        env:
+          NYX_URL: ${{{{ vars.NYX_URL }}}}
+          NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
+        run: |
+          COUNT=$(jq 'if type == "array" then length else 0 end' gitleaks.json 2>/dev/null || echo 0)
+          if [ "$COUNT" -eq 0 ]; then echo "✓ Gitleaks: no secrets found"; exit 0; fi
+          NYX_URL="${{NYX_URL// /}}"
+          jq -n \\
+            --arg repo    "{repo_id}" \\
+            --arg scanner "GITLEAKS" \\
+            --arg ref     "$GITHUB_REF_NAME" \\
+            --slurpfile d gitleaks.json \\
+            '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
+              -H "Content-Type: application/json" \\
+              -H "X-API-Key: $NYX_API_KEY" \\
+              -H "ngrok-skip-browser-warning: true" \\
+              -d @-
+          echo "✓ Gitleaks: $COUNT secret(s) sent to Nyx"
+
+      # ── Hadolint (Dockerfile linting) — auto-activates when Dockerfile exists ─
+      - name: Run Hadolint
+        if: hashFiles('**/Dockerfile', '**/Dockerfile.*') != ''
+        run: |
+          wget -qO /usr/local/bin/hadolint \\
+            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+          find . \\( -name 'Dockerfile' -o -name 'Dockerfile.*' -o -name '*.dockerfile' \\) \\
+            | head -20 | xargs hadolint --format json 2>/dev/null > hadolint.json || true
+
+      - name: Report Hadolint → Nyx
+        if: hashFiles('hadolint.json') != ''
+        env:
+          NYX_URL: ${{{{ vars.NYX_URL }}}}
+          NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
+        run: |
+          COUNT=$(jq 'if type == "array" then length else 0 end' hadolint.json 2>/dev/null || echo 0)
+          if [ "$COUNT" -eq 0 ]; then echo "✓ Hadolint: no issues found"; exit 0; fi
+          NYX_URL="${{NYX_URL// /}}"
+          jq -n \\
+            --arg repo    "{repo_id}" \\
+            --arg scanner "HADOLINT" \\
+            --arg ref     "$GITHUB_REF_NAME" \\
+            --slurpfile d hadolint.json \\
+            '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
+              -H "Content-Type: application/json" \\
+              -H "X-API-Key: $NYX_API_KEY" \\
+              -H "ngrok-skip-browser-warning: true" \\
+              -d @-
+          echo "✓ Hadolint: $COUNT issue(s) sent to Nyx"
+
+      # ── Snyk (SCA) — activates when SNYK_TOKEN secret is set ─────────────────
+      - name: Run Snyk
+        env:
+          SNYK_TOKEN: ${{{{ secrets.SNYK_TOKEN }}}}
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then
+            echo "⏭ SNYK_TOKEN not set — skipping Snyk (add it to repo secrets to enable)"
+            exit 0
+          fi
+          npm install -g snyk --quiet
+          snyk test --json --all-projects > snyk.json 2>/dev/null || true
+          echo "Snyk scan complete"
+
+      - name: Report Snyk → Nyx
+        if: hashFiles('snyk.json') != ''
+        env:
+          NYX_URL: ${{{{ vars.NYX_URL }}}}
+          NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
+          SNYK_TOKEN: ${{{{ secrets.SNYK_TOKEN }}}}
+        run: |
+          if [ -z "$SNYK_TOKEN" ]; then exit 0; fi
+          NYX_URL="${{NYX_URL// /}}"
+          jq -n \\
+            --arg repo    "{repo_id}" \\
+            --arg scanner "SNYK" \\
+            --arg ref     "$GITHUB_REF_NAME" \\
+            --slurpfile d snyk.json \\
+            '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
+              -H "Content-Type: application/json" \\
+              -H "X-API-Key: $NYX_API_KEY" \\
+              -H "ngrok-skip-browser-warning: true" \\
+              -d @-
+          echo "✓ Snyk results sent to Nyx"
+
       # ── ZAP (DAST — optional) ─────────────────────────────────────────────────
-      # Set the NYX_ZAP_TARGET repository variable to your app's URL to enable ZAP.
+      # Set vars.NYX_ZAP_TARGET to your deployed app URL to enable DAST scanning.
       - name: Fix workspace permissions for ZAP container
         if: vars.NYX_ZAP_TARGET != ''
         run: chmod -R 777 .
@@ -101,9 +205,8 @@ jobs:
         uses: zaproxy/action-baseline@v0.14.0
         with:
           target: ${{{{ vars.NYX_ZAP_TARGET }}}}
-          # -t 3  = spider/passive scan timeout in minutes (default 1 — too short for SPAs)
-          # -a    = include alpha-quality passive scan rules for more coverage
-          # -J    = write traditional JSON report to this file in the workspace
+          # -t 3  = spider/passive timeout in minutes (SPAs need more than the 1m default)
+          # -a    = include alpha passive rules for better header/cookie coverage
           cmd_options: '-t 3 -a -J zap.json'
           allow_issue_writing: false
           fail_action: false
@@ -126,7 +229,6 @@ jobs:
           NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
         run: |
           NYX_URL="${{NYX_URL// /}}"
-          # Skip submission if ZAP produced no sites (empty scan — don't create a blank scan record)
           SITE_COUNT=$(jq '.site | length' zap.json 2>/dev/null || echo 0)
           if [ "$SITE_COUNT" -eq 0 ]; then
             echo "⚠ ZAP returned no site data — skipping submission (check Debug step above)"
@@ -145,7 +247,7 @@ jobs:
               -d @-
           echo "✓ ZAP results sent to Nyx ($SITE_COUNT site(s) scanned)"
 
-      # ── Trivy ────────────────────────────────────────────────────────────────
+      # ── Trivy (SCA + IaC + Container) ────────────────────────────────────────
       - name: Run Trivy
         uses: aquasecurity/trivy-action@master
         with:
@@ -174,7 +276,7 @@ jobs:
               -d @-
           echo "✓ Trivy results sent to Nyx"
 
-      # ── SBOM ─────────────────────────────────────────────────────────────────
+      # ── SBOM (CycloneDX via Trivy) ────────────────────────────────────────────
       - name: Generate SBOM (CycloneDX)
         run: trivy fs --format cyclonedx --output sbom-cdx.json . || true
 

@@ -4,10 +4,10 @@ import { useNavigate } from 'react-router-dom'
 import { repositoriesApi } from '../api/repositories'
 import type { Repository } from '../types'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertOctagon, Building2, GitBranch, Globe, Lock, Plus, RefreshCw, ScanLine, Trash2, Webhook, Upload, CheckCircle } from 'lucide-react'
+import { AlertOctagon, Building2, GitBranch, Globe, Lock, Plus, RefreshCw, ScanLine, Trash2, Webhook, Upload, CheckCircle, Search } from 'lucide-react'
 import { clsx } from 'clsx'
 
-const ALL_SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV']
+const ALL_SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV', 'HADOLINT', 'GITLEAKS']
 
 function RiskBar({ score }: { score: number }) {
   const color = score >= 70 ? 'bg-red-500' : score >= 40 ? 'bg-orange-500' : score >= 20 ? 'bg-yellow-500' : 'bg-green-500'
@@ -18,15 +18,17 @@ function RiskBar({ score }: { score: number }) {
   )
 }
 
-function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPushWorkflow, syncingId, pushingId, pushedId }: {
+function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPushWorkflow, onDetectScanners, syncingId, pushingId, pushedId, detectingId }: {
   repo: Repository
   onDelete: (id: string) => void
   onRefreshWebhook: (id: string) => void
   onSyncCodeScanning: (id: string) => void
   onPushWorkflow: (id: string) => void
+  onDetectScanners: (id: string) => void
   syncingId: string | null
   pushingId: string | null
   pushedId: string | null
+  detectingId: string | null
 }) {
   const navigate = useNavigate()
   const repoName = repo.github_full_name.split('/')[1]
@@ -159,6 +161,14 @@ function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPush
           }
         </button>
         <button
+          onClick={() => onDetectScanners(repo.id)}
+          disabled={detectingId === repo.id}
+          className="nyx-btn-ghost text-xs py-1 px-2 gap-1"
+          title="Scan repo file tree and auto-enable applicable scanners"
+        >
+          <Search size={11} /> {detectingId === repo.id ? 'Detecting...' : 'Detect Scanners'}
+        </button>
+        <button
           onClick={() => {
             if (confirm('Remove this repository from Nyx? This will delete all associated findings.')) {
               onDelete(repo.id)
@@ -183,6 +193,8 @@ export default function RepositoriesPage() {
   const [pushingId, setPushingId] = useState<string | null>(null)
   const [pushedId, setPushedId] = useState<string | null>(null)
   const [pushResult, setPushResult] = useState<{ id: string; message: string; error?: boolean } | null>(null)
+  const [detectingId, setDetectingId] = useState<string | null>(null)
+  const [detectResult, setDetectResult] = useState<{ id: string; added: string[]; reasons: Record<string, string>; applied: boolean; error?: boolean } | null>(null)
 
   const { data: repos = [], isLoading } = useQuery({
     queryKey: ['repositories'],
@@ -246,6 +258,21 @@ export default function RepositoriesPage() {
       setPushResult({ id, message: msg, error: true })
     } finally {
       setPushingId(null)
+    }
+  }
+
+  const handleDetectScanners = async (id: string) => {
+    setDetectingId(id)
+    setDetectResult(null)
+    try {
+      const result = await repositoriesApi.detectScanners(id, true)
+      setDetectResult({ id, added: result.newly_detected, reasons: result.detection_reasons, applied: result.applied })
+      if (result.applied) queryClient.invalidateQueries({ queryKey: ['repositories'] })
+      setTimeout(() => setDetectResult(null), 8000)
+    } catch {
+      setDetectResult({ id, added: [], reasons: {}, applied: false, error: true })
+    } finally {
+      setDetectingId(null)
     }
   }
 
@@ -335,11 +362,32 @@ export default function RepositoriesPage() {
             {!pushResult.error && (
               <span className="text-nyx-mist ml-2">
                 Set <code className="text-nyx-lavender">NYX_URL</code> (var) and <code className="text-nyx-lavender">NYX_API_KEY</code> (secret) in GitHub.
-                Optional: set <code className="text-nyx-lavender">NYX_ZAP_TARGET</code> (var) to enable DAST scanning.
+                Optional: set <code className="text-nyx-lavender">NYX_ZAP_TARGET</code> (var) to enable DAST.
+                Add <code className="text-nyx-lavender">SNYK_TOKEN</code> (secret) to enable Snyk.
               </span>
             )}
           </span>
           <button onClick={() => setPushResult(null)} className="text-nyx-mist/50 hover:text-nyx-mist ml-4 shrink-0">✕</button>
+        </div>
+      )}
+
+      {detectResult && (
+        <div className={clsx(
+          'nyx-card p-3 border text-xs flex items-center justify-between',
+          detectResult.error ? 'border-red-800/30 text-red-400' : 'border-blue-800/30 text-blue-300'
+        )}>
+          {detectResult.error
+            ? <span>✗ Scanner detection failed — check GITHUB_TOKEN</span>
+            : detectResult.added.length > 0
+              ? <span>
+                  ✓ Detected and enabled: <span className="font-semibold">{detectResult.added.join(', ')}</span>
+                  <span className="text-nyx-mist ml-2">
+                    ({detectResult.added.map(s => detectResult.reasons[s]).join('; ')})
+                  </span>
+                </span>
+              : <span>✓ No new scanners detected — all applicable tools are already enabled</span>
+          }
+          <button onClick={() => setDetectResult(null)} className="text-nyx-mist/50 hover:text-nyx-mist ml-4 shrink-0">✕</button>
         </div>
       )}
 
@@ -370,9 +418,11 @@ export default function RepositoriesPage() {
                 onRefreshWebhook={(id) => refreshWebhook.mutate(id)}
                 onSyncCodeScanning={handleSyncCodeScanning}
                 onPushWorkflow={handlePushWorkflow}
+                onDetectScanners={handleDetectScanners}
                 syncingId={syncingId}
                 pushingId={pushingId}
                 pushedId={pushedId}
+                detectingId={detectingId}
               />
             ))}
           </div>

@@ -293,6 +293,10 @@ async def lifespan(app: FastAPI):
         tasks.append(asyncio.create_task(run_poll_loop()))
         logger.info("Code Scanning background poll loop started")
 
+        from app.services.dependabot_service import run_poll_loop as dependabot_poll_loop
+        tasks.append(asyncio.create_task(dependabot_poll_loop()))
+        logger.info("Dependabot background poll loop started")
+
     yield
 
     for t in tasks:

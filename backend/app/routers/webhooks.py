@@ -91,7 +91,7 @@ async def github_webhook(
 
 
 async def _handle_push(payload: dict, repo, background_tasks, db) -> None:
-    """On push to default branch, create Scan records for all enabled scanners."""
+    """On push to default branch: auto-detect new scanners, then create Scan records."""
     ref = payload.get("ref", "")
     default_ref = f"refs/heads/{repo.default_branch}"
     if ref != default_ref:
@@ -99,6 +99,29 @@ async def _handle_push(payload: dict, repo, background_tasks, db) -> None:
 
     git_sha = payload.get("after", "")
     git_ref = repo.default_branch
+
+    # ── Auto-detect new scanners from pushed files ─────────────────────────────
+    from app.services.scanner_detection_service import detect_from_push_payload, merge_scanners
+    from app.services.audit_service import log_event
+
+    detections = detect_from_push_payload(payload)
+    if detections:
+        current = repo.scanner_list
+        updated, added = merge_scanners(current, detections)
+        if added:
+            repo.enabled_scanners = ",".join(sorted(updated))
+            await log_event(
+                db,
+                actor="webhook",
+                action="repository.scanners_auto_detected",
+                resource_type="repository",
+                resource_id=repo.id,
+                metadata={
+                    "added": added,
+                    "reasons": {k: v for k, v in detections.items() if k in added},
+                    "git_sha": git_sha,
+                },
+            )
 
     for scanner in repo.scanner_list:
         scan = Scan(
@@ -111,12 +134,10 @@ async def _handle_push(payload: dict, repo, background_tasks, db) -> None:
             started_at=datetime.now(timezone.utc),
         )
         db.add(scan)
-        await db.flush()  # Get the ID before committing
+        await db.flush()
 
-        # Note: In a production setup, this would kick off actual scanner execution
-        # via a CI/CD pipeline. For Nyx, the push webhook signals intent;
-        # actual scan results are submitted via POST /api/v1/scans/import
-        # or via GitHub Actions that run the scanners and POST back to Nyx.
+        # Actual scan results arrive via POST /api/v1/scans/import-json
+        # from the nyx-scan.yml GitHub Actions workflow.
 
 
 @router.post("/snyk")

@@ -14,6 +14,10 @@ class ScannerType(str, enum.Enum):
     BANDIT = "BANDIT"
     GRYPE = "GRYPE"
     CHECKOV = "CHECKOV"
+    HADOLINT = "HADOLINT"
+    GITLEAKS = "GITLEAKS"
+    DEPENDABOT = "DEPENDABOT"
+    CODE_SCANNING = "CODE_SCANNING"
 
 
 class FindingCategory(str, enum.Enum):
