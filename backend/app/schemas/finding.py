@@ -110,6 +110,17 @@ class FindingListParams(BaseModel):
     sort_desc: bool = True
 
 
+class GeneratePromptRequest(BaseModel):
+    finding_ids: List[str]
+
+    @field_validator("finding_ids")
+    @classmethod
+    def cap_finding_ids(cls, v: List[str]) -> List[str]:
+        if len(v) > 100:
+            raise ValueError("Cannot generate a prompt for more than 100 findings at once")
+        return v
+
+
 class BulkStatusUpdate(BaseModel):
     finding_ids: List[str]
     status: FindingStatus

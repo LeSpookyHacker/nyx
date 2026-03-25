@@ -77,6 +77,11 @@ export const findingsApi = {
     return response.data
   },
 
+  generateClaudePrompt: async (finding_ids: string[]): Promise<{ prompt: string; updated: number }> => {
+    const response = await client.post('/findings/generate-claude-prompt', { finding_ids })
+    return response.data
+  },
+
   bulkRequestFix: async (finding_ids: string[]): Promise<{ requested: number; skipped: number; remediation_ids: string[] }> => {
     const response = await client.post('/remediation/bulk', { finding_ids })
     return response.data

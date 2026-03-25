@@ -24,6 +24,7 @@ from app.schemas.finding import (
     FindingResponse,
     FindingStatusUpdate,
     FindingSuppressRequest,
+    GeneratePromptRequest,
 )
 
 router = APIRouter(prefix="/findings", tags=["findings"])
@@ -410,6 +411,191 @@ async def list_suppression_patterns(
         }
         for p in patterns
     ]
+
+
+@router.post("/generate-claude-prompt")
+async def generate_claude_prompt(
+    body: GeneratePromptRequest,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Generate a Claude Code remediation prompt for selected findings.
+    Marks each finding as IN_REMEDIATION and returns a ready-to-paste prompt.
+    """
+    from app.models.repository import Repository
+
+    result = await db.execute(
+        select(Finding).where(Finding.id.in_(body.finding_ids))
+    )
+    findings = result.scalars().all()
+    if not findings:
+        raise HTTPException(status_code=404, detail="No findings found for the given IDs")
+
+    # Fetch repo names
+    repo_ids = list({f.repository_id for f in findings})
+    repos_result = await db.execute(select(Repository).where(Repository.id.in_(repo_ids)))
+    repos = {r.id: r for r in repos_result.scalars().all()}
+
+    # Mark as IN_REMEDIATION
+    now = datetime.now(timezone.utc)
+    for f in findings:
+        if f.status == FindingStatus.OPEN.value:
+            f.status = FindingStatus.IN_REMEDIATION.value
+    await db.commit()
+
+    # Build the prompt
+    prompt = _build_claude_prompt(findings, repos)
+    return {"prompt": prompt, "updated": len([f for f in findings if f.status == FindingStatus.IN_REMEDIATION.value])}
+
+
+def _build_claude_prompt(findings, repos: dict) -> str:
+    """Generate a structured Claude Code remediation prompt."""
+    # Group findings by scanner category
+    SCA_SCANNERS = {"TRIVY", "SNYK", "DEPENDABOT", "GRYPE"}
+    SAST_SCANNERS = {"SEMGREP", "CODEQL", "BANDIT", "CODE_SCANNING"}
+    SECRET_SCANNERS = {"GITLEAKS"}
+    IAC_SCANNERS = {"HADOLINT", "CHECKOV"}
+    DAST_SCANNERS = {"ZAP"}
+
+    sca, sast, secrets, iac, dast, other = [], [], [], [], [], []
+    for f in findings:
+        s = f.scanner.upper()
+        if s in SCA_SCANNERS:       sca.append(f)
+        elif s in SAST_SCANNERS:    sast.append(f)
+        elif s in SECRET_SCANNERS:  secrets.append(f)
+        elif s in IAC_SCANNERS:     iac.append(f)
+        elif s in DAST_SCANNERS:    dast.append(f)
+        else:                        other.append(f)
+
+    repo_names = sorted({repos[f.repository_id].github_full_name for f in findings if f.repository_id in repos})
+    repo_str = ", ".join(repo_names) if repo_names else "this repository"
+    total = len(findings)
+
+    lines = []
+    lines.append(f"# Security Remediation Task — {total} Finding{'s' if total != 1 else ''}")
+    lines.append(f"\nYou are helping remediate **{total} security finding{'s' if total != 1 else ''}** identified by Nyx in **{repo_str}**.")
+    lines.append("\nWork through each finding below in order. For every fix:")
+    lines.append("1. Read the affected file(s) first to understand context")
+    lines.append("2. Implement the minimal change needed to address the finding")
+    lines.append("3. Show a diff of exactly what you changed")
+    lines.append("4. Do not refactor or change unrelated code")
+    lines.append("\nAfter completing all findings, output the **Completion Report** described at the bottom.\n")
+    lines.append("---\n")
+
+    finding_num = 0
+
+    def _fmt_finding(f, category_hint: str) -> list:
+        nonlocal finding_num
+        finding_num += 1
+        repo = repos.get(f.repository_id)
+        repo_name = repo.github_full_name if repo else f.repository_id
+
+        out = [f"## Finding {finding_num} — [{f.severity}] {f.title}"]
+        out.append(f"\n| Field | Value |")
+        out.append(f"|-------|-------|")
+        out.append(f"| Repository | `{repo_name}` |")
+        out.append(f"| Scanner | {f.scanner} |")
+        out.append(f"| Rule | `{f.rule_id}` |")
+        out.append(f"| Severity | **{f.severity}** |")
+        out.append(f"| Category | {f.category or category_hint} |")
+        if f.cve_id:
+            out.append(f"| CVE | [{f.cve_id}](https://nvd.nist.gov/vuln/detail/{f.cve_id}) |")
+        if f.cvss_score:
+            out.append(f"| CVSS | {f.cvss_score} |")
+        if f.file_path:
+            loc = f.file_path
+            if f.line_start:
+                loc += f":{f.line_start}"
+                if f.line_end and f.line_end != f.line_start:
+                    loc += f"–{f.line_end}"
+            out.append(f"| Location | `{loc}` |")
+        out.append("")
+        if f.description:
+            out.append(f"**Description:** {f.description}\n")
+        if f.code_snippet:
+            out.append(f"**Affected code:**\n```\n{f.code_snippet}\n```\n")
+        if f.remediation_guidance:
+            out.append(f"**Remediation:** {f.remediation_guidance}\n")
+        return out
+
+    if sca:
+        lines.append("## Dependency Vulnerabilities (SCA)\n")
+        lines.append("These require package version updates. For each finding:")
+        lines.append("- Update the package to the fixed version in the manifest (`package.json`, `requirements.txt`, `go.mod`, `Gemfile`, `pom.xml`, etc.)")
+        lines.append("- Run the appropriate package manager to regenerate the lock file")
+        lines.append("- If no fix version exists, document it in the completion report\n")
+        for f in sorted(sca, key=lambda x: ["CRITICAL","HIGH","MEDIUM","LOW","INFO"].index(x.severity) if x.severity in ["CRITICAL","HIGH","MEDIUM","LOW","INFO"] else 99):
+            lines.extend(_fmt_finding(f, "SCA"))
+            lines.append("")
+
+    if sast:
+        lines.append("## Code Vulnerabilities (SAST)\n")
+        lines.append("These require code changes at the specific file and line numbers indicated.")
+        lines.append("Read the file first, fix only the flagged issue, then show the diff.\n")
+        for f in sorted(sast, key=lambda x: ["CRITICAL","HIGH","MEDIUM","LOW","INFO"].index(x.severity) if x.severity in ["CRITICAL","HIGH","MEDIUM","LOW","INFO"] else 99):
+            lines.extend(_fmt_finding(f, "SAST"))
+            lines.append("")
+
+    if iac:
+        lines.append("## Infrastructure-as-Code Issues (IaC)\n")
+        lines.append("These are Dockerfile or configuration linting issues. Fix the flagged instruction.\n")
+        for f in sorted(iac, key=lambda x: x.severity):
+            lines.extend(_fmt_finding(f, "IAC"))
+            lines.append("")
+
+    if dast:
+        lines.append("## Web Application Issues (DAST)\n")
+        lines.append("These are runtime security issues found by scanning the live app.")
+        lines.append("Fix the missing headers, cookie flags, or other server-side configuration in the web server or application code.\n")
+        for f in sorted(dast, key=lambda x: x.severity):
+            lines.extend(_fmt_finding(f, "DAST"))
+            lines.append("")
+
+    if secrets:
+        lines.append("## Exposed Secrets\n")
+        lines.append("> **IMPORTANT:** Do NOT commit the secret value in any fix. The correct remediation is:")
+        lines.append("> 1. Revoke/rotate the secret immediately in the relevant service")
+        lines.append("> 2. Remove the secret from the file and replace with an environment variable reference")
+        lines.append("> 3. If the secret is in git history, document it — history scrubbing requires `git filter-repo` and a force-push\n")
+        for f in secrets:
+            lines.extend(_fmt_finding(f, "SECRETS"))
+            lines.append("")
+
+    if other:
+        lines.append("## Other Findings\n")
+        for f in other:
+            lines.extend(_fmt_finding(f, "OTHER"))
+            lines.append("")
+
+    lines.append("---\n")
+    lines.append("## Completion Report\n")
+    lines.append("After finishing all fixes above, output a report in this exact format:\n")
+    lines.append("```")
+    lines.append("REMEDIATION COMPLETION REPORT")
+    lines.append("=" * 40)
+    lines.append(f"Repository: {repo_str}")
+    lines.append(f"Total findings addressed: {total}")
+    lines.append("")
+    lines.append("FINDINGS STATUS:")
+    for i, f in enumerate(findings, 1):
+        lines.append(f"  [{i}] {f.severity} — {f.title[:60]}")
+        lines.append(f"      Status: [FIXED | PARTIALLY FIXED | SKIPPED — reason]")
+    lines.append("")
+    lines.append("FILES CHANGED:")
+    lines.append("  - [list each file you modified]")
+    lines.append("")
+    lines.append("COMMANDS RUN:")
+    lines.append("  - [list any package manager or shell commands executed]")
+    lines.append("")
+    lines.append("FINDINGS THAT COULD NOT BE AUTO-FIXED:")
+    lines.append("  - [list any findings requiring manual action and why]")
+    lines.append("")
+    lines.append("NEXT STEPS:")
+    lines.append("  - [any follow-up actions the engineer should take]")
+    lines.append("```")
+
+    return "\n".join(lines)
 
 
 @router.post("/bulk/status")

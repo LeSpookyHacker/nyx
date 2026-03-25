@@ -7,7 +7,7 @@ import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow } from 'date-fns'
-import { ChevronDown, ChevronUp, Download, Filter, RotateCcw, Wand2, X } from 'lucide-react'
+import { ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, Wand2, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
@@ -43,6 +43,8 @@ export default function FindingsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showFilters, setShowFilters] = useState(severity.length > 0)
   const [isRegressionOnly, setIsRegressionOnly] = useState(searchParams.get('is_regression') === 'true')
+  const [claudePrompt, setClaudePrompt] = useState<string | null>(null)
+  const [promptCopied, setPromptCopied] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['findings', { severity, scanner, status, search, page, sortBy, sortDesc, repositoryId, isRegressionOnly }],
@@ -61,6 +63,22 @@ export default function FindingsPage() {
       setSelectedIds(new Set())
     },
   })
+
+  const generatePrompt = useMutation({
+    mutationFn: (ids: string[]) => findingsApi.generateClaudePrompt(ids),
+    onSuccess: (data) => {
+      setClaudePrompt(data.prompt)
+      queryClient.invalidateQueries({ queryKey: ['findings'] })
+      setSelectedIds(new Set())
+    },
+  })
+
+  const copyPrompt = () => {
+    if (!claudePrompt) return
+    navigator.clipboard.writeText(claudePrompt)
+    setPromptCopied(true)
+    setTimeout(() => setPromptCopied(false), 2000)
+  }
 
   const findings = data?.items || []
   const total = data?.total || 0
@@ -179,6 +197,15 @@ export default function FindingsPage() {
         {selectedIds.size > 0 && (
           <div className="flex items-center gap-2 ml-auto">
             <span className="text-nyx-mist text-sm">{selectedIds.size} selected</span>
+            <button
+              onClick={() => generatePrompt.mutate(Array.from(selectedIds))}
+              className="nyx-btn-ghost gap-2 border border-nyx-amethyst/40 text-nyx-amethyst hover:bg-nyx-amethyst/10"
+              disabled={generatePrompt.isPending}
+              title="Generate a Claude Code prompt to remediate these findings"
+            >
+              <ClipboardCopy size={14} />
+              {generatePrompt.isPending ? 'Generating...' : 'Claude Code Prompt'}
+            </button>
             <button
               onClick={() => bulkRequestFix.mutate(Array.from(selectedIds))}
               className="nyx-btn-primary gap-2"
@@ -357,6 +384,55 @@ export default function FindingsPage() {
           </div>
         )}
       </div>
+
+      {/* Claude Code Prompt Modal */}
+      {claudePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="nyx-card w-full max-w-4xl max-h-[90vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-nyx-iris/20">
+              <div>
+                <h2 className="text-nyx-moonbeam font-semibold">Claude Code Remediation Prompt</h2>
+                <p className="text-nyx-mist text-xs mt-0.5">
+                  Findings marked as <span className="text-nyx-amethyst">In Remediation</span>.
+                  Copy this prompt and paste it into Claude Code on your machine.
+                </p>
+              </div>
+              <button onClick={() => { setClaudePrompt(null); setPromptCopied(false) }}
+                className="text-nyx-mist hover:text-nyx-moonbeam transition-colors ml-4">
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Prompt text */}
+            <div className="flex-1 overflow-y-auto p-5">
+              <pre className="text-xs text-nyx-mist/90 whitespace-pre-wrap font-mono leading-relaxed bg-nyx-eclipse/40 rounded-lg p-4 border border-nyx-iris/10">
+                {claudePrompt}
+              </pre>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center gap-3 px-5 py-4 border-t border-nyx-iris/20">
+              <button
+                onClick={copyPrompt}
+                className={clsx(
+                  'nyx-btn-primary gap-2 flex-1',
+                  promptCopied && 'bg-green-700 border-green-600'
+                )}
+              >
+                {promptCopied ? <Check size={14} /> : <ClipboardCopy size={14} />}
+                {promptCopied ? 'Copied!' : 'Copy to Clipboard'}
+              </button>
+              <button
+                onClick={() => { setClaudePrompt(null); setPromptCopied(false) }}
+                className="nyx-btn-ghost"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
