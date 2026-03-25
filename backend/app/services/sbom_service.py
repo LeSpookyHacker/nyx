@@ -41,8 +41,15 @@ def detect_format(raw: Dict[str, Any]) -> str:
 
 def detect_tool(raw: Dict[str, Any]) -> Optional[str]:
     """Best-effort extraction of the tool that generated the SBOM."""
-    # CycloneDX metadata.tools
-    for tool in raw.get("metadata", {}).get("tools", []) or []:
+    # CycloneDX metadata.tools — array (CycloneDX ≤1.4) or {components:[]} (CycloneDX 1.5+)
+    tools_field = raw.get("metadata", {}).get("tools")
+    if isinstance(tools_field, dict):
+        tools_list = tools_field.get("components", [])
+    elif isinstance(tools_field, list):
+        tools_list = tools_field
+    else:
+        tools_list = []
+    for tool in tools_list:
         name = tool.get("name") or tool.get("vendor", "")
         if name:
             version = tool.get("version", "")
