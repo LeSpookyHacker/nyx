@@ -9,7 +9,7 @@ import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow, format } from 'date-fns'
-import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw, GitBranch } from 'lucide-react'
+import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw, GitBranch, ClipboardCopy, Check, X } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -151,6 +151,8 @@ export default function FindingDetailPage() {
   const [notes, setNotes] = useState('')
   const [showSuppressForm, setShowSuppressForm] = useState(false)
   const [assignee, setAssignee] = useState('')
+  const [claudePrompt, setClaudePrompt] = useState<string | null>(null)
+  const [promptCopied, setPromptCopied] = useState(false)
 
   const { data: finding, isLoading } = useQuery({
     queryKey: ['finding', id],
@@ -203,6 +205,11 @@ export default function FindingDetailPage() {
     },
   })
 
+  const generatePrompt = useMutation({
+    mutationFn: () => findingsApi.generateClaudePrompt([id!]),
+    onSuccess: (data) => setClaudePrompt(data.prompt),
+  })
+
   const { data: suppressionSuggestion } = useQuery({
     queryKey: ['suppression-suggestion', id],
     queryFn: () => findingsApi.getSuppressionSuggestion(id!),
@@ -237,6 +244,15 @@ export default function FindingDetailPage() {
           )}
         </div>
         <div className="ml-auto flex gap-2 flex-wrap">
+          <button
+            onClick={() => generatePrompt.mutate()}
+            disabled={generatePrompt.isPending}
+            className="nyx-btn-ghost text-sm"
+            title="Generate a Claude Code remediation prompt for this finding"
+          >
+            <ClipboardCopy size={14} />
+            {generatePrompt.isPending ? 'Generating...' : 'Claude Prompt'}
+          </button>
           {(finding.status === 'OPEN' || finding.status === 'IN_REMEDIATION') && (
             <>
               <button
@@ -491,6 +507,47 @@ export default function FindingDetailPage() {
           <JiraPanel findingId={finding.id} />
         </div>
       </div>
+
+      {/* Claude Code Prompt Modal */}
+      {claudePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="nyx-card w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-nyx-iris/20">
+              <div>
+                <h2 className="text-nyx-moonbeam font-semibold">Claude Code Remediation Prompt</h2>
+                <p className="text-nyx-mist text-xs mt-0.5">
+                  Copy this prompt and paste it into Claude Code on your machine.
+                </p>
+              </div>
+              <button onClick={() => { setClaudePrompt(null); setPromptCopied(false) }}
+                className="text-nyx-mist hover:text-nyx-moonbeam transition-colors ml-4">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              <pre className="text-xs text-nyx-mist/90 whitespace-pre-wrap font-mono leading-relaxed bg-nyx-eclipse/40 rounded-lg p-4 border border-nyx-iris/10">
+                {claudePrompt}
+              </pre>
+            </div>
+            <div className="flex items-center gap-3 px-5 py-4 border-t border-nyx-iris/20">
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(claudePrompt)
+                  setPromptCopied(true)
+                  setTimeout(() => setPromptCopied(false), 2000)
+                }}
+                className={`nyx-btn-primary gap-2 flex-1 ${promptCopied ? 'bg-green-700 border-green-600' : ''}`}
+              >
+                {promptCopied ? <Check size={14} /> : <ClipboardCopy size={14} />}
+                {promptCopied ? 'Copied!' : 'Copy to Clipboard'}
+              </button>
+              <button onClick={() => { setClaudePrompt(null); setPromptCopied(false) }} className="nyx-btn-ghost">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
