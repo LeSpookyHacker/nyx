@@ -14,8 +14,8 @@ import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow } from 'date-fns'
 import {
-  ArrowLeft, ChevronDown, ChevronUp, ExternalLink, Globe, Lock,
-  RefreshCw, Ticket, TrendingUp, Wand2, Webhook,
+  ArrowLeft, Check, ChevronDown, ChevronUp, ClipboardCopy, ExternalLink, Globe, Lock,
+  RefreshCw, Ticket, TrendingUp, Wand2, Webhook, X,
 } from 'lucide-react'
 import RepoTrends from '../components/charts/RepoTrends'
 import { clsx } from 'clsx'
@@ -60,6 +60,8 @@ function FindingsTab({ repoId }: { repoId: string }) {
   const [sortBy, setSortBy] = useState('priority_score')
   const [sortDesc, setSortDesc] = useState(true)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [claudePrompt, setClaudePrompt] = useState<string | null>(null)
+  const [promptCopied, setPromptCopied] = useState(false)
 
   const { data, isLoading } = useQuery({
     queryKey: ['findings', repoId, { severity, status, search, page, sortBy, sortDesc }],
@@ -75,6 +77,21 @@ function FindingsTab({ repoId }: { repoId: string }) {
     mutationFn: (id: string) => remediationApi.request(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['findings', repoId] }),
   })
+
+  const generatePrompt = useMutation({
+    mutationFn: () => findingsApi.generateClaudePrompt(Array.from(selectedIds)),
+    onSuccess: (data) => {
+      setClaudePrompt(data.prompt)
+      queryClient.invalidateQueries({ queryKey: ['findings', repoId] })
+    },
+  })
+
+  const copyPrompt = async () => {
+    if (!claudePrompt) return
+    await navigator.clipboard.writeText(claudePrompt)
+    setPromptCopied(true)
+    setTimeout(() => setPromptCopied(false), 2000)
+  }
 
   const findings = data?.items || []
   const total = data?.total || 0
@@ -129,16 +146,26 @@ function FindingsTab({ repoId }: { repoId: string }) {
           ))}
         </div>
         {selectedIds.size > 0 && (
-          <button
-            onClick={async () => {
-              for (const id of selectedIds) await requestFix.mutateAsync(id)
-              setSelectedIds(new Set())
-            }}
-            className="nyx-btn-primary gap-1.5 text-xs py-1.5"
-            disabled={requestFix.isPending}
-          >
-            <Wand2 size={13} /> AI Fix ({selectedIds.size})
-          </button>
+          <>
+            <button
+              onClick={async () => {
+                for (const id of selectedIds) await requestFix.mutateAsync(id)
+                setSelectedIds(new Set())
+              }}
+              className="nyx-btn-primary gap-1.5 text-xs py-1.5"
+              disabled={requestFix.isPending}
+            >
+              <Wand2 size={13} /> AI Fix ({selectedIds.size})
+            </button>
+            <button
+              onClick={() => generatePrompt.mutate()}
+              className="nyx-btn-ghost gap-1.5 text-xs py-1.5 border border-nyx-amethyst/40 text-nyx-lavender hover:bg-nyx-amethyst/10"
+              disabled={generatePrompt.isPending}
+            >
+              <ClipboardCopy size={13} />
+              {generatePrompt.isPending ? 'Generating...' : `Claude Prompt (${selectedIds.size})`}
+            </button>
+          </>
         )}
         <span className="text-nyx-mist text-xs">{total.toLocaleString()} findings</span>
       </div>
@@ -240,6 +267,28 @@ function FindingsTab({ repoId }: { repoId: string }) {
           </div>
         )}
       </div>
+
+      {/* Claude Prompt Modal */}
+      {claudePrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-nyx-midnight border border-nyx-iris/20 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-nyx-iris/10">
+              <h2 className="text-nyx-moonbeam font-semibold">Claude Code Remediation Prompt</h2>
+              <div className="flex items-center gap-2">
+                <button onClick={copyPrompt} className="nyx-btn-ghost gap-1.5 text-xs py-1.5 border border-nyx-amethyst/40 text-nyx-lavender hover:bg-nyx-amethyst/10">
+                  {promptCopied ? <><Check size={13} className="text-green-400" /> Copied!</> : <><ClipboardCopy size={13} /> Copy</>}
+                </button>
+                <button onClick={() => setClaudePrompt(null)} className="nyx-btn-ghost p-1.5">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <pre className="overflow-y-auto p-5 text-xs text-nyx-mist font-mono whitespace-pre-wrap leading-relaxed flex-1">
+              {claudePrompt}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -423,6 +472,9 @@ export default function RepositoryDetailPage() {
   const [tab, setTab] = useState<Tab>('findings')
   const [syncing, setSyncing] = useState(false)
   const [syncMsg, setSyncMsg] = useState<string | null>(null)
+  const [repoPrompt, setRepoPrompt] = useState<string | null>(null)
+  const [repoPromptCopied, setRepoPromptCopied] = useState(false)
+  const [promptingRepo, setPromptingRepo] = useState(false)
   const queryClient = useQueryClient()
 
   const { data: repo, isLoading } = useQuery({
@@ -448,6 +500,26 @@ export default function RepositoryDetailPage() {
     } finally {
       setSyncing(false)
     }
+  }
+
+  const handleGenerateRepoPrompt = async () => {
+    if (!id) return
+    setPromptingRepo(true)
+    try {
+      const r = await repositoriesApi.generateClaudePrompt(id)
+      setRepoPrompt(r.prompt)
+    } catch {
+      // silent — user can retry
+    } finally {
+      setPromptingRepo(false)
+    }
+  }
+
+  const copyRepoPrompt = async () => {
+    if (!repoPrompt) return
+    await navigator.clipboard.writeText(repoPrompt)
+    setRepoPromptCopied(true)
+    setTimeout(() => setRepoPromptCopied(false), 2000)
   }
 
   if (isLoading) {
@@ -532,6 +604,15 @@ export default function RepositoryDetailPage() {
               <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
               {syncing ? 'Syncing...' : 'Code Scanning'}
             </button>
+            <button
+              onClick={handleGenerateRepoPrompt}
+              disabled={promptingRepo}
+              className="nyx-btn-ghost text-xs py-1 px-2 gap-1 border border-nyx-amethyst/40 text-nyx-lavender hover:bg-nyx-amethyst/10"
+              title="Generate Claude Code prompt for all open findings"
+            >
+              <ClipboardCopy size={11} />
+              {promptingRepo ? 'Generating...' : 'Claude Prompt'}
+            </button>
           </div>
         </div>
 
@@ -607,6 +688,28 @@ export default function RepositoryDetailPage() {
       {tab === 'jira' && <JiraTab repoId={id!} />}
       {tab === 'trends' && <RepoTrends repoId={id!} />}
       {tab === 'risk' && <RiskHistoryTab repoId={id!} />}
+
+      {/* Repo-level Claude Prompt Modal */}
+      {repoPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-nyx-midnight border border-nyx-iris/20 rounded-xl w-full max-w-3xl max-h-[80vh] flex flex-col shadow-2xl">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-nyx-iris/10">
+              <h2 className="text-nyx-moonbeam font-semibold">Claude Code Remediation Prompt — All Open Findings</h2>
+              <div className="flex items-center gap-2">
+                <button onClick={copyRepoPrompt} className="nyx-btn-ghost gap-1.5 text-xs py-1.5 border border-nyx-amethyst/40 text-nyx-lavender hover:bg-nyx-amethyst/10">
+                  {repoPromptCopied ? <><Check size={13} className="text-green-400" /> Copied!</> : <><ClipboardCopy size={13} /> Copy</>}
+                </button>
+                <button onClick={() => setRepoPrompt(null)} className="nyx-btn-ghost p-1.5">
+                  <X size={16} />
+                </button>
+              </div>
+            </div>
+            <pre className="overflow-y-auto p-5 text-xs text-nyx-mist font-mono whitespace-pre-wrap leading-relaxed flex-1">
+              {repoPrompt}
+            </pre>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
