@@ -240,13 +240,18 @@ jobs:
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
         run: |
           NYX_URL="${NYX_URL// /}"
-          jq -n \
+          HTTP_STATUS=$(jq -n \
             --arg ref "$GITHUB_REF_NAME" \
             --slurpfile s sbom-cdx.json \
             '{"git_ref":$ref,"sbom":$s[0]}' \
-          | curl -sf -X POST "$NYX_URL/api/v1/sbom/repositories/7b2c2390-caa8-49b1-a1e2-dcd9f6630b68/submit" \
+          | curl -s -o /tmp/sbom_response.json -w "%{http_code}" -X POST "$NYX_URL/api/v1/sbom/repositories/7b2c2390-caa8-49b1-a1e2-dcd9f6630b68/submit" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
               -H "ngrok-skip-browser-warning: true" \
-              -d @-
+              -d @-)
+          echo "HTTP $HTTP_STATUS — $(cat /tmp/sbom_response.json)"
+          if [[ "$HTTP_STATUS" -lt 200 || "$HTTP_STATUS" -ge 300 ]]; then
+            echo "::error::SBOM submission failed with HTTP $HTTP_STATUS"
+            exit 1
+          fi
           echo "✓ SBOM submitted to Nyx"
