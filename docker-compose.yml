@@ -1,4 +1,14 @@
 services:
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=60
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
   backend:
     build:
       context: ./backend
@@ -10,8 +20,10 @@ services:
       # WARNING: bind to 127.0.0.1 in production — never expose directly to the internet
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
+    labels:
+      - autoheal=true
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
