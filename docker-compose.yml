@@ -16,6 +16,12 @@ services:
     env_file: .env
     volumes:
       - nyx_data:/app/data
+      - nyx_logs:/app/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
     ports:
       # WARNING: bind to 127.0.0.1 in production — never expose directly to the internet
       - "127.0.0.1:8000:8000"
@@ -57,4 +63,6 @@ services:
 
 volumes:
   nyx_data:
+    driver: local
+  nyx_logs:
     driver: local

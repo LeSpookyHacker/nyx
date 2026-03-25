@@ -202,17 +202,19 @@ jobs:
 
       - name: Run ZAP Baseline Scan
         if: vars.NYX_ZAP_TARGET != ''
+        continue-on-error: true  # ZAP failure must not abort Trivy/Gitleaks/Hadolint steps
         uses: zaproxy/action-baseline@v0.14.0
         with:
           target: ${{{{ vars.NYX_ZAP_TARGET }}}}
-          # -t 3  = spider/passive timeout in minutes (SPAs need more than the 1m default)
+          # -m 3  = spider for 3 minutes (SPAs need more than the 1m default; NOTE: use -m not -t)
           # -a    = include alpha passive rules for better header/cookie coverage
-          cmd_options: '-t 3 -a -J zap.json'
+          # -J    = write traditional JSON report to this file (distinct from the action's -J)
+          cmd_options: '-m 3 -a -J zap.json'
           allow_issue_writing: false
           fail_action: false
 
       - name: Debug — show ZAP output
-        if: vars.NYX_ZAP_TARGET != ''
+        if: always() && vars.NYX_ZAP_TARGET != ''
         run: |
           if [ -f zap.json ]; then
             echo "zap.json exists, size=$(wc -c < zap.json) bytes"
@@ -249,6 +251,7 @@ jobs:
 
       # ── Trivy (SCA + IaC + Container) ────────────────────────────────────────
       - name: Run Trivy
+        if: always()  # Run even if ZAP failed
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
@@ -257,7 +260,7 @@ jobs:
           exit-code: "0"
 
       - name: Report Trivy → Nyx
-        if: hashFiles('trivy.json') != ''
+        if: always() && hashFiles('trivy.json') != ''
         env:
           NYX_URL: ${{{{ vars.NYX_URL }}}}
           NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
@@ -278,10 +281,11 @@ jobs:
 
       # ── SBOM (CycloneDX via Trivy) ────────────────────────────────────────────
       - name: Generate SBOM (CycloneDX)
+        if: always()
         run: trivy fs --format cyclonedx --output sbom-cdx.json . || true
 
       - name: Submit SBOM → Nyx
-        if: hashFiles('sbom-cdx.json') != ''
+        if: always() && hashFiles('sbom-cdx.json') != ''
         env:
           NYX_URL: ${{{{ vars.NYX_URL }}}}
           NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
