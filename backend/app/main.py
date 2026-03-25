@@ -362,7 +362,16 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["X-XSS-Protection"] = "0"  # Modern browsers use CSP instead
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-    response.headers["Content-Security-Policy"] = "default-src 'none'"  # API returns JSON only (L-6)
+    # Docs pages load Swagger UI assets from CDN — relax CSP for those paths only
+    if request.url.path in ("/docs", "/redoc", "/openapi.json"):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+            "img-src 'self' data: fastapi.tiangolo.com;"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = "default-src 'none'"  # API returns JSON only
     if settings.HTTPS_ONLY:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response

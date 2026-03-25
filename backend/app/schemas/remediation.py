@@ -24,6 +24,8 @@ class RemediationRequest(BaseModel):
 
 class RemediationApprove(BaseModel):
     engineer_notes: Optional[str] = None
+    auto_merge: bool = False
+    jira_assignee: Optional[str] = None
 
 
 class RemediationReject(BaseModel):

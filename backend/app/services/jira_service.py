@@ -135,6 +135,7 @@ async def create_remediation_ticket(
     finding: Any,
     remediation: Any,
     project_key: Optional[str] = None,
+    assignee: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a JIRA issue that records an AI-generated fix and its PR.
@@ -151,7 +152,7 @@ async def create_remediation_ticket(
             "url": f"{base.rstrip('/')}/browse/{key}",
             "status": "To Do",
             "priority": _SEVERITY_TO_PRIORITY.get(finding.severity, "Medium"),
-            "assignee": None,
+            "assignee": assignee,
         }
 
     _require_config(settings)
@@ -159,19 +160,26 @@ async def create_remediation_ticket(
     summary = f"[AI Fix Applied] [{finding.severity}] {finding.title}"[:255]
     description = _build_remediation_description(finding, remediation)
 
-    payload = {
-        "fields": {
-            "project": {"key": pk},
-            "summary": summary,
-            "description": description,
-            "issuetype": {"name": settings.JIRA_ISSUE_TYPE or "Bug"},
-            "priority": {"name": _SEVERITY_TO_PRIORITY.get(finding.severity, "Medium")},
-            "labels": ["nyx-security", "nyx-ai-fix", finding.scanner.lower(), finding.severity.lower()],
-        }
+    fields: Dict[str, Any] = {
+        "project": {"key": pk},
+        "summary": summary,
+        "description": description,
+        "issuetype": {"name": settings.JIRA_ISSUE_TYPE or "Bug"},
+        "priority": {"name": _SEVERITY_TO_PRIORITY.get(finding.severity, "Medium")},
+        "labels": ["nyx-security", "nyx-ai-fix", finding.scanner.lower(), finding.severity.lower()],
     }
 
+    # Resolve assignee email → account ID then set on ticket
+    if assignee:
+        async with _client(settings) as c:
+            user_resp = await c.get("/rest/api/3/user/search", params={"query": assignee, "maxResults": 1})
+            if user_resp.status_code == 200:
+                users = user_resp.json()
+                if users:
+                    fields["assignee"] = {"accountId": users[0]["accountId"]}
+
     async with _client(settings) as c:
-        resp = await c.post("/rest/api/3/issue", json=payload)
+        resp = await c.post("/rest/api/3/issue", json={"fields": fields})
         resp.raise_for_status()
         data = resp.json()
 
@@ -181,7 +189,7 @@ async def create_remediation_ticket(
         "url": f"{settings.JIRA_URL.rstrip('/')}/browse/{key}",
         "status": "To Do",
         "priority": _SEVERITY_TO_PRIORITY.get(finding.severity, "Medium"),
-        "assignee": None,
+        "assignee": assignee,
     }
 
 
