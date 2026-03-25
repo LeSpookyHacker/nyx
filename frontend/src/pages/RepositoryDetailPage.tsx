@@ -14,8 +14,8 @@ import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow } from 'date-fns'
 import {
-  ArrowLeft, Check, ChevronDown, ChevronUp, ClipboardCopy, ExternalLink, Globe, Lock,
-  RefreshCw, Ticket, TrendingUp, Wand2, Webhook, X,
+  ArrowLeft, Check, CheckCircle, ChevronDown, ChevronUp, ClipboardCopy, ExternalLink, Globe, Lock,
+  RefreshCw, ShieldAlert, Ticket, TrendingUp, Wand2, Webhook, X,
 } from 'lucide-react'
 import RepoTrends from '../components/charts/RepoTrends'
 import { clsx } from 'clsx'
@@ -86,6 +86,15 @@ function FindingsTab({ repoId }: { repoId: string }) {
     },
   })
 
+  const bulkUpdateStatus = useMutation({
+    mutationFn: (status: string) =>
+      findingsApi.bulkUpdateStatus(Array.from(selectedIds), status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['findings', repoId] })
+      setSelectedIds(new Set())
+    },
+  })
+
   const copyPrompt = async () => {
     if (!claudePrompt) return
     await navigator.clipboard.writeText(claudePrompt)
@@ -147,6 +156,20 @@ function FindingsTab({ repoId }: { repoId: string }) {
         </div>
         {selectedIds.size > 0 && (
           <>
+            <button
+              onClick={() => bulkUpdateStatus.mutate('ACCEPTED_RISK')}
+              className="nyx-btn-ghost gap-1.5 text-xs py-1.5 border border-yellow-700/40 text-yellow-400 hover:bg-yellow-900/20"
+              disabled={bulkUpdateStatus.isPending}
+            >
+              <ShieldAlert size={13} /> Accept Risk ({selectedIds.size})
+            </button>
+            <button
+              onClick={() => bulkUpdateStatus.mutate('FIXED')}
+              className="nyx-btn-ghost gap-1.5 text-xs py-1.5 border border-green-700/40 text-green-400 hover:bg-green-900/20"
+              disabled={bulkUpdateStatus.isPending}
+            >
+              <CheckCircle size={13} /> Mark Fixed ({selectedIds.size})
+            </button>
             <button
               onClick={async () => {
                 for (const id of selectedIds) await requestFix.mutateAsync(id)
@@ -246,10 +269,26 @@ function FindingsTab({ repoId }: { repoId: string }) {
                   </td>
                   <td className="px-4 py-3"><StatusBadge status={f.status} /></td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                    {f.status === 'OPEN' && (
-                      <button onClick={() => requestFix.mutate(f.id)} className="nyx-btn-ghost p-1.5 rounded" title="Request AI Fix">
-                        <Wand2 size={14} className="text-nyx-amethyst" />
-                      </button>
+                    {(f.status === 'OPEN' || f.status === 'IN_REMEDIATION') && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => findingsApi.updateStatus(f.id, 'FIXED').then(() => queryClient.invalidateQueries({ queryKey: ['findings', repoId] }))}
+                          className="nyx-btn-ghost p-1.5 rounded"
+                          title="Mark as Fixed"
+                        >
+                          <CheckCircle size={14} className="text-green-400" />
+                        </button>
+                        <button
+                          onClick={() => findingsApi.updateStatus(f.id, 'ACCEPTED_RISK').then(() => queryClient.invalidateQueries({ queryKey: ['findings', repoId] }))}
+                          className="nyx-btn-ghost p-1.5 rounded"
+                          title="Accept Risk"
+                        >
+                          <ShieldAlert size={14} className="text-yellow-400" />
+                        </button>
+                        <button onClick={() => requestFix.mutate(f.id)} className="nyx-btn-ghost p-1.5 rounded" title="Request AI Fix">
+                          <Wand2 size={14} className="text-nyx-amethyst" />
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>

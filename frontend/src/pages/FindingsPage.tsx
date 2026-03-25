@@ -8,7 +8,7 @@ import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow } from 'date-fns'
-import { ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, Wand2, X } from 'lucide-react'
+import { CheckCircle, ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, ShieldAlert, Wand2, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
@@ -75,6 +75,15 @@ export default function FindingsPage() {
     mutationFn: (ids: string[]) => findingsApi.generateClaudePrompt(ids),
     onSuccess: (data) => {
       setClaudePrompt(data.prompt)
+      queryClient.invalidateQueries({ queryKey: ['findings'] })
+      setSelectedIds(new Set())
+    },
+  })
+
+  const bulkUpdateStatus = useMutation({
+    mutationFn: ({ ids, status }: { ids: string[]; status: string }) =>
+      findingsApi.bulkUpdateStatus(ids, status),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['findings'] })
       setSelectedIds(new Set())
     },
@@ -213,8 +222,24 @@ export default function FindingsPage() {
           Export
         </button>
         {selectedIds.size > 0 && (
-          <div className="flex items-center gap-2 ml-auto">
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
             <span className="text-nyx-mist text-sm">{selectedIds.size} selected</span>
+            <button
+              onClick={() => bulkUpdateStatus.mutate({ ids: Array.from(selectedIds), status: 'ACCEPTED_RISK' })}
+              className="nyx-btn-ghost gap-2 border border-yellow-700/40 text-yellow-400 hover:bg-yellow-900/20"
+              disabled={bulkUpdateStatus.isPending}
+            >
+              <ShieldAlert size={14} />
+              Accept Risk
+            </button>
+            <button
+              onClick={() => bulkUpdateStatus.mutate({ ids: Array.from(selectedIds), status: 'FIXED' })}
+              className="nyx-btn-ghost gap-2 border border-green-700/40 text-green-400 hover:bg-green-900/20"
+              disabled={bulkUpdateStatus.isPending}
+            >
+              <CheckCircle size={14} />
+              Mark Fixed
+            </button>
             <button
               onClick={() => generatePrompt.mutate(Array.from(selectedIds))}
               className="nyx-btn-ghost gap-2 border border-nyx-amethyst/40 text-nyx-amethyst hover:bg-nyx-amethyst/10"
@@ -360,15 +385,31 @@ export default function FindingsPage() {
                     <StatusBadge status={f.status} />
                   </td>
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
-                    {f.status === 'OPEN' && (
-                      <button
-                        onClick={() => bulkRequestFix.mutate([f.id])}
-                        className="nyx-btn-ghost p-1.5 rounded"
-                        title="Request AI Fix"
-                        disabled={bulkRequestFix.isPending}
-                      >
-                        <Wand2 size={14} className="text-nyx-amethyst" />
-                      </button>
+                    {(f.status === 'OPEN' || f.status === 'IN_REMEDIATION') && (
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => findingsApi.updateStatus(f.id, 'FIXED').then(() => queryClient.invalidateQueries({ queryKey: ['findings'] }))}
+                          className="nyx-btn-ghost p-1.5 rounded"
+                          title="Mark as Fixed"
+                        >
+                          <CheckCircle size={14} className="text-green-400" />
+                        </button>
+                        <button
+                          onClick={() => findingsApi.updateStatus(f.id, 'ACCEPTED_RISK').then(() => queryClient.invalidateQueries({ queryKey: ['findings'] }))}
+                          className="nyx-btn-ghost p-1.5 rounded"
+                          title="Accept Risk"
+                        >
+                          <ShieldAlert size={14} className="text-yellow-400" />
+                        </button>
+                        <button
+                          onClick={() => bulkRequestFix.mutate([f.id])}
+                          className="nyx-btn-ghost p-1.5 rounded"
+                          title="Request AI Fix"
+                          disabled={bulkRequestFix.isPending}
+                        >
+                          <Wand2 size={14} className="text-nyx-amethyst" />
+                        </button>
+                      </div>
                     )}
                   </td>
                 </tr>

@@ -8,7 +8,7 @@ import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow, format } from 'date-fns'
-import { ArrowLeft, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw } from 'lucide-react'
+import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -183,6 +183,11 @@ export default function FindingDetailPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['finding', id] }),
   })
 
+  const markFixed = useMutation({
+    mutationFn: () => findingsApi.updateStatus(id!, 'FIXED'),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['finding', id] }),
+  })
+
   const assign = useMutation({
     mutationFn: (to: string) => findingsApi.assign(id!, to),
     onSuccess: () => {
@@ -224,16 +229,36 @@ export default function FindingDetailPage() {
             </span>
           )}
         </div>
-        <div className="ml-auto flex gap-2">
-          {finding.status === 'OPEN' && (
+        <div className="ml-auto flex gap-2 flex-wrap">
+          {(finding.status === 'OPEN' || finding.status === 'IN_REMEDIATION') && (
             <>
-              <button onClick={() => setShowSuppressForm(!showSuppressForm)} className="nyx-btn-ghost">
+              <button
+                onClick={() => setShowSuppressForm(!showSuppressForm)}
+                className="nyx-btn-ghost text-sm"
+              >
                 Suppress
               </button>
-              <button onClick={() => acceptRisk.mutate()} className="nyx-btn-ghost">
-                Accept Risk
+              <button
+                onClick={() => acceptRisk.mutate()}
+                disabled={acceptRisk.isPending}
+                className="nyx-btn-ghost gap-1.5 text-sm text-yellow-400 hover:text-yellow-300 border border-yellow-700/40 hover:bg-yellow-900/20"
+              >
+                <ShieldAlert size={14} />
+                {acceptRisk.isPending ? 'Saving...' : 'Accept Risk'}
               </button>
-              <button onClick={() => requestFix.mutate()} className="nyx-btn-primary" disabled={requestFix.isPending}>
+              <button
+                onClick={() => markFixed.mutate()}
+                disabled={markFixed.isPending}
+                className="nyx-btn-ghost gap-1.5 text-sm text-green-400 hover:text-green-300 border border-green-700/40 hover:bg-green-900/20"
+              >
+                <CheckCircle size={14} />
+                {markFixed.isPending ? 'Saving...' : 'Mark Fixed'}
+              </button>
+              <button
+                onClick={() => requestFix.mutate()}
+                disabled={requestFix.isPending}
+                className="nyx-btn-primary"
+              >
                 <Wand2 size={14} />
                 {requestFix.isPending ? 'Requesting...' : 'Request AI Fix'}
               </button>
