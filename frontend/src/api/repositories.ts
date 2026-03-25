@@ -48,4 +48,9 @@ export const repositoriesApi = {
     const response = await client.get(`/repositories/${id}/risk-history`, { params: { days } })
     return response.data
   },
+
+  pushWorkflow: async (id: string): Promise<{ created: boolean; html_url: string; repository: string }> => {
+    const response = await client.post(`/repositories/${id}/push-workflow`)
+    return response.data
+  },
 }

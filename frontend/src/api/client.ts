@@ -4,7 +4,6 @@ const apiClient = axios.create({
   baseURL: '/api/v1',
   headers: {
     'Content-Type': 'application/json',
-    // Add API key header if configured
   },
   // FastAPI expects repeated query keys for arrays: ?severity=CRITICAL&severity=HIGH
   // Axios default bracket notation (?severity[]=CRITICAL) is not recognised by FastAPI.
@@ -20,6 +19,12 @@ const apiClient = axios.create({
     }
     return sp.toString()
   },
+})
+
+apiClient.interceptors.request.use((config) => {
+  const key = localStorage.getItem('nyx_api_key')
+  if (key) config.headers['X-API-Key'] = key
+  return config
 })
 
 apiClient.interceptors.response.use(

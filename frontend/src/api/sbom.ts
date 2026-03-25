@@ -58,4 +58,7 @@ export const sbomApi = {
 
   getHistory: (repoId: string): Promise<SbomSnapshot[]> =>
     client.get(`/sbom/repositories/${repoId}/history`).then((r: { data: SbomSnapshot[] }) => r.data),
+
+  generateSbom: (repoId: string): Promise<{ triggered: boolean; repository: string }> =>
+    client.post(`/sbom/repositories/${repoId}/generate`).then((r: { data: { triggered: boolean; repository: string } }) => r.data),
 }

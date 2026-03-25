@@ -21,8 +21,12 @@ export const remediationApi = {
     return response.data
   },
 
-  approve: async (id: string, notes?: string): Promise<Remediation> => {
-    const response = await client.post(`/remediation/${id}/approve`, { engineer_notes: notes })
+  approve: async (id: string, notes?: string, autoMerge?: boolean, jiraAssignee?: string): Promise<Remediation> => {
+    const response = await client.post(`/remediation/${id}/approve`, {
+      engineer_notes: notes,
+      auto_merge: autoMerge ?? false,
+      jira_assignee: jiraAssignee || null,
+    })
     return response.data
   },
 
@@ -39,5 +43,9 @@ export const remediationApi = {
   getPrStatus: async (id: string) => {
     const response = await client.get(`/remediation/${id}/pr-status`)
     return response.data
+  },
+
+  dismiss: async (id: string): Promise<void> => {
+    await client.delete(`/remediation/${id}`)
   },
 }
