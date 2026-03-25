@@ -274,8 +274,9 @@ async def get_coverage_gaps(
             unconfigured.append({"id": repo.id, "github_full_name": repo.github_full_name})
             continue
 
-        if repo.last_scan_at is None or repo.last_scan_at < stale_threshold:
-            days_since = int((now - repo.last_scan_at).days) if repo.last_scan_at else 9999
+        last_scan = repo.last_scan_at.replace(tzinfo=timezone.utc) if repo.last_scan_at and repo.last_scan_at.tzinfo is None else repo.last_scan_at
+        if last_scan is None or last_scan < stale_threshold:
+            days_since = int((now - last_scan).days) if last_scan else 9999
             stale.append({
                 "id": repo.id,
                 "github_full_name": repo.github_full_name,
