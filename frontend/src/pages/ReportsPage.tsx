@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { reportsApi } from '../api/reports'
 import { dashboardApi } from '../api/dashboard'
-import { Download, FileText, TrendingUp } from 'lucide-react'
+import { Download, FileText, TrendingUp, Loader2 } from 'lucide-react'
 
 const COMPLIANCE_FRAMEWORKS = [
   { id: 'pci-dss', name: 'PCI DSS' },
@@ -16,6 +16,7 @@ export default function ReportsPage() {
   const [execDays, setExecDays] = useState(30)
   const [compFramework, setCompFramework] = useState('pci-dss')
   const [compDays, setCompDays] = useState(30)
+  const [generating, setGenerating] = useState(false)
 
   const { data: summary } = useQuery({
     queryKey: ['dashboard-summary'],
@@ -27,8 +28,13 @@ export default function ReportsPage() {
     queryFn: () => dashboardApi.getTrends(execDays),
   })
 
-  const handleExecutiveReport = () => {
-    reportsApi.downloadExecutiveReport(execDays)
+  const handleExecutiveReport = async () => {
+    setGenerating(true)
+    try {
+      await reportsApi.downloadExecutiveReport(execDays)
+    } finally {
+      setGenerating(false)
+    }
   }
 
   const totalOpen = summary ? Object.values(summary.open_by_severity).reduce((a, b) => a + b, 0) : 0
@@ -82,10 +88,11 @@ export default function ReportsPage() {
           </div>
           <button
             onClick={handleExecutiveReport}
+            disabled={generating}
             className="nyx-btn-primary mt-5"
           >
-            <Download size={14} />
-            Generate Report
+            {generating ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            {generating ? 'Generating...' : 'Generate Report'}
           </button>
         </div>
 

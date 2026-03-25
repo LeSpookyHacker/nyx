@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { remediationApi } from '../api/remediation'
 import type { Remediation } from '../types'
 import { formatDistanceToNow } from 'date-fns'
-import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket } from 'lucide-react'
+import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2 } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { clsx } from 'clsx'
@@ -20,8 +20,14 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.
 }
 
 function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (r: Remediation) => void }) {
+  const queryClient = useQueryClient()
   const cfg = STATUS_CONFIG[rem.status] || STATUS_CONFIG.PENDING
   const Icon = cfg.icon
+
+  const dismiss = useMutation({
+    mutationFn: () => remediationApi.dismiss(rem.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['remediations'] }),
+  })
 
   return (
     <div
@@ -33,7 +39,18 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (r: Re
           <Icon size={12} className={rem.status === 'GENERATING' ? 'animate-spin' : ''} />
           {cfg.label}
         </span>
-        <span className="text-nyx-mist text-xs">{formatDistanceToNow(new Date(rem.created_at))} ago</span>
+        <div className="flex items-center gap-1">
+          <span className="text-nyx-mist text-xs">{formatDistanceToNow(new Date(rem.created_at))} ago</span>
+          {['FAILED', 'REJECTED'].includes(rem.status) && (
+            <button
+              onClick={e => { e.stopPropagation(); dismiss.mutate() }}
+              className="ml-1 p-1 rounded hover:bg-red-900/30 text-nyx-mist/40 hover:text-red-400 transition-colors"
+              title="Dismiss"
+            >
+              <Trash2 size={11} />
+            </button>
+          )}
+        </div>
       </div>
       {rem.ai_fix_summary && (
         <p className="text-nyx-moonbeam text-sm font-medium mb-1">{rem.ai_fix_summary}</p>
@@ -61,9 +78,13 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
   const queryClient = useQueryClient()
   const [notes, setNotes] = useState('')
   const [regenContext, setRegenContext] = useState('')
+  const [autoMerge, setAutoMerge] = useState(false)
+  const [jiraAssignee, setJiraAssignee] = useState('')
+
+  const isNoCodeFix = rem.ai_fix_diff?.startsWith('NO_CODE_FIX')
 
   const approve = useMutation({
-    mutationFn: () => remediationApi.approve(rem.id, notes),
+    mutationFn: () => remediationApi.approve(rem.id, notes, autoMerge, jiraAssignee || undefined),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['remediations'] }),
   })
 
@@ -123,10 +144,30 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
               value={notes}
               onChange={e => setNotes(e.target.value)}
             />
+            <input
+              type="text"
+              className="nyx-input w-full"
+              placeholder="Assign JIRA ticket to (email or name)..."
+              value={jiraAssignee}
+              onChange={e => setJiraAssignee(e.target.value)}
+            />
+            {!isNoCodeFix && (
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={autoMerge}
+                  onChange={e => setAutoMerge(e.target.checked)}
+                  className="rounded"
+                />
+                <span className="text-nyx-mist text-sm">Auto-merge after PR creation</span>
+              </label>
+            )}
             <div className="flex gap-2">
               <button onClick={() => approve.mutate()} disabled={approve.isPending} className="nyx-btn-primary flex-1">
                 <CheckCircle size={14} />
-                {approve.isPending ? 'Creating PR...' : 'Approve & Create PR'}
+                {approve.isPending
+                  ? (autoMerge ? 'Merging...' : 'Creating PR...')
+                  : (autoMerge ? 'Approve & Auto-merge' : 'Approve & Create PR')}
               </button>
               <button onClick={() => reject.mutate()} disabled={reject.isPending} className="nyx-btn-danger flex-1">
                 <XCircle size={14} />
@@ -184,10 +225,13 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
   )
 }
 
-const COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'MERGED', 'FAILED']
+const ACTIVE_STATUSES = ['PENDING', 'GENERATING', 'REVIEW', 'PR_CREATING', 'PR_OPEN']
+const ALL_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'MERGED', 'FAILED']
+const ACTIVE_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN']
 
 export default function RemediationPage() {
   const [selected, setSelected] = useState<Remediation | null>(null)
+  const [showAll, setShowAll] = useState(false)
 
   const { data: remediations = [], isLoading } = useQuery({
     queryKey: ['remediations'],
@@ -195,17 +239,52 @@ export default function RemediationPage() {
     refetchInterval: 5_000, // Poll for AI generation updates
   })
 
+  // Finding IDs that have a successful remediation (PR open or merged) — used to auto-hide superseded failures
+  const succeededFindingIds = new Set(
+    remediations
+      .filter(r => ['PR_OPEN', 'PR_CREATING', 'MERGED'].includes(r.status))
+      .map(r => r.finding_id)
+  )
+
+  const COLUMNS = showAll ? ALL_COLUMNS : ACTIVE_COLUMNS
+
+  const visibleRemediations = remediations.filter(r => {
+    if (r.status === 'FAILED' && succeededFindingIds.has(r.finding_id)) return false
+    if (!showAll && !ACTIVE_STATUSES.includes(r.status)) return false
+    return true
+  })
+
   const byStatus = COLUMNS.reduce((acc, col) => {
-    acc[col] = remediations.filter(r => r.status === col)
+    acc[col] = visibleRemediations.filter(r => r.status === col)
     return acc
   }, {} as Record<string, Remediation[]>)
 
   if (isLoading) return <div className="text-nyx-mist p-8">Loading remediations...</div>
 
+  const activeCount = remediations.filter(r => ACTIVE_STATUSES.includes(r.status)).length
+
   return (
     <div className="space-y-4 relative">
       <div className="flex items-center justify-between">
-        <p className="text-nyx-mist text-sm">{remediations.length} remediation requests</p>
+        <p className="text-nyx-mist text-sm">{activeCount} active · {remediations.length} total</p>
+        <div className="flex gap-1 text-sm">
+          <button
+            onClick={() => setShowAll(false)}
+            className={clsx('px-3 py-1.5 rounded transition-colors',
+              !showAll ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium' : 'text-nyx-mist hover:text-nyx-moonbeam'
+            )}
+          >
+            Active
+          </button>
+          <button
+            onClick={() => setShowAll(true)}
+            className={clsx('px-3 py-1.5 rounded transition-colors',
+              showAll ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium' : 'text-nyx-mist hover:text-nyx-moonbeam'
+            )}
+          >
+            All
+          </button>
+        </div>
       </div>
 
       {remediations.length === 0 && (

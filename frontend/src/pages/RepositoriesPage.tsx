@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import { repositoriesApi } from '../api/repositories'
 import type { Repository } from '../types'
 import { formatDistanceToNow } from 'date-fns'
-import { AlertOctagon, Building2, GitBranch, Globe, Lock, Plus, RefreshCw, ScanLine, Trash2, Webhook } from 'lucide-react'
+import { AlertOctagon, Building2, GitBranch, Globe, Lock, Plus, RefreshCw, ScanLine, Trash2, Webhook, Upload, CheckCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const ALL_SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV']
@@ -18,12 +18,15 @@ function RiskBar({ score }: { score: number }) {
   )
 }
 
-function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, syncingId }: {
+function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPushWorkflow, syncingId, pushingId, pushedId }: {
   repo: Repository
   onDelete: (id: string) => void
   onRefreshWebhook: (id: string) => void
   onSyncCodeScanning: (id: string) => void
+  onPushWorkflow: (id: string) => void
   syncingId: string | null
+  pushingId: string | null
+  pushedId: string | null
 }) {
   const navigate = useNavigate()
   const repoName = repo.github_full_name.split('/')[1]
@@ -140,6 +143,22 @@ function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, syncin
           <ScanLine size={11} /> {syncingId === repo.id ? 'Syncing...' : 'Code Scanning'}
         </button>
         <button
+          onClick={() => onPushWorkflow(repo.id)}
+          disabled={pushingId === repo.id}
+          className={clsx(
+            'nyx-btn-ghost text-xs py-1 px-2 gap-1',
+            pushedId === repo.id && 'text-green-400 border-green-800/30'
+          )}
+          title="Push nyx-scan.yml workflow to this repository"
+        >
+          {pushedId === repo.id
+            ? <><CheckCircle size={11} /> Pushed!</>
+            : pushingId === repo.id
+              ? <><Upload size={11} /> Pushing...</>
+              : <><Upload size={11} /> Push Workflow</>
+          }
+        </button>
+        <button
           onClick={() => {
             if (confirm('Remove this repository from Nyx? This will delete all associated findings.')) {
               onDelete(repo.id)
@@ -161,6 +180,9 @@ export default function RepositoriesPage() {
   const [selectedScanners, setSelectedScanners] = useState(['SEMGREP', 'BANDIT', 'TRIVY'])
   const [syncingId, setSyncingId] = useState<string | null>(null)
   const [syncResult, setSyncResult] = useState<{ id: string; message: string } | null>(null)
+  const [pushingId, setPushingId] = useState<string | null>(null)
+  const [pushedId, setPushedId] = useState<string | null>(null)
+  const [pushResult, setPushResult] = useState<{ id: string; message: string; error?: boolean } | null>(null)
 
   const { data: repos = [], isLoading } = useQuery({
     queryKey: ['repositories'],
@@ -202,6 +224,28 @@ export default function RepositoriesPage() {
       setSyncResult({ id, message: 'Sync failed — check GITHUB_TOKEN' })
     } finally {
       setSyncingId(null)
+    }
+  }
+
+  const handlePushWorkflow = async (id: string) => {
+    setPushingId(id)
+    setPushResult(null)
+    try {
+      const result = await repositoriesApi.pushWorkflow(id)
+      const verb = result.created ? 'Created' : 'Updated'
+      setPushResult({ id, message: `${verb} .github/workflows/nyx-scan.yml` })
+      setPushedId(id)
+      setTimeout(() => setPushedId(null), 4000)
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || ''
+      const msg = detail.includes('workflow')
+        ? 'Push failed — GITHUB_TOKEN needs the "workflow" scope (edit token → check Workflow)'
+        : detail.includes('403') || detail.includes('404')
+          ? 'Push failed — GITHUB_TOKEN needs repo + workflow scopes'
+          : 'Push failed — check GITHUB_TOKEN permissions'
+      setPushResult({ id, message: msg, error: true })
+    } finally {
+      setPushingId(null)
     }
   }
 
@@ -281,6 +325,24 @@ export default function RepositoriesPage() {
         </div>
       )}
 
+      {pushResult && (
+        <div className={clsx(
+          'nyx-card p-3 border text-xs flex items-center justify-between',
+          pushResult.error ? 'border-red-800/30 text-red-400' : 'border-green-800/30 text-green-400'
+        )}>
+          <span>
+            {pushResult.error ? '✗' : '✓'} {pushResult.message}
+            {!pushResult.error && (
+              <span className="text-nyx-mist ml-2">
+                Set <code className="text-nyx-lavender">NYX_URL</code> (var) and <code className="text-nyx-lavender">NYX_API_KEY</code> (secret) in GitHub.
+                Optional: set <code className="text-nyx-lavender">NYX_ZAP_TARGET</code> (var) to enable DAST scanning.
+              </span>
+            )}
+          </span>
+          <button onClick={() => setPushResult(null)} className="text-nyx-mist/50 hover:text-nyx-mist ml-4 shrink-0">✕</button>
+        </div>
+      )}
+
       {isLoading && <div className="text-nyx-mist p-8 text-center">Loading repositories...</div>}
 
       {!isLoading && (repos as Repository[]).length === 0 && (
@@ -307,7 +369,10 @@ export default function RepositoriesPage() {
                 onDelete={(id) => deleteRepo.mutate(id)}
                 onRefreshWebhook={(id) => refreshWebhook.mutate(id)}
                 onSyncCodeScanning={handleSyncCodeScanning}
+                onPushWorkflow={handlePushWorkflow}
                 syncingId={syncingId}
+                pushingId={pushingId}
+                pushedId={pushedId}
               />
             ))}
           </div>

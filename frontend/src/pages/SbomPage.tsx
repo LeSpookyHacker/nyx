@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sbomApi, SbomAlert, SbomChange } from '../api/sbom'
 import { repositoriesApi } from '../api/repositories'
-import { Plus, Minus, ArrowUpDown, CheckCheck, Package, ChevronDown, ChevronRight } from 'lucide-react'
+import { Plus, Minus, ArrowUpDown, CheckCheck, Package, ChevronDown, ChevronRight, Play, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { clsx } from 'clsx'
 
@@ -96,6 +96,7 @@ function AlertRow({ alert, onAck }: { alert: SbomAlert; onAck: () => void }) {
 export default function SbomPage() {
   const queryClient = useQueryClient()
   const [repoFilter, setRepoFilter] = useState<string>('all')
+  const [triggeredRepos, setTriggeredRepos] = useState<Set<string>>(new Set())
 
   const { data: alerts = [], isLoading } = useQuery({
     queryKey: ['sbom-alerts'],
@@ -116,6 +117,13 @@ export default function SbomPage() {
   const ackAll = useMutation({
     mutationFn: () => sbomApi.acknowledgeAll(),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['sbom-alerts'] }),
+  })
+
+  const generate = useMutation({
+    mutationFn: (repoId: string) => sbomApi.generateSbom(repoId),
+    onSuccess: (_data, repoId) => {
+      setTriggeredRepos(prev => new Set([...prev, repoId]))
+    },
   })
 
   const unread = alerts.filter(a => !a.acknowledged).length
@@ -165,33 +173,42 @@ export default function SbomPage() {
         ))}
       </div>
 
-      {/* How to submit */}
+      {/* Generate SBOM per repo */}
       <div className="nyx-card p-5">
-        <h3 className="text-nyx-moonbeam font-semibold mb-3">Submitting SBOMs from CI/CD</h3>
-        <div className="space-y-3">
-          {[
-            {
-              label: 'Syft (any language)',
-              cmd: `syft . -o cyclonedx-json | curl -s -X POST \\
-  http://localhost:8000/api/v1/sbom/repositories/<REPO_ID>/submit \\
-  -H "Content-Type: application/json" \\
-  -d "{\\"git_ref\\": \\"main\\", \\"sbom\\": $(cat -)}"`,
-            },
-            {
-              label: 'Trivy (containers)',
-              cmd: `trivy image --format cyclonedx -o sbom.json <image>
-curl -s -X POST http://localhost:8000/api/v1/sbom/repositories/<REPO_ID>/submit \\
-  -H "Content-Type: application/json" \\
-  -d "{\\"git_ref\\": \\"main\\", \\"sbom\\": $(cat sbom.json)}"`,
-            },
-          ].map(({ label, cmd }) => (
-            <div key={label}>
-              <p className="text-nyx-mist text-xs mb-1">{label}</p>
-              <pre className="bg-nyx-void rounded-lg p-3 text-[11px] text-nyx-lavender overflow-x-auto font-mono leading-relaxed">
-                {cmd}
-              </pre>
-            </div>
-          ))}
+        <h3 className="text-nyx-moonbeam font-semibold mb-1">Generate SBOM</h3>
+        <p className="text-nyx-mist text-xs mb-4">
+          Triggers the <span className="font-mono text-nyx-lavender">nyx-scan.yml</span> workflow on the repository,
+          which runs Trivy in CycloneDX format and submits the SBOM here automatically.
+        </p>
+        {repos.length === 0 && (
+          <p className="text-nyx-mist/50 text-sm">No repositories registered yet.</p>
+        )}
+        <div className="space-y-2">
+          {repos.map((r: { id: string; github_full_name: string; default_branch: string }) => {
+            const triggered = triggeredRepos.has(r.id)
+            const isPending = generate.isPending && generate.variables === r.id
+            return (
+              <div key={r.id} className="flex items-center justify-between py-2 border-b border-nyx-iris/10 last:border-0">
+                <span className="text-nyx-moonbeam text-sm font-mono">{r.github_full_name}</span>
+                <button
+                  onClick={() => generate.mutate(r.id)}
+                  disabled={isPending || triggered}
+                  className={clsx(
+                    'nyx-btn-ghost text-xs flex items-center gap-1.5',
+                    triggered && 'text-green-400 border-green-800/30'
+                  )}
+                >
+                  {isPending ? (
+                    <><Loader2 size={12} className="animate-spin" /> Triggering...</>
+                  ) : triggered ? (
+                    <><Play size={12} /> Triggered</>
+                  ) : (
+                    <><Play size={12} /> Generate SBOM</>
+                  )}
+                </button>
+              </div>
+            )
+          })}
         </div>
       </div>
 

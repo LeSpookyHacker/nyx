@@ -12,7 +12,16 @@ import { clsx } from 'clsx'
 
 const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
 const SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV']
-const STATUSES = ['OPEN', 'IN_REMEDIATION', 'FIXED', 'SUPPRESSED', 'ACCEPTED_RISK']
+
+const STATUS_TABS = [
+  { label: 'Active',        value: ['OPEN', 'IN_REMEDIATION'] },
+  { label: 'Open',          value: ['OPEN'] },
+  { label: 'In Remediation',value: ['IN_REMEDIATION'] },
+  { label: 'Fixed',         value: ['FIXED'] },
+  { label: 'Suppressed',    value: ['SUPPRESSED'] },
+  { label: 'Accepted Risk', value: ['ACCEPTED_RISK'] },
+  { label: 'All',           value: [] },
+]
 
 export default function FindingsPage() {
   const navigate = useNavigate()
@@ -26,7 +35,7 @@ export default function FindingsPage() {
   )
   const [repositoryId] = useState<string>(searchParams.get('repository_id') ?? '')
   const [scanner, setScanner] = useState<string[]>([])
-  const [status, setStatus] = useState<string[]>(['OPEN'])
+  const [status, setStatus] = useState<string[]>(['OPEN', 'IN_REMEDIATION'])
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [sortBy, setSortBy] = useState('priority_score')
@@ -113,6 +122,27 @@ export default function FindingsPage() {
         </div>
       )}
 
+      {/* Status tab strip */}
+      <div className="flex gap-1 flex-wrap border-b border-nyx-iris/10 pb-1">
+        {STATUS_TABS.map(tab => {
+          const isActive = JSON.stringify([...status].sort()) === JSON.stringify([...tab.value].sort())
+          return (
+            <button
+              key={tab.label}
+              onClick={() => { setStatus(tab.value); setPage(1) }}
+              className={clsx(
+                'px-3 py-1.5 text-sm rounded-t transition-colors',
+                isActive
+                  ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium'
+                  : 'text-nyx-mist hover:text-nyx-moonbeam'
+              )}
+            >
+              {tab.label}
+            </button>
+          )
+        })}
+      </div>
+
       {/* Toolbar */}
       <div className="flex items-center gap-3 flex-wrap">
         <input
@@ -162,7 +192,7 @@ export default function FindingsPage() {
         <span className="ml-auto text-nyx-mist text-sm">{total.toLocaleString()} findings</span>
       </div>
 
-      {/* Filter Panel */}
+      {/* Filter Panel — severity and scanner only */}
       {showFilters && (
         <div className="nyx-card p-4 space-y-3">
           <div className="flex items-center gap-2">
@@ -194,21 +224,6 @@ export default function FindingsPage() {
                     !scanner.includes(s) && scanner.length > 0 && 'opacity-40')}
                 >
                   {s}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-nyx-mist text-xs uppercase tracking-wide">Status</span>
-            <div className="flex gap-1 flex-wrap">
-              {STATUSES.map(s => (
-                <button
-                  key={s}
-                  onClick={() => toggleFilter(status, setStatus, s)}
-                  className={clsx('nyx-badge cursor-pointer border bg-nyx-dusk text-nyx-mist border-nyx-iris/20 transition-opacity',
-                    !status.includes(s) && 'opacity-40')}
-                >
-                  {s.replace('_', ' ')}
                 </button>
               ))}
             </div>
