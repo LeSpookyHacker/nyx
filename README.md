@@ -79,7 +79,9 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | ⏱️ | **SLA Policy Engine** | Per-severity, per-repository SLA deadlines with auto-escalation via Slack or JIRA |
 | 📅 | **Scan Schedules** | Recurring automated scans on a configurable interval (6h – 1 week) |
 | ✅ | **GitHub Check Runs** | Inline PR annotations with security findings as GitHub status checks |
-| 📦 | **SBOM Generation** | Software Bill of Materials per repository from scan data |
+| 📦 | **SBOM Generation** | CycloneDX SBOM per repository via Trivy in GitHub Actions; diff alerts on component changes |
+| 🚀 | **One-Click Workflow Push** | Push the canonical `nyx-scan.yml` to any registered repo via GitHub API — no manual workflow maintenance |
+| 🔁 | **Autoheal** | Docker healthcheck + autoheal container automatically restarts the backend if it becomes unhealthy |
 
 ### Visibility & Reporting
 
@@ -93,7 +95,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | 📉 | **Compliance Trend Analysis** | Weekly coverage percentage trend per framework over 30/60/90 days |
 | ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level |
 | 🚨 | **Regression Alerts** | Dashboard banner and KPI card for recently re-appeared findings |
-| 📝 | **Audit Log** | Immutable record of every action: suppression, assignment, AI fix, status change |
+| 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action across findings, repos, remediations, scans, and SBOMs |
 
 ---
 
@@ -242,10 +244,14 @@ A step-by-step walkthrough for deploying Nyx across an organization with multipl
 | **Metadata** | Read-only |
 | **Pull requests** | Read and write |
 | **Webhooks** | Read and write |
+| **Workflows** | Read and write — **required** for Push Workflow feature |
 | **Checks** | Read and write — for PR annotations |
 | **Security events** | Read-only — for Code Scanning sync |
 
 6. Click **Generate token** and save it as `GITHUB_TOKEN` in your `.env`
+
+> [!WARNING]
+> The **Workflows** permission is required if you want to use the **Push Workflow** button in Nyx to deploy `nyx-scan.yml` to your repositories. Without it you will receive a 403 from GitHub when pushing. If you created your PAT before this feature existed, edit it and check the **Workflow** box — the token value does not change.
 
 > [!TIP]
 > For production deployments at scale, use **GitHub App** authentication instead of a PAT for higher rate limits and org-wide installation. Set `GITHUB_APP_ID` and `GITHUB_PRIVATE_KEY_PATH` in your `.env`.
@@ -613,9 +619,31 @@ Every 5 minutes, Nyx's schedule worker:
 
 ### 8. CI/CD Integration
 
-#### Full GitHub Actions Pipeline
+#### Recommended: Push Workflow from the Nyx UI
 
-Create `.github/workflows/nyx-security.yml` in your repository:
+The easiest way to integrate any repository with Nyx is to use the **Push Workflow** button on the Repositories page. Nyx generates and pushes a canonical `nyx-scan.yml` directly to the repository via the GitHub API — no manual file creation needed.
+
+**What it requires in GitHub:**
+
+| Setting | Value | Where |
+|---|---|---|
+| `NYX_URL` | Your Nyx public URL (no trailing slash) | Repository → Settings → Variables → Actions |
+| `NYX_API_KEY` | Your Nyx API key | Repository → Settings → Secrets → Actions |
+| `NYX_ZAP_TARGET` | Full URL to scan for DAST (optional) | Repository → Settings → Variables → Actions |
+
+The generated workflow:
+- Runs Semgrep (SAST), Trivy (SCA + SBOM), and optionally OWASP ZAP (DAST)
+- Pushes findings to Nyx automatically
+- Submits a CycloneDX SBOM after each scan
+- Includes `chmod -R 777 .` before ZAP to avoid Docker permission errors
+- Has the `repository_id` hardcoded — no need to look it up at runtime
+
+> [!TIP]
+> After clicking **Push Workflow**, run the workflow once manually in GitHub to confirm it's working: **Actions → nyx-scan → Run workflow**.
+
+#### Manual: Full GitHub Actions Pipeline
+
+If you prefer to manage the workflow file yourself, create `.github/workflows/nyx-security.yml` in your repository:
 
 ```yaml
 name: Nyx Security Scan
@@ -937,8 +965,36 @@ The compliance module maps findings to regulatory frameworks automatically:
 <details>
 <summary><strong>Reports</strong></summary>
 
-- **Executive Security Report** — Click "Generate Report" to open a print-ready HTML page covering: KPIs, MTTR by severity, weekly trends table, top 10 vulnerability types, per-repository risk table, compliance summary across all frameworks. Use **Cmd+P / Ctrl+P → Save as PDF** to produce a PDF for leadership or auditors.
+- **Executive Security Report** — Click "Generate Report" to download a print-ready HTML report covering: KPIs, MTTR by severity, weekly trends table, top 10 vulnerability types, per-repository risk table, compliance summary across all frameworks. The report is fetched securely via the API (key sent as a header, never in the URL) and opened in a new tab. Use **Cmd+P / Ctrl+P → Save as PDF** for leadership or auditors.
 - **Compliance Trend Analysis** — Select a framework and date range; see current coverage %, change over the period, and open finding count.
+
+</details>
+
+<details>
+<summary><strong>SBOM</strong></summary>
+
+The SBOM page gives per-repository software supply chain visibility:
+
+- **Generate SBOM** — Click the **Generate** button for any repository. Nyx dispatches a GitHub Actions `workflow_dispatch` event which runs Trivy in CycloneDX format and submits the result back to Nyx automatically.
+- **Component History** — Each submission is snapshotted. View the current component list or browse the full submission history.
+- **Diff Alerts** — Every new submission is diffed against the previous snapshot. If components were added, removed, or updated, a change alert is created. Alerts show added/removed/updated counts and the full component-level diff.
+- **Acknowledge Alerts** — Dismiss individual alerts or acknowledge all at once. Unacknowledged alert count appears as a badge.
+
+> [!NOTE]
+> SBOM generation requires the `nyx-scan.yml` workflow to be present in the repository. Use the **Push Workflow** button on the Repositories page to deploy it.
+
+</details>
+
+<details>
+<summary><strong>Audit Log</strong></summary>
+
+Every action taken in Nyx is recorded in an immutable audit log:
+
+- **Covered events** — Finding status changes, suppression, assignment, AI fix requests/approvals/rejections/regenerations, JIRA ticket creation/sync, scan imports, repository registration/deletion, workflow pushes, SBOM generation triggers
+- **Filter bar** — Search by text (searches action name and metadata), filter by action prefix (finding, remediation, repository, scan, sbom), resource type, and date range
+- **Expandable rows** — Click any row to expand the full JSON metadata for that event
+- **Color coding** — Actions are color-coded by type for quick visual scanning
+- **Download** — Export up to 10,000 entries as CSV or JSON for ingestion into a SIEM or external log management system
 
 </details>
 
@@ -982,6 +1038,7 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | `DELETE` | `/repositories/{id}` | Remove repository and all associated data |
 | `POST` | `/repositories/{id}/webhook` | Refresh / reinstall the GitHub webhook |
 | `POST` | `/repositories/{id}/sync-code-scanning` | Manually trigger GitHub Code Scanning sync |
+| `POST` | `/repositories/{id}/push-workflow` | Push the canonical `nyx-scan.yml` to the repository via GitHub API |
 | `GET` | `/repositories/{id}/risk-history` | Get 30-day risk score history |
 
 </details>
@@ -1082,8 +1139,13 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/sbom/{repository_id}` | Get SBOM for a repository |
-| `POST` | `/sbom/{repository_id}/generate` | Generate or regenerate SBOM |
+| `POST` | `/sbom/repositories/{id}/generate` | Trigger GitHub Actions to generate a CycloneDX SBOM via Trivy (returns 202) |
+| `POST` | `/sbom/repositories/{id}/submit` | Submit a raw CycloneDX or SPDX JSON SBOM; diffs against previous snapshot and creates change alert |
+| `GET` | `/sbom/repositories/{id}/current` | Get the latest SBOM snapshot with full component list |
+| `GET` | `/sbom/repositories/{id}/history` | List SBOM snapshots (newest first, no component detail) |
+| `GET` | `/sbom/alerts` | List SBOM change alerts; pass `unacknowledged_only=true` for badge count |
+| `POST` | `/sbom/alerts/{alert_id}/acknowledge` | Acknowledge a specific SBOM change alert |
+| `POST` | `/sbom/alerts/acknowledge-all` | Acknowledge all unacknowledged SBOM alerts |
 
 **Webhooks**
 
@@ -1096,7 +1158,8 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/audit` | Get audit log entries (filter by entity, action, user) |
+| `GET` | `/audit` | Paginated audit log; filters: `actor`, `action`, `resource_type`, `search`, `date_from`, `date_to` |
+| `GET` | `/audit/download` | Download up to 10,000 audit entries as `json` or `csv` (pass `?fmt=json\|csv`) |
 
 </details>
 
@@ -1325,6 +1388,49 @@ Nyx deduplicates by fingerprint: `(rule_id, scanner, file_path, line_start, repo
 - Verify that scanner and rule ID are consistent between scans
 - Ensure the file path is relative, not absolute
 - Review scan worker logs for deduplication skip messages
+
+</details>
+
+<details>
+<summary><strong>ZAP findings not appearing</strong></summary>
+
+ZAP runs as a Docker container with uid `zap` (1000). The GitHub Actions runner workspace is owned by `runner`, so ZAP cannot write its output file — causing the step to fail silently and all downstream steps (Trivy, SBOM submit) to be skipped.
+
+**Fix:** Use the **Push Workflow** button in Nyx. The canonical `nyx-scan.yml` includes a `chmod -R 777 .` step before ZAP runs. If you manage the workflow manually, add:
+
+```yaml
+- name: Fix workspace permissions for ZAP
+  run: chmod -R 777 .
+```
+
+immediately before the ZAP step.
+
+</details>
+
+<details>
+<summary><strong>Push Workflow returns 403</strong></summary>
+
+GitHub requires the `workflow` scope on your PAT to write workflow files. Edit your token at **GitHub → Settings → Developer settings → Personal access tokens**, check the **Workflow** box, and click **Update token**. The token value stays the same — just re-save it in your `.env`.
+
+</details>
+
+<details>
+<summary><strong>Backend becomes unhealthy / restarts needed</strong></summary>
+
+The compose stack includes `willfarrell/autoheal` which monitors the backend's Docker healthcheck and automatically calls `docker restart` when it goes unhealthy. No manual intervention needed.
+
+To check autoheal activity:
+```bash
+docker logs nyx-autoheal-1 -f
+```
+
+To check why the backend became unhealthy:
+```bash
+docker logs nyx-backend-1 --tail=50
+```
+
+> [!NOTE]
+> The `autoheal` container mounts `/var/run/docker.sock`. This is standard for container management sidecars but means the autoheal container has host-level Docker access. On multi-tenant or production hardened hosts, consider restricting socket permissions or using a Docker socket proxy.
 
 </details>
 
