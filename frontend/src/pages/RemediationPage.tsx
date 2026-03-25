@@ -19,7 +19,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.
   REJECTED:    { label: 'Rejected',        color: 'text-slate-400',   icon: XCircle },
 }
 
-function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (r: Remediation) => void }) {
+function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: string) => void }) {
   const queryClient = useQueryClient()
   const cfg = STATUS_CONFIG[rem.status] || STATUS_CONFIG.PENDING
   const Icon = cfg.icon
@@ -32,7 +32,7 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (r: Re
   return (
     <div
       className="nyx-card p-4 cursor-pointer hover:border-nyx-amethyst/40 transition-colors"
-      onClick={() => onSelect(rem)}
+      onClick={() => onSelect(rem.id)}
     >
       <div className="flex items-center justify-between mb-2">
         <span className={clsx('flex items-center gap-1.5 text-xs font-medium', cfg.color)}>
@@ -230,7 +230,7 @@ const ALL_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'MERGED', 'FA
 const ACTIVE_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN']
 
 export default function RemediationPage() {
-  const [selected, setSelected] = useState<Remediation | null>(null)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)
 
   const { data: remediations = [], isLoading } = useQuery({
@@ -238,6 +238,9 @@ export default function RemediationPage() {
     queryFn: remediationApi.list,
     refetchInterval: 5_000, // Poll for AI generation updates
   })
+
+  // Always read the live version of the selected remediation from the query data
+  const selected = remediations.find(r => r.id === selectedId) ?? null
 
   // Finding IDs that have a successful remediation (PR open or merged) — used to auto-hide superseded failures
   const succeededFindingIds = new Set(
@@ -312,7 +315,7 @@ export default function RemediationPage() {
                 </div>
                 <div className="space-y-2">
                   {items.map(rem => (
-                    <RemediationCard key={rem.id} rem={rem} onSelect={setSelected} />
+                    <RemediationCard key={rem.id} rem={rem} onSelect={setSelectedId} />
                   ))}
                   {items.length === 0 && (
                     <div className="border border-dashed border-nyx-iris/10 rounded-lg p-3 text-center text-nyx-mist/30 text-xs">
@@ -328,8 +331,8 @@ export default function RemediationPage() {
 
       {selected && (
         <>
-          <div className="fixed inset-0 bg-black/40 z-40" onClick={() => setSelected(null)} />
-          <RemediationPanel rem={selected} onClose={() => setSelected(null)} />
+          <div className="fixed inset-0 bg-black/40 z-40" onClick={() => setSelectedId(null)} />
+          <RemediationPanel rem={selected} onClose={() => setSelectedId(null)} />
         </>
       )}
     </div>
