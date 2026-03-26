@@ -42,6 +42,15 @@ async def github_webhook(
     signature_header = request.headers.get("X-Hub-Signature-256", "")
     verify_global_webhook_hmac(body, signature_header)
 
+    # Replay deduplication — reject a delivery ID we have already processed
+    if x_github_delivery:
+        async with AsyncSessionLocal() as dedup_db:
+            existing = await dedup_db.execute(
+                select(Scan).where(Scan.delivery_id == x_github_delivery).limit(1)
+            )
+            if existing.scalar_one_or_none() is not None:
+                return {"status": "ignored", "reason": "duplicate delivery", "delivery": x_github_delivery}
+
     try:
         payload = json.loads(body)
     except Exception:
@@ -80,7 +89,7 @@ async def github_webhook(
         event = x_github_event or ""
 
         if event == "push":
-            await _handle_push(payload, repo, background_tasks, db)
+            await _handle_push(payload, repo, background_tasks, db, delivery_id=x_github_delivery)
         elif event == "pull_request":
             await _handle_pull_request(payload, repo, db, background_tasks)
         elif event == "check_run":
@@ -92,7 +101,7 @@ async def github_webhook(
     return {"status": "accepted", "event": event, "delivery": x_github_delivery}
 
 
-async def _handle_push(payload: dict, repo, background_tasks, db) -> None:
+async def _handle_push(payload: dict, repo, background_tasks, db, delivery_id: str | None = None) -> None:
     """On push to default branch: auto-detect new scanners, then create Scan records."""
     ref = payload.get("ref", "")
     default_ref = f"refs/heads/{repo.default_branch}"
@@ -134,9 +143,12 @@ async def _handle_push(payload: dict, repo, background_tasks, db) -> None:
             git_sha=git_sha,
             git_ref=git_ref,
             started_at=datetime.now(timezone.utc),
+            delivery_id=delivery_id,
         )
         db.add(scan)
         await db.flush()
+        # Only the first scan record gets the delivery_id to satisfy the unique constraint
+        delivery_id = None
 
         # Actual scan results arrive via POST /api/v1/scans/import-json
         # from the nyx-scan.yml GitHub Actions workflow.

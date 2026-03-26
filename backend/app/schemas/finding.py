@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from app.core.constants import FindingCategory, FindingStatus, Severity
 
@@ -88,6 +88,22 @@ class FindingResponse(BaseModel):
 class FindingStatusUpdate(BaseModel):
     status: FindingStatus
     notes: Optional[str] = None
+    accepted_risk_expires_at: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def require_expiry_for_accepted_risk(self) -> "FindingStatusUpdate":
+        if self.status == FindingStatus.ACCEPTED_RISK:
+            if self.accepted_risk_expires_at is None:
+                raise ValueError(
+                    "accepted_risk_expires_at is required when setting status to ACCEPTED_RISK"
+                )
+            now = datetime.now(timezone.utc)
+            max_expiry = now + timedelta(days=180)
+            if self.accepted_risk_expires_at <= now:
+                raise ValueError("accepted_risk_expires_at must be in the future")
+            if self.accepted_risk_expires_at > max_expiry:
+                raise ValueError("accepted_risk_expires_at cannot be more than 180 days from now")
+        return self
 
 
 class FindingSuppressRequest(BaseModel):

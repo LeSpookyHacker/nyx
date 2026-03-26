@@ -288,7 +288,7 @@ async def bulk_request_remediation(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
-):
+):  # noqa: E501
     """Request AI fixes for multiple findings at once (max 20)."""
     finding_ids = body.get("finding_ids", [])
     requested_by = body.get("requested_by", "engineer")
@@ -320,6 +320,13 @@ async def bulk_request_remediation(
         remediation_ids.append(rem.id)
         background_tasks.add_task(_run_ai_fix, rem.id, finding.id, "", None)
 
+    from app.services.audit_service import log_event
+    from app.core.security import get_client_ip
+    await log_event(db, actor=_key, action="remediation.bulk_requested",
+        resource_type="remediation",
+        metadata={"requested_count": len(valid_findings), "skipped": skipped,
+                  "requested_by": requested_by, "remediation_ids": remediation_ids},
+        ip_address=get_client_ip(request))
     await db.commit()
     return {"requested": len(valid_findings), "skipped": skipped, "remediation_ids": remediation_ids}
 

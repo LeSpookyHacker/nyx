@@ -3,14 +3,15 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import get_client_ip, require_api_key
 from app.database import get_db
 from app.models.sla_policy import SlaPolicy
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/sla-policies", tags=["sla-policies"])
 
@@ -90,12 +91,19 @@ async def list_policies(
 
 @router.post("", status_code=201)
 async def create_policy(
+    request: Request,
     body: SlaPolicyCreate,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
     p = SlaPolicy(**body.model_dump())
     db.add(p)
+    await db.flush()
+    await log_event(db, actor=_key, action="sla_policy.created", resource_type="sla_policy",
+        resource_id=p.id,
+        metadata={"name": p.name, "severity": p.severity, "max_days": p.max_days,
+                  "escalation_action": p.escalation_action},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(p)
     return _to_dict(p)
@@ -116,6 +124,7 @@ async def get_policy(
 
 @router.patch("/{policy_id}")
 async def update_policy(
+    request: Request,
     policy_id: str,
     body: SlaPolicyUpdate,
     db: AsyncSession = Depends(get_db),
@@ -125,8 +134,12 @@ async def update_policy(
     p = result.scalar_one_or_none()
     if not p:
         raise HTTPException(status_code=404, detail="SLA policy not found")
-    for field, val in body.model_dump(exclude_none=True).items():
+    changes = body.model_dump(exclude_none=True)
+    for field, val in changes.items():
         setattr(p, field, val.upper() if field in ("severity", "escalation_action") and val else val)
+    await log_event(db, actor=_key, action="sla_policy.updated", resource_type="sla_policy",
+        resource_id=policy_id, metadata={"changes": changes},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(p)
     return _to_dict(p)
@@ -134,6 +147,7 @@ async def update_policy(
 
 @router.delete("/{policy_id}", status_code=204)
 async def delete_policy(
+    request: Request,
     policy_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -142,5 +156,9 @@ async def delete_policy(
     p = result.scalar_one_or_none()
     if not p:
         raise HTTPException(status_code=404, detail="SLA policy not found")
+    await log_event(db, actor=_key, action="sla_policy.deleted", resource_type="sla_policy",
+        resource_id=policy_id,
+        metadata={"name": p.name, "severity": p.severity, "max_days": p.max_days},
+        ip_address=get_client_ip(request))
     await db.delete(p)
     await db.commit()

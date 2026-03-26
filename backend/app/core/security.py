@@ -24,30 +24,113 @@ def _key_identity(api_key: str) -> str:
     return "key:" + hashlib.sha256(api_key.encode()).hexdigest()[:12]
 
 
-async def require_api_key(api_key: str | None = Security(_api_key_header)) -> str:
+def get_client_ip(request: Request) -> str:
+    """
+    Extract the most likely real client IP.
+    Checks X-Forwarded-For first (set by load balancers/reverse proxies),
+    then falls back to the direct TCP peer address.
+    """
+    forwarded_for = request.headers.get("X-Forwarded-For", "")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def require_api_key(
+    request: Request,
+    api_key: str | None = Security(_api_key_header),
+) -> str:
     """
     Dependency that enforces API key authentication.
 
-    If NYX_API_KEY is not configured:
-      - In 'production' ENVIRONMENT: raises 500 at startup (see main.py warn_insecure_config).
-      - Otherwise: allows all with a 'dev' identity and logs a warning per request.
+    Auth order:
+      1. Hash the supplied key and look it up in the api_keys DB table.
+         If found (active, not expired): accept and update last_used_at.
+      2. Fall back to comparing against NYX_API_KEY env var — this covers
+         bootstrap deployments before the DB key is seeded, and is the
+         sole path in development mode when NYX_API_KEY is not set.
+
+    If NYX_API_KEY is not configured and no DB key matches:
+      - In 'production' ENVIRONMENT: raises 503.
+      - Otherwise: allows with a 'dev' identity and logs a warning.
     """
+    from datetime import datetime, timezone
+
+    ip = get_client_ip(request)
+
+    if not api_key:
+        if not settings.NYX_API_KEY:
+            if settings.ENVIRONMENT == "production":
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Server misconfiguration: authentication is not configured.",
+                )
+            logger.warning(
+                "NYX_API_KEY is not set — request allowed in development mode. "
+                "Set NYX_API_KEY to enable authentication."
+            )
+            return "dev"
+        logger.warning("AUTH_FAILURE ip=%s endpoint=%s reason=missing", ip, request.url.path)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
+    # ── 1. DB-backed key lookup ────────────────────────────────────────────────
+    try:
+        from sqlalchemy import select as sa_select
+        from app.database import AsyncSessionLocal
+        from app.models.api_key import ApiKey
+
+        key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                sa_select(ApiKey).where(
+                    ApiKey.key_hash == key_hash,
+                    ApiKey.is_active.is_(True),
+                )
+            )
+            record = result.scalar_one_or_none()
+            if record is not None:
+                now = datetime.now(timezone.utc)
+                if record.expires_at and record.expires_at < now:
+                    logger.warning(
+                        "AUTH_FAILURE ip=%s endpoint=%s reason=expired key_id=%s",
+                        ip, request.url.path, record.id,
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="API key has expired",
+                        headers={"WWW-Authenticate": "ApiKey"},
+                    )
+                record.last_used_at = now
+                await db.commit()
+                return f"apikey:{record.name}"
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("DB API key lookup failed; falling back to env var auth")
+
+    # ── 2. Env-var fallback (backward compat / bootstrap) ─────────────────────
     if not settings.NYX_API_KEY:
         if settings.ENVIRONMENT == "production":
-            # This should have been caught at startup; fail hard here as a backstop.
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Server misconfiguration: authentication is not configured.",
             )
-        # Development mode — log every unauthenticated request so it is visible.
         logger.warning(
             "NYX_API_KEY is not set — request allowed in development mode. "
             "Set NYX_API_KEY to enable authentication."
         )
         return "dev"
 
-    if not api_key or not secrets.compare_digest(api_key, settings.NYX_API_KEY):
-        logger.warning("Rejected request: invalid or missing API key")
+    if not secrets.compare_digest(api_key, settings.NYX_API_KEY):
+        logger.warning(
+            "AUTH_FAILURE ip=%s endpoint=%s reason=invalid",
+            ip,
+            request.url.path,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",

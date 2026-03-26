@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import get_client_ip, require_api_key
 from app.core.exceptions import GitHubError
 from app.database import get_db
 from app.models.repo_risk_history import RepoRiskHistory
@@ -93,6 +93,7 @@ async def get_repository(
 
 @router.patch("/{repo_id}", response_model=RepositoryResponse)
 async def update_repository(
+    request: Request,
     repo_id: str,
     body: RepositoryUpdate,
     db: AsyncSession = Depends(get_db),
@@ -103,11 +104,18 @@ async def update_repository(
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
 
+    changes: dict = {}
     if body.enabled_scanners is not None:
         repo.enabled_scanners = ",".join(body.enabled_scanners)
+        changes["enabled_scanners"] = body.enabled_scanners
     if body.default_branch is not None:
         repo.default_branch = body.default_branch
+        changes["default_branch"] = body.default_branch
 
+    await log_event(db, actor=_key, action="repository.updated", resource_type="repository",
+        resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name, "changes": changes},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(repo)
     return repo
@@ -138,6 +146,7 @@ async def delete_repository(
 
 @router.post("/{repo_id}/sync-code-scanning")
 async def sync_code_scanning(
+    request: Request,
     repo_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -155,11 +164,18 @@ async def sync_code_scanning(
 
     from app.services.code_scanning_service import sync_repository
     outcome = await sync_repository(repo.id, repo.github_full_name, force=True)
+    await log_event(db, actor=_key, action="repository.code_scanning_synced",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name,
+                  "imported": outcome.get("imported", 0) if isinstance(outcome, dict) else None},
+        ip_address=get_client_ip(request))
+    await db.commit()
     return outcome
 
 
 @router.post("/{repo_id}/webhook", response_model=RepositoryResponse)
 async def refresh_webhook(
+    request: Request,
     repo_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -178,6 +194,10 @@ async def refresh_webhook(
     except Exception:
         raise HTTPException(status_code=400, detail="Failed to register webhook")
 
+    await log_event(db, actor=_key, action="repository.webhook_refreshed",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name, "webhook_id": str(webhook_id)},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(repo)
     return repo
@@ -206,7 +226,11 @@ async def push_workflow(
             repo.default_branch,
         )
     except GitHubError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        import logging as _logging
+        _logging.getLogger("nyx.repositories").error(
+            "GitHub API error pushing workflow for repo %s: %s", repo_id, e
+        )
+        raise HTTPException(status_code=502, detail="Failed to push workflow to GitHub")
     await log_event(db, actor=_key, action="repository.workflow_pushed", resource_type="repository",
         resource_id=repo_id, metadata={"github_full_name": repo.github_full_name, "created": outcome["created"]})
     await db.commit()

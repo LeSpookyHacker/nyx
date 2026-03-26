@@ -4,15 +4,16 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import limiter
-from app.core.security import require_api_key
+from app.core.security import get_client_ip, require_api_key
 from app.database import get_db
 from app.models.scan_schedule import ScanSchedule
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
@@ -92,6 +93,7 @@ async def get_schedule(
 
 @router.post("", status_code=201)
 async def create_schedule(
+    request: Request,
     body: ScheduleCreate,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -105,6 +107,12 @@ async def create_schedule(
         next_run_at=now + timedelta(hours=body.interval_hours),
     )
     db.add(s)
+    await db.flush()
+    await log_event(db, actor=_key, action="schedule.created", resource_type="schedule",
+        resource_id=s.id,
+        metadata={"repository_id": body.repository_id, "enabled_scanners": body.enabled_scanners,
+                  "interval_hours": body.interval_hours},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(s)
     return _to_dict(s)
@@ -112,6 +120,7 @@ async def create_schedule(
 
 @router.patch("/{schedule_id}")
 async def update_schedule(
+    request: Request,
     schedule_id: str,
     body: ScheduleUpdate,
     db: AsyncSession = Depends(get_db),
@@ -121,17 +130,24 @@ async def update_schedule(
     s = result.scalar_one_or_none()
     if not s:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    changes: dict = {}
     if body.enabled_scanners is not None:
         upper = [sc.upper().strip() for sc in body.enabled_scanners]
         invalid = [sc for sc in upper if sc not in _VALID_SCANNERS]
         if invalid:
             raise HTTPException(status_code=400, detail=f"Unknown scanner(s): {', '.join(invalid)}")
         s.enabled_scanners = ",".join(upper)
+        changes["enabled_scanners"] = upper
     if body.interval_hours is not None:
         s.interval_hours = body.interval_hours
         s.next_run_at = datetime.now(timezone.utc) + timedelta(hours=body.interval_hours)
+        changes["interval_hours"] = body.interval_hours
     if body.enabled is not None:
         s.enabled = body.enabled
+        changes["enabled"] = body.enabled
+    await log_event(db, actor=_key, action="schedule.updated", resource_type="schedule",
+        resource_id=schedule_id, metadata={"changes": changes},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(s)
     return _to_dict(s)
@@ -139,6 +155,7 @@ async def update_schedule(
 
 @router.delete("/{schedule_id}", status_code=204)
 async def delete_schedule(
+    request: Request,
     schedule_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -147,12 +164,17 @@ async def delete_schedule(
     s = result.scalar_one_or_none()
     if not s:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    await log_event(db, actor=_key, action="schedule.deleted", resource_type="schedule",
+        resource_id=schedule_id,
+        metadata={"repository_id": s.repository_id, "enabled_scanners": s.enabled_scanners},
+        ip_address=get_client_ip(request))
     await db.delete(s)
     await db.commit()
 
 
 @router.post("/{schedule_id}/trigger")
 async def trigger_schedule(
+    request: Request,
     schedule_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -187,6 +209,10 @@ async def trigger_schedule(
 
     s.last_run_at = now
     s.next_run_at = now + timedelta(hours=s.interval_hours)
+    await log_event(db, actor=_key, action="schedule.manually_triggered", resource_type="schedule",
+        resource_id=schedule_id,
+        metadata={"repository_id": s.repository_id, "scanners": scanners, "scan_ids": scan_ids},
+        ip_address=get_client_ip(request))
     await db.commit()
 
     return {"message": f"Triggered {len(scanners)} scan(s)", "scan_ids": scan_ids}

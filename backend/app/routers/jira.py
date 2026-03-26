@@ -5,16 +5,17 @@ import re
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import get_client_ip, require_api_key
 from app.database import get_db
 from app.models.finding import Finding
 from app.models.jira_link import JiraLink
 from app.services import jira_service
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/jira", tags=["jira"])
 
@@ -74,6 +75,7 @@ async def get_ticket(
 
 @router.post("/findings/{finding_id}/ticket", status_code=201)
 async def create_ticket(
+    request: Request,
     finding_id: str,
     body: CreateTicketRequest,
     db: AsyncSession = Depends(get_db),
@@ -109,6 +111,10 @@ async def create_ticket(
         synced_at=datetime.now(timezone.utc),
     )
     db.add(link)
+    await log_event(db, actor=_key, action="jira.ticket_created", resource_type="finding",
+        resource_id=finding_id,
+        metadata={"jira_issue_key": link.jira_issue_key, "project_key": link.jira_project_key},
+        ip_address=get_client_ip(request))
     await db.commit()
     await db.refresh(link)
     return _link_response(link)
@@ -116,6 +122,7 @@ async def create_ticket(
 
 @router.post("/findings/{finding_id}/sync")
 async def sync_ticket(
+    request: Request,
     finding_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -151,12 +158,17 @@ async def sync_ticket(
             finding.status = FindingStatus.FIXED.value
             finding.resolved_at = datetime.now(timezone.utc)
 
+    await log_event(db, actor=_key, action="jira.ticket_synced", resource_type="finding",
+        resource_id=finding_id,
+        metadata={"jira_issue_key": link.jira_issue_key, "new_status": link.jira_status},
+        ip_address=get_client_ip(request))
     await db.commit()
     return _link_response(link)
 
 
 @router.delete("/findings/{finding_id}/ticket", status_code=204)
 async def unlink_ticket(
+    request: Request,
     finding_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -168,6 +180,10 @@ async def unlink_ticket(
     link = link_result.scalar_one_or_none()
     if not link:
         raise HTTPException(status_code=404, detail="No JIRA ticket linked to this finding")
+    await log_event(db, actor=_key, action="jira.ticket_unlinked", resource_type="finding",
+        resource_id=finding_id,
+        metadata={"jira_issue_key": link.jira_issue_key},
+        ip_address=get_client_ip(request))
     await db.delete(link)
     await db.commit()
 
@@ -212,6 +228,7 @@ async def list_repo_tickets(
 
 @router.post("/repositories/{repo_id}/bulk-tickets")
 async def bulk_create_tickets(
+    request: Request,
     repo_id: str,
     body: BulkTicketRequest,
     db: AsyncSession = Depends(get_db),
@@ -261,6 +278,12 @@ async def bulk_create_tickets(
             await db.rollback()
             failed.append({"finding_id": finding.id, "error": "Failed to create JIRA ticket"})
 
+    await log_event(db, actor=_key, action="jira.bulk_tickets_created", resource_type="repository",
+        resource_id=repo_id,
+        metadata={"created": len(created), "skipped": len(skipped), "failed": len(failed),
+                  "tickets": [c["ticket"] for c in created]},
+        ip_address=get_client_ip(request))
+    await db.commit()
     return {
         "created": len(created),
         "skipped": len(skipped),

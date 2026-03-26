@@ -43,6 +43,9 @@ class Scan(Base, TimestampMixin):
     # GitHub Check Run ID (for PR checks integration)
     check_run_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
+    # GitHub delivery ID — prevents replay of identical webhook events
+    delivery_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+
     # Error info
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 

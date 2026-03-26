@@ -19,12 +19,13 @@ from app.core.limiter import limiter
 from app.core.security import warn_insecure_config
 from app.database import init_db
 from app.routers import (
-    audit, compliance, dashboard, findings, jira, remediation,
+    audit, api_keys, compliance, dashboard, findings, jira, remediation,
     repositories, reports, sbom, scans, schedules, sla_policies, webhooks,
     regression_alerts,
 )
 # Ensure new models are registered with SQLAlchemy metadata
 from app.models import repo_risk_history, scan_schedule, sla_policy, suppression_pattern  # noqa: F401
+from app.models.api_key import ApiKey  # noqa: F401 — register api_keys table
 
 settings = get_settings()
 
@@ -41,8 +42,9 @@ async def _risk_history_snapshot_loop() -> None:
     """Take daily risk score snapshots for all repositories."""
     import asyncio
     from datetime import date
-    from sqlalchemy import select
+    from sqlalchemy import func, select
     from app.database import AsyncSessionLocal
+    from app.models.finding import Finding as FindingModel
     from app.models.repository import Repository
     from app.models.repo_risk_history import RepoRiskHistory
 
@@ -55,12 +57,8 @@ async def _risk_history_snapshot_loop() -> None:
                 today = date.today()
                 for repo in repos:
                     total_q = await db.execute(
-                        __import__('sqlalchemy', fromlist=['select']).select(
-                            __import__('sqlalchemy', fromlist=['func']).func.count()
-                        ).select_from(
-                            __import__('app.models.finding', fromlist=['Finding']).Finding
-                        ).where(
-                            __import__('app.models.finding', fromlist=['Finding']).Finding.repository_id == repo.id
+                        select(func.count()).select_from(FindingModel).where(
+                            FindingModel.repository_id == repo.id
                         )
                     )
                     total = total_q.scalar_one()
@@ -231,9 +229,9 @@ async def _scan_schedule_loop() -> None:
 
 
 async def _suppression_expiry_loop() -> None:
-    """Periodically reopen findings whose suppression has expired (M-7)."""
+    """Periodically reopen findings whose suppression or accepted-risk period has expired (M-7)."""
     from datetime import datetime, timezone
-    from sqlalchemy import update
+    from sqlalchemy import update, or_
     from app.database import AsyncSessionLocal
     from app.models.finding import Finding
 
@@ -242,7 +240,8 @@ async def _suppression_expiry_loop() -> None:
         try:
             async with AsyncSessionLocal() as db:
                 now = datetime.now(timezone.utc)
-                result = await db.execute(
+                # Reopen expired SUPPRESSED findings
+                suppressed_result = await db.execute(
                     update(Finding)
                     .where(
                         Finding.status == "SUPPRESSED",
@@ -257,11 +256,57 @@ async def _suppression_expiry_loop() -> None:
                         resolved_at=None,
                     )
                 )
+                # Reopen expired ACCEPTED_RISK findings
+                accepted_result = await db.execute(
+                    update(Finding)
+                    .where(
+                        Finding.status == "ACCEPTED_RISK",
+                        Finding.resolved_at.isnot(None),
+                        Finding.resolved_at < now,
+                    )
+                    .values(
+                        status="OPEN",
+                        resolved_at=None,
+                    )
+                )
                 await db.commit()
-                if result.rowcount:
-                    logger.info("Suppression expiry: reopened %d finding(s)", result.rowcount)
+                if suppressed_result.rowcount:
+                    logger.info("Suppression expiry: reopened %d suppressed finding(s)", suppressed_result.rowcount)
+                if accepted_result.rowcount:
+                    logger.info("Accepted-risk expiry: reopened %d finding(s) for re-review", accepted_result.rowcount)
         except Exception:
             logger.exception("Error in suppression expiry loop")
+
+
+async def _seed_api_key_from_env() -> None:
+    """
+    On first boot, register NYX_API_KEY as a DB-backed key named 'bootstrap'
+    so the DB auth path is immediately active without manual provisioning.
+    Only runs when the api_keys table is empty — safe to call on every startup.
+    """
+    import hashlib as _hashlib
+    from sqlalchemy import func, select as sa_select
+    from app.database import AsyncSessionLocal
+    from app.models.api_key import ApiKey
+
+    if not settings.NYX_API_KEY:
+        return
+
+    try:
+        async with AsyncSessionLocal() as db:
+            count_result = await db.execute(sa_select(func.count()).select_from(ApiKey))
+            if count_result.scalar_one() == 0:
+                key_hash = _hashlib.sha256(settings.NYX_API_KEY.encode()).hexdigest()
+                db.add(ApiKey(
+                    name="bootstrap",
+                    key_hash=key_hash,
+                    is_active=True,
+                    created_by="system",
+                ))
+                await db.commit()
+                logger.info("Seeded bootstrap API key from NYX_API_KEY environment variable")
+    except Exception:
+        logger.exception("Failed to seed bootstrap API key — DB auth will fall back to env var")
 
 
 @asynccontextmanager
@@ -272,6 +317,7 @@ async def lifespan(app: FastAPI):
     warn_insecure_config()
 
     await init_db()
+    await _seed_api_key_from_env()
 
     tasks = []
 
@@ -398,6 +444,7 @@ app.include_router(schedules.router, prefix=API_PREFIX)
 app.include_router(sla_policies.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(regression_alerts.router, prefix=API_PREFIX)
+app.include_router(api_keys.router, prefix=API_PREFIX)
 
 
 @app.get("/health", tags=["system"])

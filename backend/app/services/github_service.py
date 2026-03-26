@@ -101,9 +101,14 @@ jobs:
       # ── Gitleaks (Secrets) — always runs ─────────────────────────────────────
       - name: Run Gitleaks
         run: |
-          curl -sSfL \\
-            https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \\
-            | tar -xz gitleaks
+          GITLEAKS_VERSION="v8.21.2"
+          GITLEAKS_ARCHIVE="gitleaks_8.21.2_linux_x64.tar.gz"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/$GITLEAKS_VERSION"
+          curl -sSfL "$BASE_URL/$GITLEAKS_ARCHIVE" -o gitleaks.tar.gz
+          curl -sSfL "$BASE_URL/gitleaks_8.21.2_checksums.txt" -o gitleaks_checksums.txt
+          grep "$GITLEAKS_ARCHIVE" gitleaks_checksums.txt | sha256sum --check --status || \\
+            {{ echo "::error::Gitleaks checksum verification FAILED"; exit 1; }}
+          tar -xz -f gitleaks.tar.gz gitleaks
           ./gitleaks detect --source . --report-format json \\
             --report-path gitleaks.json --exit-code 0 || true
 
@@ -133,8 +138,15 @@ jobs:
       - name: Run Hadolint
         if: hashFiles('**/Dockerfile', '**/Dockerfile.*') != ''
         run: |
-          wget -qO /usr/local/bin/hadolint \\
-            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          HADOLINT_VERSION="v2.12.0"
+          HADOLINT_BIN="hadolint-Linux-x86_64"
+          BASE_URL="https://github.com/hadolint/hadolint/releases/download/$HADOLINT_VERSION"
+          wget -qO /usr/local/bin/hadolint "$BASE_URL/$HADOLINT_BIN"
+          wget -qO /tmp/hadolint.sha256 "$BASE_URL/$HADOLINT_BIN.sha256"
+          EXPECTED=$(cat /tmp/hadolint.sha256 | awk '{{print $1}}')
+          ACTUAL=$(sha256sum /usr/local/bin/hadolint | awk '{{print $1}}')
+          [ "$EXPECTED" = "$ACTUAL" ] || \\
+            {{ echo "::error::Hadolint checksum verification FAILED"; exit 1; }}
           chmod +x /usr/local/bin/hadolint
           find . \\( -name 'Dockerfile' -o -name 'Dockerfile.*' -o -name '*.dockerfile' \\) \\
             | head -20 | xargs hadolint --format json 2>/dev/null > hadolint.json || true

@@ -7,13 +7,14 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import FindingStatus
 from app.core.exceptions import FindingNotFound
-from app.core.security import require_api_key
+from app.core.limiter import limiter
+from app.core.security import get_client_ip, require_api_key
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.finding import Finding
@@ -151,7 +152,9 @@ async def list_findings(
 
 
 @router.get("/export")
+@limiter.limit("10/minute")
 async def export_findings(
+    request: Request,
     severity: Optional[List[str]] = Query(None),
     scanner: Optional[List[str]] = Query(None),
     finding_status: Optional[List[str]] = Query(None, alias="status"),
@@ -210,6 +213,7 @@ async def get_finding(
 
 @router.patch("/{finding_id}/status", response_model=FindingResponse)
 async def update_finding_status(
+    request: Request,
     finding_id: str,
     body: FindingStatusUpdate,
     db: AsyncSession = Depends(get_db),
@@ -224,8 +228,11 @@ async def update_finding_status(
     finding.status = body.status.value
     if body.notes:
         finding.notes = body.notes
-    if body.status in (FindingStatus.FIXED, FindingStatus.ACCEPTED_RISK):
+    if body.status == FindingStatus.FIXED:
         finding.resolved_at = datetime.now(timezone.utc)
+    if body.status == FindingStatus.ACCEPTED_RISK:
+        # Store engineer-specified expiry date (schema enforces max 180 days)
+        finding.resolved_at = body.accepted_risk_expires_at
     if body.status in (FindingStatus.ACCEPTED_RISK, FindingStatus.SUPPRESSED):
         finding.auto_close_status = body.status.value
 
@@ -236,6 +243,7 @@ async def update_finding_status(
         resource_type="finding",
         resource_id=finding_id,
         metadata_json=json.dumps({"old_status": old_status, "new_status": body.status.value}),
+        ip_address=get_client_ip(request),
     ))
 
     await db.commit()
@@ -243,8 +251,12 @@ async def update_finding_status(
     return finding
 
 
+_HIGH_SEVERITY_MIN_REASON_LEN = 50
+
+
 @router.post("/{finding_id}/suppress", response_model=FindingResponse)
 async def suppress_finding(
+    request: Request,
     finding_id: str,
     body: FindingSuppressRequest,
     db: AsyncSession = Depends(get_db),
@@ -254,6 +266,15 @@ async def suppress_finding(
     finding = result.scalar_one_or_none()
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found")
+
+    if finding.severity in ("CRITICAL", "HIGH") and len(body.reason.strip()) < _HIGH_SEVERITY_MIN_REASON_LEN:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Suppression of {finding.severity} findings requires a reason of at least "
+                f"{_HIGH_SEVERITY_MIN_REASON_LEN} characters (provided: {len(body.reason.strip())})"
+            ),
+        )
 
     finding.status = FindingStatus.SUPPRESSED.value
     finding.suppression_reason = body.reason
@@ -268,7 +289,13 @@ async def suppress_finding(
         action="finding.suppressed",
         resource_type="finding",
         resource_id=finding_id,
-        metadata_json=json.dumps({"reason": body.reason, "expires_days": body.expires_days}),
+        metadata_json=json.dumps({
+            "reason": body.reason,
+            "expires_days": body.expires_days,
+            "finding_severity": finding.severity,
+            "finding_title": finding.title,
+        }),
+        ip_address=get_client_ip(request),
     ))
 
     # Learn suppression pattern — upsert by rule_id + scanner + repository_id
@@ -300,6 +327,7 @@ async def suppress_finding(
 
 @router.delete("/{finding_id}/suppress", response_model=FindingResponse)
 async def unsuppress_finding(
+    request: Request,
     finding_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -322,6 +350,7 @@ async def unsuppress_finding(
         resource_type="finding",
         resource_id=finding_id,
         metadata_json=json.dumps({"previously_suppressed_by": old_suppressed_by}),
+        ip_address=get_client_ip(request),
     ))
 
     await db.commit()
@@ -331,6 +360,7 @@ async def unsuppress_finding(
 
 @router.patch("/{finding_id}/notes", response_model=FindingResponse)
 async def update_notes(
+    request: Request,
     finding_id: str,
     body: FindingNoteUpdate,
     db: AsyncSession = Depends(get_db),
@@ -341,6 +371,14 @@ async def update_notes(
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found")
     finding.notes = body.notes
+    db.add(AuditLog(
+        actor=_key,
+        action="finding.notes_updated",
+        resource_type="finding",
+        resource_id=finding_id,
+        metadata_json=json.dumps({"notes_length": len(body.notes or "")}),
+        ip_address=get_client_ip(request),
+    ))
     await db.commit()
     await db.refresh(finding)
     return finding
@@ -348,6 +386,7 @@ async def update_notes(
 
 @router.patch("/{finding_id}/assign", response_model=FindingResponse)
 async def assign_finding(
+    request: Request,
     finding_id: str,
     body: dict,
     db: AsyncSession = Depends(get_db),
@@ -369,6 +408,7 @@ async def assign_finding(
         resource_type="finding",
         resource_id=finding_id,
         metadata_json=json.dumps({"assignee": assignee or None}),
+        ip_address=get_client_ip(request),
     ))
     await db.commit()
     await db.refresh(finding)
@@ -645,7 +685,9 @@ def _build_claude_prompt(findings, repos: dict) -> str:
 
 
 @router.post("/bulk/status")
+@limiter.limit("30/minute")
 async def bulk_update_status(
+    request: Request,
     body: BulkStatusUpdate,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -668,6 +710,7 @@ async def bulk_update_status(
             resource_type="finding",
             resource_id=f.id,
             metadata_json=json.dumps({"old_status": old_status, "new_status": body.status.value}),
+            ip_address=get_client_ip(request),
         ))
     await db.commit()
     return {"updated": len(findings)}

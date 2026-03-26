@@ -4,14 +4,15 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import get_client_ip, require_api_key
 from app.database import get_db
 from app.models.regression_auto_alert import RegressionAutoAlert
 from app.models.repository import Repository
+from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/regression-alerts", tags=["regression-alerts"])
 
@@ -43,6 +44,7 @@ async def list_regression_alerts(
 
 @router.post("/{alert_id}/acknowledge")
 async def acknowledge_alert(
+    request: Request,
     alert_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -52,12 +54,17 @@ async def acknowledge_alert(
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.acknowledged_at = datetime.now(timezone.utc)
+    await log_event(db, actor=_key, action="regression_alert.acknowledged",
+        resource_type="regression_alert", resource_id=alert_id,
+        metadata={"repository_id": alert.repository_id},
+        ip_address=get_client_ip(request))
     await db.commit()
     return {"acknowledged": True}
 
 
 @router.post("/acknowledge-all")
 async def acknowledge_all(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
@@ -69,6 +76,9 @@ async def acknowledge_all(
     for alert in result.scalars().all():
         alert.acknowledged_at = now
         count += 1
+    await log_event(db, actor=_key, action="regression_alert.all_acknowledged",
+        resource_type="regression_alert", metadata={"count": count},
+        ip_address=get_client_ip(request))
     await db.commit()
     return {"acknowledged": count}
 

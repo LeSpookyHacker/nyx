@@ -5,12 +5,16 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import logging
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import get_client_ip, require_api_key
+
+logger = logging.getLogger("nyx.sbom")
 from app.database import get_db
 from app.models.repository import Repository
 from app.models.sbom import Sbom, SbomAlert
@@ -45,7 +49,8 @@ async def trigger_sbom_generation(
             ref=repo.default_branch,
         )
     except GitHubError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        logger.error("GitHub API error triggering SBOM for repo %s: %s", repo_id, e)
+        raise HTTPException(status_code=502, detail="Failed to trigger SBOM generation via GitHub")
     await log_event(db, actor=_key, action="sbom.generation_triggered", resource_type="repository",
         resource_id=repo_id, metadata={"github_full_name": repo.github_full_name})
     await db.commit()
@@ -62,6 +67,7 @@ class SbomSubmitRequest(BaseModel):
 
 @router.post("/repositories/{repo_id}/submit", status_code=201)
 async def submit_sbom(
+    request: Request,
     repo_id: str,
     body: SbomSubmitRequest,
     db: AsyncSession = Depends(get_db),
@@ -152,6 +158,11 @@ async def submit_sbom(
         )
         db.add(alert)
 
+    await log_event(db, actor=_key, action="sbom.submitted", resource_type="repository",
+        resource_id=repo_id,
+        metadata={"format": fmt, "tool": tool, "component_count": len(components),
+                  "alert_created": alert is not None, "git_ref": body.git_ref},
+        ip_address=get_client_ip(request))
     await db.commit()
 
     return {
@@ -236,6 +247,7 @@ async def list_alerts(
 
 @router.post("/alerts/{alert_id}/acknowledge")
 async def acknowledge_alert(
+    request: Request,
     alert_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
@@ -245,12 +257,16 @@ async def acknowledge_alert(
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
     alert.acknowledged_at = datetime.now(timezone.utc)
+    await log_event(db, actor=_key, action="sbom.alert_acknowledged", resource_type="sbom_alert",
+        resource_id=alert_id, metadata={"repository_id": alert.repository_id},
+        ip_address=get_client_ip(request))
     await db.commit()
     return {"acknowledged": True}
 
 
 @router.post("/alerts/acknowledge-all")
 async def acknowledge_all_alerts(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
@@ -262,6 +278,8 @@ async def acknowledge_all_alerts(
     for alert in result.scalars().all():
         alert.acknowledged_at = now
         count += 1
+    await log_event(db, actor=_key, action="sbom.all_alerts_acknowledged", resource_type="sbom_alert",
+        metadata={"count": count}, ip_address=get_client_ip(request))
     await db.commit()
     return {"acknowledged": count}
 
