@@ -225,6 +225,8 @@ async def update_finding_status(
         finding.notes = body.notes
     if body.status in (FindingStatus.FIXED, FindingStatus.ACCEPTED_RISK):
         finding.resolved_at = datetime.now(timezone.utc)
+    if body.status in (FindingStatus.ACCEPTED_RISK, FindingStatus.SUPPRESSED):
+        finding.auto_close_status = body.status.value
 
     # Audit log — use the hashed key identity as actor (M-6)
     db.add(AuditLog(
@@ -256,6 +258,7 @@ async def suppress_finding(
     finding.suppression_reason = body.reason
     finding.suppressed_by = "api"
     finding.suppressed_at = datetime.now(timezone.utc)
+    finding.auto_close_status = FindingStatus.SUPPRESSED.value
     if body.expires_days:
         finding.resolved_at = datetime.now(timezone.utc) + timedelta(days=body.expires_days)
 
@@ -646,5 +649,7 @@ async def bulk_update_status(
             f.notes = body.notes
         if body.status in (FindingStatus.FIXED, FindingStatus.ACCEPTED_RISK):
             f.resolved_at = now
+        if body.status in (FindingStatus.ACCEPTED_RISK, FindingStatus.SUPPRESSED):
+            f.auto_close_status = body.status.value
     await db.commit()
     return {"updated": len(findings)}

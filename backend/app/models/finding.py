@@ -86,6 +86,8 @@ class Finding(Base, TimestampMixin):
     # ── Regression Tracking ───────────────────────────────────────────────────────
     is_regression: Mapped[bool] = mapped_column(Boolean, default=False)
     regression_detected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Last engineer-set resolution status (ACCEPTED_RISK or SUPPRESSED) — used to auto-restore on regression
+    auto_close_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
     # ── SLA Escalation ────────────────────────────────────────────────────────────
     sla_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

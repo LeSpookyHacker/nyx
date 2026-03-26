@@ -21,6 +21,7 @@ from app.database import init_db
 from app.routers import (
     audit, compliance, dashboard, findings, jira, remediation,
     repositories, reports, sbom, scans, schedules, sla_policies, webhooks,
+    regression_alerts,
 )
 # Ensure new models are registered with SQLAlchemy metadata
 from app.models import repo_risk_history, scan_schedule, sla_policy, suppression_pattern  # noqa: F401
@@ -396,6 +397,7 @@ app.include_router(sbom.router, prefix=API_PREFIX)
 app.include_router(schedules.router, prefix=API_PREFIX)
 app.include_router(sla_policies.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
+app.include_router(regression_alerts.router, prefix=API_PREFIX)
 
 
 @app.get("/health", tags=["system"])

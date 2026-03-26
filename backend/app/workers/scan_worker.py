@@ -22,6 +22,7 @@ from datetime import timedelta
 from app.core.constants import FindingStatus, ScanStatus, Severity
 from app.database import AsyncSessionLocal
 from app.models.finding import Finding
+from app.models.regression_auto_alert import RegressionAutoAlert
 from app.models.repository import Repository
 from app.models.scan import Scan
 from app.services.deduplication_service import find_existing
@@ -62,6 +63,7 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
 
         new_count = 0
         existing_count = 0
+        auto_sorted: list[dict] = []  # Findings auto-restored to prior ACCEPTED_RISK/SUPPRESSED status
 
         for nf in normalized_findings:
             try:
@@ -123,27 +125,44 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
                     existing.last_seen_at = now_ts
                     # If it was suppressed/fixed, keep that status; otherwise keep OPEN
                     if existing.status == FindingStatus.FIXED.value:
-                        # Finding reappeared after being fixed — regression!
-                        existing.status = FindingStatus.OPEN.value
-                        existing.resolved_at = None
-                        existing.is_regression = True
-                        existing.regression_detected_at = now_ts
-                        new_count += 1  # Count as new since it re-appeared
+                        # Finding reappeared after being fixed — check if it should be auto-restored
+                        if existing.auto_close_status in (
+                            FindingStatus.ACCEPTED_RISK.value,
+                            FindingStatus.SUPPRESSED.value,
+                        ):
+                            # Auto-restore to prior engineer-set status
+                            existing.status = existing.auto_close_status
+                            existing.resolved_at = now_ts if existing.auto_close_status == FindingStatus.ACCEPTED_RISK.value else existing.resolved_at
+                            existing.is_regression = False
+                            auto_sorted.append({
+                                "finding_id": existing.id,
+                                "title": existing.title,
+                                "severity": existing.severity,
+                                "restored_status": existing.auto_close_status,
+                            })
+                            existing_count += 1
+                        else:
+                            # True regression — no prior auto_close_status
+                            existing.status = FindingStatus.OPEN.value
+                            existing.resolved_at = None
+                            existing.is_regression = True
+                            existing.regression_detected_at = now_ts
+                            new_count += 1  # Count as new since it re-appeared
 
-                        # Fire regression notification (best-effort)
-                        try:
-                            from app.services.notification_service import notify_regression
-                            repo_result_local = await db.execute(
-                                select(Repository).where(Repository.id == scan.repository_id)
-                            )
-                            repo_local = repo_result_local.scalar_one_or_none()
-                            repo_name = repo_local.github_full_name if repo_local else scan.repository_id
-                            import asyncio as _asyncio
-                            _asyncio.create_task(notify_regression(
-                                existing.id, existing.title, existing.severity, repo_name
-                            ))
-                        except Exception:
-                            pass
+                            # Fire regression notification (best-effort)
+                            try:
+                                from app.services.notification_service import notify_regression
+                                repo_result_local = await db.execute(
+                                    select(Repository).where(Repository.id == scan.repository_id)
+                                )
+                                repo_local = repo_result_local.scalar_one_or_none()
+                                repo_name = repo_local.github_full_name if repo_local else scan.repository_id
+                                import asyncio as _asyncio
+                                _asyncio.create_task(notify_regression(
+                                    existing.id, existing.title, existing.severity, repo_name
+                                ))
+                            except Exception:
+                                pass
                     else:
                         existing_count += 1
 
@@ -154,6 +173,15 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
 
             except Exception:
                 continue
+
+        # Create regression auto-sort alert if any findings were auto-restored
+        if auto_sorted:
+            db.add(RegressionAutoAlert(
+                repository_id=scan.repository_id,
+                scan_id=scan.id,
+                auto_sorted_count=len(auto_sorted),
+                findings_json=json.dumps(auto_sorted),
+            ))
 
         # Update scan stats
         scan.status = ScanStatus.COMPLETED.value
