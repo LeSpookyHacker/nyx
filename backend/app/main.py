@@ -147,9 +147,10 @@ async def _sla_breach_check_loop() -> None:
                     repo_name = repo.github_full_name if repo else finding.repository_id
 
                     if action in ("NOTIFY", "BOTH"):
-                        asyncio.create_task(notify_sla_breach(
+                        t = asyncio.create_task(notify_sla_breach(
                             finding.id, finding.title, finding.severity, repo_name, days_overdue
                         ))
+                        t.add_done_callback(lambda f: f.exception() if not f.cancelled() and f.exception() else None)
 
                     if action in ("JIRA", "BOTH"):
                         from app.models.jira_link import JiraLink
@@ -216,7 +217,8 @@ async def _scan_schedule_loop() -> None:
                         )
                         db.add(scan)
                         await db.flush()
-                        asyncio.create_task(process_scan_results(scan.id, {}))
+                        t = asyncio.create_task(process_scan_results(scan.id, {}))
+                        t.add_done_callback(lambda f: f.exception() if not f.cancelled() and f.exception() else None)
 
                     schedule.last_run_at = now
                     schedule.next_run_at = now + timedelta(hours=schedule.interval_hours)
@@ -361,6 +363,14 @@ async def lifespan(app: FastAPI):
     # Surface security misconfigurations at startup
     warn_insecure_config()
 
+    # Warn when SQLite is used in production — it has no access controls or encryption (M5)
+    if settings.ENVIRONMENT == "production" and "sqlite" in settings.DATABASE_URL.lower():
+        logger.warning(
+            "[SECURITY CONFIG] DATABASE_URL is SQLite in production — SQLite has no access controls, "
+            "no encryption at rest, and is not suitable for multi-user production deployments. "
+            "Set DATABASE_URL to a PostgreSQL connection string."
+        )
+
     await init_db()
     await _seed_api_key_from_env()
 
@@ -497,7 +507,8 @@ app.include_router(api_keys.router, prefix=API_PREFIX)
 
 @app.get("/health", tags=["system"])
 async def health():
-    return {"status": "ok", "service": "nyx"}
+    # Minimal response — do not expose service name or version (L5)
+    return {"status": "ok"}
 
 
 @app.get("/ready", tags=["system"])

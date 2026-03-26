@@ -661,8 +661,10 @@ The easiest way to integrate any repository with Nyx is to use the **Push Workfl
 | Setting | Value | Where |
 |---|---|---|
 | `NYX_URL` | Your Nyx public URL (no trailing slash) | Repository → Settings → Variables → Actions |
+| `NYX_REPO_ID` | Repository UUID from Nyx (Repositories page → copy ID) | Repository → Settings → Variables → Actions |
 | `NYX_API_KEY` | Your Nyx API key | Repository → Settings → Secrets → Actions |
 | `NYX_ZAP_TARGET` | Full URL to scan for DAST (optional) | Repository → Settings → Variables → Actions |
+| `NYX_DEBUG` | Set to `true` only when debugging ZAP output — gates the debug log step | Repository → Settings → Variables → Actions |
 | `SNYK_TOKEN` | Snyk API token — get one at https://snyk.io | Repository → Settings → Secrets → Actions |
 
 > [!TIP]
@@ -680,7 +682,7 @@ The generated workflow runs the full scanner suite:
 - **Hadolint** — Dockerfile best-practice linting (skipped if no Dockerfile present); binary is SHA-256 verified against the publisher's `.sha256` sidecar file before execution
 - Includes `chmod -R 777 .` before ZAP to avoid Docker permission errors
 - ZAP runs with `continue-on-error: true` so Trivy and SBOM always complete even if ZAP fails
-- Has the `repository_id` hardcoded — no need to look it up at runtime
+- Reads `NYX_REPO_ID` from a GitHub Actions variable (no hardcoded UUID) — set `vars.NYX_REPO_ID` in your repo settings
 
 > [!NOTE]
 > If `SNYK_TOKEN` is not set, the Snyk step is skipped gracefully — all other scanners still run.
@@ -1666,7 +1668,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | Area | Detail |
 |---|---|
 | **API keys** | Database-backed. Each key stores a SHA-256 hash — the plaintext is never persisted. Keys carry an optional expiry; expired keys are rejected automatically. `last_used_at` is updated on every authenticated request. |
-| **Key scopes** | Every API key is assigned a scope: `scanner` (submit scans only), `readonly` (read-only), `analyst` (update/suppress findings), or `admin` (full access). Scope is enforced at the endpoint level — a `scanner` key cannot suppress findings or create other keys even if it somehow obtained the URL. |
+| **Key scopes** | Every API key is assigned a scope: `scanner` (submit scans only), `readonly` (read-only), `analyst` (update/suppress findings, request remediations), or `admin` (full access). Scope is enforced at the endpoint level. **New keys default to `readonly` scope** — explicit escalation required. |
 | **Bootstrap key** | `NYX_API_KEY` in `.env` is seeded into the DB on first startup as the `bootstrap` key with `admin` scope. You can rotate it out via the Settings page without downtime. |
 | **Key rotation** | Create a new key via Settings → API Keys with the appropriate scope, distribute it, then deactivate the old key. Zero downtime; old key is rejected immediately after deactivation. |
 | **Key lifetime** | Set `API_KEY_MAX_LIFETIME_DAYS` to enforce a maximum key age. A daily background task emits log warnings and `api_key.expiry_warning` audit events for keys expiring within 7 days. |
@@ -1698,9 +1700,13 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 
 | Area | Detail |
 |---|---|
-| **Prompt injection protection** | File content passed to Claude is wrapped in structural delimiters (`<<<NYX_FILE_CONTENT_BEGIN>>>`). The system prompt instructs the model to treat content between markers as data only — not instructions. |
-| **Prompt storage** | The full rendered prompt is stored on each remediation record. Auditors can verify exactly what context Claude was given when generating a fix. |
+| **Prompt injection protection** | File content passed to Claude is wrapped in structural delimiters (`<<<NYX_FILE_CONTENT_BEGIN>>>`). The system prompt instructs the model to treat content between markers as data only — not instructions. Scanner-sourced fields (title, rule ID, CWE IDs, severity, etc.) are validated and sanitized before prompt interpolation. CWE IDs are validated against the `CWE-\d+` format; invalid values are dropped. |
+| **Diff scope validation** | AI-generated diffs are checked to ensure they only touch the expected file (`finding.file_path`). Diffs that touch CI/CD configuration (`.github/`), dependency manifests (`requirements.txt`, `package.json`), Dockerfiles, or `.env` files are rejected before PR creation. |
+| **Prompt storage** | The full rendered prompt is stored on each remediation record (DB-only; not exposed via API). Auditors can query the DB to verify exactly what context Claude was given. |
+| **ai_prompt not in API responses** | The AI prompt is stored in the database for audit purposes but excluded from API responses to prevent information disclosure (e.g., internal path structures or prompt engineering patterns). |
 | **Diff hash** | A SHA-256 hash of `ai_fix_diff` is stored in `ai_diff_sha256`. Any post-hoc modification of the stored diff breaks this hash, making tampering detectable. |
+| **Analyst scope required** | Requesting AI remediations requires `analyst` or `admin` scope — a `scanner` or `readonly` key cannot trigger AI fix generation or PR creation. |
+| **PR body sanitization** | All scanner-sourced fields included in the GitHub PR body (title, rule ID, CWE, file path) are sanitized to strip markdown injection characters (`|`, `` ` ``, newlines) before submission to GitHub. |
 
 ### Suppression Governance
 
@@ -1716,18 +1722,26 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 
 | Area | Detail |
 |---|---|
-| **SSRF protection** | Outbound notification webhook calls (`NOTIFICATION_WEBHOOK_URL`) are checked against a blocklist of private IP ranges (RFC-1918, loopback, link-local, AWS metadata endpoint `169.254.169.254`) before the HTTP request is made. |
+| **SSRF protection** | Outbound webhook calls (`NOTIFICATION_WEBHOOK_URL`) and Jira API calls (`JIRA_URL`) are checked against a blocklist of private IP ranges (RFC-1918, loopback, link-local, AWS metadata `169.254.169.254`) before any HTTP request is made. |
+| **Rate limiting** | Uses direct TCP peer address (`request.client.host`) — not `X-Forwarded-For` — preventing clients from spoofing their IP to bypass per-IP limits. Export: 10/min. Bulk update: 30/min. Webhook receivers: 60/min. |
 | **Request size limit** | Incoming request bodies are capped at 50 MB. The import endpoint enforces this to prevent OOM attacks via oversized scanner payloads. |
-| **Rate limiting** | Export endpoint: 10 requests/minute. Bulk status update: 30 requests/minute. Webhook receivers: 60 requests/minute. |
 | **Security headers** | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, and a strict `Content-Security-Policy: default-src 'none'` are set on all API responses. |
 | **HTTPS enforcement** | Set `HTTPS_ONLY=true` to redirect all HTTP traffic and add `Strict-Transport-Security: max-age=31536000; includeSubDomains`. |
 | **CORS** | Set `CORS_ORIGINS_STR` to exactly your frontend domain in production — `http://localhost:3000` is the default and must not be left in place. |
+| **BREACH mitigation** | gzip compression is disabled on `/api/` proxy routes in nginx. Only static asset types (`text/css`, `application/javascript`, etc.) are gzip-compressed. This eliminates the BREACH attack surface on JSON API responses over HTTPS. |
+| **Container hardening** | The backend container starts briefly as root (only to `chown` the data volume), then drops to the `nyx` user via `gosu`. `no-new-privileges: true` is set in docker-compose to prevent post-drop privilege re-escalation. |
+| **API docs hidden in production** | `/docs` and `/redoc` are only served when `ENVIRONMENT != production`. This prevents CSP relaxation and Swagger UI CDN asset loading in production environments. |
 
 ### Supply Chain
 
 | Area | Detail |
 |---|---|
 | **CI tool checksums** | The generated `nyx-scan.yml` workflow verifies SHA-256 checksums for Gitleaks (against the published `checksums.txt`) and Hadolint (against the `.sha256` sidecar file) before executing either binary. A checksum mismatch fails the CI step with an explicit error. |
+| **Trivy action pinned to SHA** | `aquasecurity/trivy-action` is pinned to a specific commit SHA (`@a20de5420d57c4102486cdd9349b532415b34d38`) instead of `@master`, preventing supply chain attacks via a compromised upstream branch. |
+| **Dynamic repo ID** | The `NYX_REPO_ID` used in `nyx-scan.yml` is read from a GitHub Actions variable (`vars.NYX_REPO_ID`) rather than hardcoded — set this in your repo's **Settings → Variables → Actions**. |
+| **Debug output gated** | The ZAP debug output step (which prints scan finding counts) is only active when `vars.NYX_DEBUG == 'true'`. Set this variable only when actively debugging. |
+| **Secrets detection** | A `.gitleaks.toml` configuration is included in the repo. Install gitleaks and add a pre-commit hook: `echo '#!/bin/sh\ngitleaks protect --staged' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit` |
+| **Dependency upper bounds** | All Python dependencies in `requirements.txt` now have both lower and upper version bounds (e.g., `fastapi>=0.115.0,<1.0.0`) to prevent silent major-version upgrades. For production, generate a pinned lockfile: `pip install pip-tools && pip-compile requirements.txt`. |
 | **GitHub Token** | Store in `.env` only — never commit. Rotate annually or on suspected exposure. Use GitHub Apps for production deployments at scale (higher rate limits, installation-scoped access). |
 | **JIRA Token** | Treat as a password — it has write access to your Jira projects. Rotate via Atlassian account settings if exposed. |
 

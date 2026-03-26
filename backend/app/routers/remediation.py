@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import FindingStatus, RemediationStatus
 from app.core.limiter import limiter
-from app.core.security import require_api_key
+from app.core.security import require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.database import get_db
 from app.models.finding import Finding
 from app.models.remediation import Remediation
@@ -110,10 +110,10 @@ async def request_remediation(
     body: RemediationRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Request AI-powered fix for a finding. AI generation runs in background."""
-    # Verify finding exists
+    # Verify finding exists — load with repository for ownership audit (H6)
     finding_result = await db.execute(select(Finding).where(Finding.id == body.finding_id))
     finding = finding_result.scalar_one_or_none()
     if not finding:
@@ -131,9 +131,11 @@ async def request_remediation(
     finding.status = FindingStatus.IN_REMEDIATION.value
 
     await db.flush()
+    # Include repository_id in audit trail for ownership traceability (H6)
     await log_event(db, actor=_key, action="remediation.requested", resource_type="remediation",
         resource_id=remediation.id,
-        metadata={"finding_id": body.finding_id, "requested_by": body.requested_by})
+        metadata={"finding_id": body.finding_id, "requested_by": body.requested_by,
+                  "repository_id": finding.repository_id})
     await db.commit()
     await db.refresh(remediation)
 
@@ -361,6 +363,53 @@ async def get_pr_status(
         return {"status": rem.status, "pr": None, "error": "Failed to fetch PR status from GitHub"}
 
 
+_BLOCKED_DIFF_PATHS = (
+    ".github/",
+    ".gitlab-ci",
+    "Makefile",
+    "Dockerfile",
+    "docker-compose",
+    ".env",
+    "requirements.txt",
+    "package.json",
+    "package-lock.json",
+    "pyproject.toml",
+    "setup.py",
+    "setup.cfg",
+)
+
+
+def _validate_diff_scope(diff: str, expected_file_path: str) -> None:
+    """
+    Verify the AI-generated diff only modifies the expected file (H5).
+    Blocks diffs that touch CI configuration, dependency files, or secrets files.
+    Raises ValueError if the diff scope is outside allowed bounds.
+    """
+    import re as _re
+    if not diff:
+        return
+    # Extract filenames from diff headers (--- a/path and +++ b/path)
+    touched = set(_re.findall(r"^(?:---|\+\+\+) [ab]/(.+)$", diff, _re.MULTILINE))
+    for path in touched:
+        path_lower = path.lower()
+        for blocked in _BLOCKED_DIFF_PATHS:
+            if path_lower.startswith(blocked.lower()) or path_lower == blocked.lower():
+                raise ValueError(
+                    f"AI-generated diff touches a blocked sensitive file: {path!r}. "
+                    "Manual review required for changes to CI/CD, dependency, or configuration files."
+                )
+    if expected_file_path:
+        # Normalize: strip leading slashes for comparison
+        expected = expected_file_path.lstrip("/")
+        for path in touched:
+            normalized = path.lstrip("/")
+            if normalized != expected:
+                raise ValueError(
+                    f"AI-generated diff touches unexpected file {path!r} "
+                    f"(expected only {expected_file_path!r}). Aborting PR creation."
+                )
+
+
 async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assignee: str | None = None) -> None:
     """Background task: apply unified diff and create GitHub PR."""
     from app.database import AsyncSessionLocal
@@ -388,6 +437,9 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
                 finding.file_path,
                 repo.default_branch,
             )
+
+            # Validate diff only touches the expected file (H5 — excessive AI agency)
+            _validate_diff_scope(rem.ai_fix_diff, finding.file_path)
 
             # Apply the diff
             fixed_content = github_service.apply_unified_diff(file_content, rem.ai_fix_diff)
@@ -467,30 +519,54 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
         await db.commit()
 
 
+def _sanitize_md(value: str | None, max_len: int = 500) -> str:
+    """Strip markdown control sequences and limit length for PR body fields (M3)."""
+    if not value:
+        return ""
+    # Remove backticks and pipe characters that could break table formatting
+    # and newlines that could inject new table rows or headings
+    safe = value.replace("`", "'").replace("|", "∣").replace("\r", "").replace("\n", " ")
+    return safe[:max_len]
+
+
 def _build_pr_body(finding: Finding, rem: Remediation) -> str:
     try:
+        import re as _re
+        _CWE_RE = _re.compile(r"^CWE-\d+$")
         cwe_list = json.loads(finding.cwe_ids or "[]")
-        cwe_str = " ".join(cwe_list)
+        cwe_str = " ".join(c for c in cwe_list if isinstance(c, str) and _CWE_RE.match(c))
     except Exception:
-        cwe_str = finding.cwe_ids or ""
+        cwe_str = ""
 
-    return f"""## 🌑 Nyx AI Security Remediation
+    # Sanitize all scanner-sourced fields before inclusion in GitHub PR body (M3)
+    safe_title = _sanitize_md(finding.title, 200)
+    safe_severity = _sanitize_md(finding.severity, 20)
+    safe_scanner = _sanitize_md(finding.scanner, 50)
+    safe_rule_id = _sanitize_md(finding.rule_id, 100)
+    safe_file = _sanitize_md(finding.file_path, 300)
+    safe_line = str(finding.line_start or "")
+    safe_cwe = _sanitize_md(cwe_str, 200)
+    safe_explanation = _sanitize_md(rem.ai_explanation, 2000) if rem.ai_explanation else "_No explanation available._"
+    safe_model = _sanitize_md(rem.ai_model, 50)
 
-> This pull request was automatically generated by [Nyx](https://github.com/your-org/nyx), your security findings dashboard.
+    return f"""## Nyx AI Security Remediation
+
+> This pull request was automatically generated by Nyx, your security findings dashboard.
+> **This PR requires human review before merging.** Do not enable auto-merge without reviewing the diff.
 
 ### Vulnerability Summary
 | Field | Value |
 |-------|-------|
-| **Title** | {finding.title} |
-| **Severity** | {finding.severity} |
-| **Scanner** | {finding.scanner} |
-| **Rule** | `{finding.rule_id}` |
-| **File** | `{finding.file_path}:{finding.line_start}` |
-| **CWE** | {cwe_str} |
+| **Title** | {safe_title} |
+| **Severity** | {safe_severity} |
+| **Scanner** | {safe_scanner} |
+| **Rule** | {safe_rule_id} |
+| **File** | {safe_file}:{safe_line} |
+| **CWE** | {safe_cwe} |
 | **Priority Score** | {finding.priority_score:.1f}/100 |
 
 ### Explanation
-{rem.ai_explanation or '_No explanation available._'}
+{safe_explanation}
 
 ### AI Confidence
 {f"{rem.ai_confidence * 100:.0f}%" if rem.ai_confidence else "N/A"}
@@ -502,5 +578,5 @@ def _build_pr_body(finding: Finding, rem: Remediation) -> str:
 - [ ] The fix does not introduce new vulnerabilities
 
 ---
-🤖 Generated by Nyx AI (model: `{rem.ai_model}`) | [View in Dashboard]({finding.fix_pr_url or '#'})
+Generated by Nyx AI (model: {safe_model})
 """

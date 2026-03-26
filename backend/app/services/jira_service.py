@@ -318,7 +318,47 @@ def _require_config(settings: Any) -> None:
         raise ValueError(f"JIRA not configured. Missing: {', '.join(missing)}")
 
 
+def _validate_jira_url(url: str) -> None:
+    """
+    SSRF guard: reject JIRA_URL values that point at private/loopback IPs (H3).
+    Mirrors the same check in notification_service._is_ssrf_safe().
+    """
+    import ipaddress
+    from urllib.parse import urlparse
+
+    _BLOCKED = [
+        ipaddress.ip_network("127.0.0.0/8"),
+        ipaddress.ip_network("10.0.0.0/8"),
+        ipaddress.ip_network("172.16.0.0/12"),
+        ipaddress.ip_network("192.168.0.0/16"),
+        ipaddress.ip_network("169.254.0.0/16"),  # AWS metadata endpoint
+        ipaddress.ip_network("::1/128"),
+        ipaddress.ip_network("fc00::/7"),
+        ipaddress.ip_network("fe80::/10"),
+    ]
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"JIRA_URL must use http or https scheme, got: {parsed.scheme!r}")
+        host = parsed.hostname
+        if not host:
+            raise ValueError("JIRA_URL has no hostname")
+        try:
+            addr = ipaddress.ip_address(host)
+            if any(addr in net for net in _BLOCKED):
+                raise ValueError(f"JIRA_URL resolves to a blocked private/loopback address: {host}")
+        except ValueError as e:
+            if "blocked" in str(e) or "JIRA_URL" in str(e):
+                raise
+            # Hostname (not a raw IP) — allowed at code level; pair with egress firewall
+    except ValueError:
+        raise
+    except Exception as e:
+        raise ValueError(f"JIRA_URL validation error: {e}") from e
+
+
 def _client(settings: Any) -> httpx.AsyncClient:
+    _validate_jira_url(settings.JIRA_URL)
     return httpx.AsyncClient(
         base_url=settings.JIRA_URL,
         auth=(settings.JIRA_USER_EMAIL, settings.JIRA_API_TOKEN),

@@ -33,7 +33,7 @@ jobs:
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
             --arg scanner "SEMGREP" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d semgrep.json \
@@ -64,7 +64,7 @@ jobs:
           if [ "$COUNT" -eq 0 ]; then echo "✓ Gitleaks: no secrets found"; exit 0; fi
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
             --arg scanner "GITLEAKS" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d gitleaks.json \
@@ -96,7 +96,7 @@ jobs:
           if [ "$COUNT" -eq 0 ]; then echo "✓ Hadolint: no issues found"; exit 0; fi
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
             --arg scanner "HADOLINT" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d hadolint.json \
@@ -131,7 +131,7 @@ jobs:
           if [ -z "$SNYK_TOKEN" ]; then exit 0; fi
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
             --arg scanner "SNYK" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d snyk.json \
@@ -152,6 +152,7 @@ jobs:
       - name: Run ZAP Baseline Scan
         if: vars.NYX_ZAP_TARGET != ''
         continue-on-error: true  # ZAP failure must not abort Trivy/Gitleaks/Hadolint steps
+        # Pinned to v0.14.0 tag — upgrade to a commit SHA for immutable pinning (M6)
         uses: zaproxy/action-baseline@v0.14.0
         with:
           target: ${{ vars.NYX_ZAP_TARGET }}
@@ -163,7 +164,8 @@ jobs:
           fail_action: false
 
       - name: Debug — show ZAP output
-        if: always() && vars.NYX_ZAP_TARGET != ''
+        # Gated behind NYX_DEBUG to prevent leaking scan data in workflow logs (L2)
+        if: always() && vars.NYX_ZAP_TARGET != '' && vars.NYX_DEBUG == 'true'
         run: |
           if [ -f zap.json ]; then
             echo "zap.json exists, size=$(wc -c < zap.json) bytes"
@@ -186,7 +188,7 @@ jobs:
             exit 0
           fi
           jq -n \
-            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
             --arg scanner "ZAP" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d zap.json \
@@ -201,7 +203,8 @@ jobs:
       # ── Trivy (SCA + IaC + Container) ────────────────────────────────────────
       - name: Run Trivy
         if: always()  # Run even if ZAP failed
-        uses: aquasecurity/trivy-action@master
+        # Pinned to commit SHA instead of @master to prevent supply chain attacks (H2)
+        uses: aquasecurity/trivy-action@a20de5420d57c4102486cdd9349b532415b34d38  # v0.20.0
         with:
           scan-type: "fs"
           format: "json"
@@ -216,7 +219,7 @@ jobs:
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "7b2c2390-caa8-49b1-a1e2-dcd9f6630b68" \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
             --arg scanner "TRIVY" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d trivy.json \
@@ -244,7 +247,7 @@ jobs:
             --arg ref "$GITHUB_REF_NAME" \
             --slurpfile s sbom-cdx.json \
             '{"git_ref":$ref,"sbom":$s[0]}' \
-          | curl -sf -X POST "$NYX_URL/api/v1/sbom/repositories/7b2c2390-caa8-49b1-a1e2-dcd9f6630b68/submit" \
+          | curl -sf -X POST "$NYX_URL/api/v1/sbom/repositories/${{ vars.NYX_REPO_ID }}/submit" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
               -H "ngrok-skip-browser-warning: true" \

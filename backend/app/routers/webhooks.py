@@ -71,10 +71,12 @@ async def github_webhook(
         repo = repo_result.scalar_one_or_none()
 
         if not repo:
-            return {"status": "ignored", "reason": "repository not registered with Nyx"}
+            # Return identical response regardless of whether repo exists (M8 — enumeration prevention)
+            return {"status": "ignored", "reason": "webhook not accepted"}
 
         if not repo.webhook_secret:
-            return {"status": "ignored", "reason": "no webhook secret configured"}
+            # Same response as "repo not found" to avoid confirming repo existence (M8)
+            return {"status": "ignored", "reason": "webhook not accepted"}
 
         # Verify HMAC signature using per-repo secret
         try:

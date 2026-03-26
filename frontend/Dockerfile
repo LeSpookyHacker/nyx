@@ -33,17 +33,20 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # Proxy API calls to backend
+    # Proxy API calls to backend — gzip disabled on API routes (L3 BREACH mitigation)
     location /api/ {
         proxy_pass http://backend:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        gzip off;
     }
 
-    # Gzip
+    # Gzip for static assets only (not JSON API responses)
     gzip on;
-    gzip_types text/plain text/css application/json application/javascript text/xml;
+    gzip_types text/plain text/css application/javascript text/xml;
+    # Explicitly exclude JSON — compressed JSON over HTTPS is vulnerable to BREACH
+    gzip_disable "application/json";
 }
 EOF
 

@@ -321,7 +321,7 @@ async def suppress_finding(
             },
             ip_address=get_client_ip(request),
         )
-        asyncio.create_task(notify_critical_suppression(
+        _task = asyncio.create_task(notify_critical_suppression(
             finding_id=finding_id,
             title=finding.title,
             severity=finding.severity,
@@ -329,6 +329,7 @@ async def suppress_finding(
             actor=_key,
             reason=body.reason,
         ))
+        _task.add_done_callback(lambda f: f.exception() if not f.cancelled() and f.exception() else None)
 
     # Learn suppression pattern — upsert by rule_id + scanner + repository_id
     existing_pattern = await db.execute(

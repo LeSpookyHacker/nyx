@@ -1,0 +1,29 @@
+# Gitleaks configuration for Nyx — prevents secrets from being committed (C1)
+# Install: brew install gitleaks  OR  cargo install gitleaks
+# Run manually: gitleaks detect --source .
+# Add as pre-commit hook:
+#   echo '#!/bin/sh\ngitleaks protect --staged' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+
+title = "Nyx gitleaks config"
+
+[extend]
+# Inherit gitleaks' built-in ruleset (covers GitHub tokens, Anthropic keys, etc.)
+useDefault = true
+
+[[rules]]
+id = "nyx-api-key"
+description = "Nyx API key"
+regex = '''nyx-[a-zA-Z0-9\-_]{8,}'''
+tags = ["nyx", "api-key"]
+
+[allowlist]
+description = "Allow placeholder values in example files"
+paths = [
+    '''.env\.example$''',
+    '''README\.md$''',
+]
+regexes = [
+    '''ghp_xxxx''',
+    '''sk-ant-xxxx''',
+    '''nyx-your-secret-key-here''',
+]

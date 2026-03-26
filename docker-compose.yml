@@ -28,6 +28,9 @@ services:
     restart: unless-stopped
     labels:
       - autoheal=true
+    # Prevent privilege escalation after entrypoint drops to nyx user (H4)
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s

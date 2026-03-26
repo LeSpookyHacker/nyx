@@ -163,15 +163,20 @@ async def generate_fix(finding: Finding, file_content: str, engineer_context: st
     raise AIServiceError(f"AI fix generation failed after {settings.AI_MAX_RETRIES} retries: {last_error}")
 
 
+_CWE_ID_RE = re.compile(r"^CWE-\d+$")
+
+
 def _build_fix_prompt(finding: Finding, file_content: str, owasp_info: str, engineer_context: str) -> str:
     cwe_str = ""
     try:
         cwe_list = json.loads(finding.cwe_ids or "[]")
-        cwe_str = ", ".join(cwe_list) if cwe_list else "Unknown"
+        # Validate each CWE ID matches the expected format before interpolation (C2)
+        safe_cwes = [c for c in cwe_list if isinstance(c, str) and _CWE_ID_RE.match(c)]
+        cwe_str = _safe(", ".join(safe_cwes) if safe_cwes else "Unknown", 200)
     except Exception:
-        cwe_str = finding.cwe_ids or "Unknown"
+        cwe_str = ""
 
-    # Sanitize all finding fields sourced from scanners before prompt interpolation (C-2)
+    # Sanitize all finding fields sourced from scanners before prompt interpolation (C2)
     safe_title = _safe(finding.title, 200)
     safe_scanner = _safe(finding.scanner, 50)
     safe_rule_id = _safe(finding.rule_id, 100)

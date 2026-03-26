@@ -55,7 +55,8 @@ class RemediationResponse(BaseModel):
     ai_fix_summary: Optional[str] = None
     ai_confidence: Optional[float] = None
     ai_model: Optional[str] = None
-    ai_prompt: Optional[str] = None
+    # ai_prompt is intentionally excluded from API responses (M4 — information disclosure).
+    # The prompt is stored in the DB for audit non-repudiation but not returned to clients.
     ai_diff_sha256: Optional[str] = None
     pr_number: Optional[int] = None
     pr_url: Optional[str] = None
