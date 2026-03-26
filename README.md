@@ -107,7 +107,8 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level |
 | 🚨 | **Regression Alerts** | Dashboard banner and KPI card for recently re-appeared findings |
 | 🔔 | **Unified Alert Bell** | Top-bar notification bell shows two tabs: SBOM component change alerts and Regression Auto-Sort alerts. Each tab has its own unread badge contributing to the total bell count |
-| 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action across findings, repos, remediations, scans, and SBOMs |
+| 🔑 | **API Key Management** | Create, rotate, and revoke database-backed API keys from the Settings page. Each key carries a name, optional expiry, and last-used timestamp. The bootstrap key is seeded from `NYX_API_KEY` automatically on first start |
+| 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action across findings, repos, remediations, scans, SBOMs, SLA policies, scan schedules, JIRA tickets, and API key lifecycle events |
 
 ---
 
@@ -151,6 +152,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
                    │  │  SLAPolicies · Schedules     │ │
                    │  │  SuppressionPatterns · SBOM  │ │
                    │  │  RegressionAutoAlerts        │ │
+                   │  │  ApiKeys                     │ │
                    │  └─────────────────────────────┘ │
                    └───────────────┬─────────────────┘
                                    │
@@ -205,26 +207,29 @@ cd nyx
 cp .env.example .env
 ```
 
-Edit `.env` with your credentials:
+Edit `.env` — at minimum fill in these four values:
 
 ```bash
 # Required — AI fix generation
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Required — GitHub integration
+# Required — GitHub integration (see GitHub Setup for required scopes)
 GITHUB_TOKEN=ghp_...
 GITHUB_WEBHOOK_ENDPOINT=https://your-public-url.example.com
 
-# Optional — Authentication (strongly recommended in production)
-NYX_API_KEY=your-secret-key
+# Required in production — the API key every client must send in X-API-Key
+# On first startup Nyx seeds this value as the "bootstrap" DB key automatically.
+# You can then rotate or add new keys from the Settings page without restarting.
+NYX_API_KEY=your-secret-key-here
 ```
 
 ```bash
 # 3. Start all services
 docker compose up -d
 
-# 4. Verify both containers are healthy
+# 4. Verify containers are healthy and the bootstrap key was seeded
 docker compose ps
+docker compose logs backend | grep -i "seed\|startup complete"
 ```
 
 | Service | URL |
@@ -232,6 +237,13 @@ docker compose ps
 | **Dashboard** | http://localhost:3000 |
 | **Backend API** | http://localhost:8000 |
 | **Interactive API Docs** | http://localhost:8000/docs |
+| **Settings / API Keys** | http://localhost:3000 → Settings (gear icon) |
+
+> [!TIP]
+> After the first start, go to **Settings → API Keys** to create purpose-specific keys for CI/CD pipelines and rotate or deactivate the bootstrap key when you're ready.
+
+> [!WARNING]
+> If `NYX_API_KEY` is left blank, the API is unauthenticated — any request is accepted. This is fine for local evaluation but **must not be deployed publicly without a key set**.
 
 ---
 
@@ -650,8 +662,8 @@ The generated workflow runs the full scanner suite:
 - **Trivy** — SCA vulnerability scan + CycloneDX SBOM submission
 - **OWASP ZAP** — DAST baseline scan (only if `NYX_ZAP_TARGET` is set; uses `-m 3` spider minutes)
 - **Snyk** — SCA dependency vulnerabilities (requires `SNYK_TOKEN`)
-- **Gitleaks** — Secrets detection across the full commit history
-- **Hadolint** — Dockerfile best-practice linting (skipped if no Dockerfile present)
+- **Gitleaks** — Secrets detection across the full commit history; binary is SHA-256 verified against the publisher's checksums file before execution
+- **Hadolint** — Dockerfile best-practice linting (skipped if no Dockerfile present); binary is SHA-256 verified against the publisher's `.sha256` sidecar file before execution
 - Includes `chmod -R 777 .` before ZAP to avoid Docker permission errors
 - ZAP runs with `continue-on-error: true` so Trivy and SBOM always complete even if ZAP fails
 - Has the `repository_id` hardcoded — no need to look it up at runtime
@@ -810,7 +822,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NYX_API_KEY` | _(blank)_ | Master API key. Leave blank to disable auth (dev only) |
+| `NYX_API_KEY` | _(blank)_ | Bootstrap API key. On first startup Nyx registers this value in the database as the `bootstrap` key. All subsequent key management (create / rotate / revoke) is done through the Settings UI or `/api/v1/api-keys`. Leave blank to disable auth in development only — **never deploy without this set in production**. |
 | `CORS_ORIGINS_STR` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed CORS origins |
 | `HTTPS_ONLY` | `false` | Set `true` in production to enforce HTTPS + HSTS |
 | `ENVIRONMENT` | `development` | Set `production` to enable stricter security defaults |
@@ -951,8 +963,8 @@ Each finding has a dedicated page:
 - **Remediation Guidance** — Static guidance from the scanner or Nyx
 - **Engineer Notes** — Free-text notes field for context, workarounds, or investigation notes
 - **Mark Fixed** — Manually mark a finding as fixed (e.g. after an out-of-band fix)
-- **Accept Risk** — Mark as accepted risk; sets `auto_close_status` so future regressions are auto-sorted
-- **Suppress** — Suppress with a required reason; creates a learned pattern for future similar findings; sets `auto_close_status` so future regressions are auto-sorted
+- **Accept Risk** — Mark as accepted risk with a required expiry date (max 180 days). Nyx automatically reopens the finding when the expiry passes, forcing periodic re-review. Sets `auto_close_status` so future regressions are auto-sorted
+- **Suppress** — Suppress with a required reason. CRITICAL and HIGH findings require a minimum 50-character reason to prevent drive-by suppression. Creates a learned pattern for future similar findings; sets `auto_close_status` so future regressions are auto-sorted
 - **Sidebar — Details** — Rule ID, category, priority score, CVSS, EPSS, CVE link, first seen, SLA deadline
 - **Sidebar — Assignment** — Assign to an engineer (email/username); syncs to linked JIRA ticket
 - **Sidebar — Suppression Suggestion** — If this rule has been suppressed before, shows count and previous reason
@@ -967,14 +979,16 @@ Each finding has a dedicated page:
 The remediation flow keeps engineers in control at every step:
 
 1. **Request Fix** — Engineer clicks "Request AI Fix" on any OPEN finding
-2. **Generation** — Claude analyzes the finding, code snippet, and context; generates a targeted code fix
+2. **Generation** — Claude analyzes the finding, code snippet, and context; generates a targeted code fix. The exact prompt and a SHA-256 hash of the resulting diff are stored on the remediation record for non-repudiation
 3. **Review** — Engineer sees a diff view of the proposed change with an AI explanation
 4. **Approve** — Nyx creates the GitHub PR and a JIRA ticket with full fix details
 5. **Merge** — Developer merges the PR; GitHub webhook fires; finding → FIXED; JIRA → Done
 6. **Regenerate** — If the first fix is inadequate, regenerate with additional context
 
 > [!IMPORTANT]
-> The AI service includes prompt injection protection to prevent malicious finding content from altering fix instructions.
+> **Prompt injection protection:** File content passed to Claude is wrapped in structural delimiters (`<<<NYX_FILE_CONTENT_BEGIN>>>`). The system prompt instructs Claude to treat content between these markers as data only — not instructions. This prevents a malicious finding (e.g., a secret containing `IGNORE PREVIOUS INSTRUCTIONS`) from hijacking the fix generation.
+>
+> **Diff integrity:** The SHA-256 hash stored in `ai_diff_sha256` lets auditors verify that the diff shown in the UI matches exactly what was approved — database tampering with the diff would break the hash.
 
 </details>
 
@@ -1042,12 +1056,34 @@ The SBOM page gives per-repository software supply chain visibility:
 </details>
 
 <details>
+<summary><strong>API Key Management</strong></summary>
+
+Nyx manages API keys in the database rather than relying solely on a single env-var secret. This enables key rotation, per-consumer keys, expiry enforcement, and a complete audit trail — without restarting the service.
+
+**Settings page → API Keys:**
+
+- **Key list** — Shows name, active status, expiry date, last-used timestamp, and the actor that created each key. The plaintext key and hash are never shown after creation.
+- **Create key** — Enter a name (e.g., `github-actions-prod`) and an optional expiry (1–730 days). The plaintext key is returned once — copy it immediately.
+- **Deactivate** — Soft-deletes the key. It is rejected on the next request and the deactivation is recorded in the audit log.
+
+**Bootstrap flow:**
+On first startup, Nyx automatically registers `NYX_API_KEY` from `.env` as the `bootstrap` key. This means zero-touch setup: copy `.env.example`, set the key, start — it just works. Once running, you can create a dedicated key for CI/CD and deactivate `bootstrap`.
+
+**Recommended key hygiene:**
+1. Create one key per consumer: `github-actions`, `local-dev`, `siem-integration`
+2. Set appropriate expiry dates (e.g., 365 days for CI keys)
+3. Deactivate the bootstrap key after creating purpose-specific replacements
+4. Review `last_used_at` monthly — deactivate any keys not seen in 30+ days
+
+</details>
+
+<details>
 <summary><strong>Audit Log</strong></summary>
 
-Every action taken in Nyx is recorded in an immutable audit log:
+Every action taken in Nyx is recorded in an immutable audit log. Each entry captures the actor (key name), action, resource type and ID, IP address, and full JSON metadata.
 
-- **Covered events** — Finding status changes, suppression, assignment, AI fix requests/approvals/rejections/regenerations, JIRA ticket creation/sync, scan imports, repository registration/deletion, workflow pushes, SBOM generation triggers
-- **Filter bar** — Search by text (searches action name and metadata), filter by action prefix (finding, remediation, repository, scan, sbom), resource type, and date range
+- **Covered events** — Finding status changes, suppression (with reason), unsuppression, notes updates, assignment, bulk status updates, AI fix requests/approvals/rejections/regenerations, JIRA ticket lifecycle, scan imports, repository registration/updates/deletion, workflow pushes, SBOM submissions and alerts, SLA policy and schedule CRUD, API key creation and deactivation, regression auto-sort alerts
+- **Filter bar** — Search by text (searches action name and metadata), filter by action prefix (finding, remediation, repository, scan, sbom, api_key, sla_policy, schedule), resource type, and date range
 - **Expandable rows** — Click any row to expand the full JSON metadata for that event
 - **Color coding** — Actions are color-coded by type for quick visual scanning
 - **Download** — Export up to 10,000 entries as CSV or JSON for ingestion into a SIEM or external log management system
@@ -1227,6 +1263,14 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | `GET` | `/regression-alerts` | List regression auto-sort alerts; pass `unacknowledged_only=true` for badge count |
 | `POST` | `/regression-alerts/{id}/acknowledge` | Acknowledge a specific alert |
 | `POST` | `/regression-alerts/acknowledge-all` | Acknowledge all unacknowledged alerts |
+
+**API Keys**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api-keys` | List all API keys — never returns the plaintext key or hash |
+| `POST` | `/api-keys` | Create a new key; body: `{"name": "ci-pipeline", "expires_in_days": 365}`. Returns the plaintext key **once** — store it immediately |
+| `DELETE` | `/api-keys/{key_id}` | Deactivate a key (soft delete — preserves audit trail). Rejected immediately on next use |
 
 </details>
 
@@ -1539,6 +1583,21 @@ Nyx inspects files in the repository via the GitHub API. If the detection misses
 </details>
 
 <details>
+<summary><strong>API authentication returning 401</strong></summary>
+
+1. Confirm the key you are sending matches one in **Settings → API Keys** (active, not expired)
+2. Check that you are sending `X-API-Key: <value>` as a header — not a query parameter or body field
+3. Inspect backend logs for the AUTH_FAILURE line:
+   ```bash
+   docker compose logs backend | grep AUTH_FAILURE
+   ```
+   The log line shows `reason=missing|invalid|expired` and the client IP.
+4. If the key was recently deactivated, create a new one from the Settings page.
+5. If you have no active keys and cannot authenticate, temporarily set a new `NYX_API_KEY` in `.env` and restart — Nyx will seed it as a new bootstrap key if no active keys exist.
+
+</details>
+
+<details>
 <summary><strong>High memory / CPU usage</strong></summary>
 
 For repositories with thousands of findings:
@@ -1556,15 +1615,61 @@ For repositories with thousands of findings:
 
 ## Security Considerations
 
-| Area | Guidance |
+Nyx is designed to be deployed in security-sensitive environments and holds data that is directly relevant to your risk posture. The controls below describe the security measures built into Nyx and the configuration steps required to activate them in production.
+
+### Authentication
+
+| Area | Detail |
 |---|---|
-| **API Key** | Always set `NYX_API_KEY` in production. Without it, the API is unauthenticated. |
-| **GitHub Token** | Store in `.env` only — never commit it. Rotate annually. Use GitHub Apps for better security at scale. |
-| **JIRA Token** | Treat as a password — it has write access to your Jira projects. |
-| **Webhook Secrets** | Each repository gets a unique HMAC webhook secret; Nyx verifies all incoming webhook signatures. |
-| **Prompt Injection** | The AI service sanitizes finding content to prevent malicious scanner output from altering fix instructions. |
-| **CORS** | Set `CORS_ORIGINS_STR` to only your frontend domain in production. |
-| **HTTPS** | Set `HTTPS_ONLY=true` in production to enforce HTTPS and add security headers (HSTS, CSP, X-Frame-Options). |
+| **API keys** | Database-backed. Each key stores a SHA-256 hash — the plaintext is never persisted. Keys carry an optional expiry; expired keys are rejected automatically. `last_used_at` is updated on every authenticated request. |
+| **Bootstrap key** | `NYX_API_KEY` in `.env` is seeded into the DB on first startup as the `bootstrap` key. You can rotate it out via the Settings page without downtime. |
+| **Key rotation** | Create a new key via Settings → API Keys, distribute it, then deactivate the old key. Zero downtime; old key is rejected immediately after deactivation. |
+| **Auth failures** | Every failed authentication attempt is logged with the client IP, endpoint path, and failure reason (`missing` / `invalid` / `expired`). Forward backend logs to your SIEM to alert on brute-force attempts. |
+| **Dev mode** | If `NYX_API_KEY` is blank, the API is unauthenticated and logs a warning per request. Never leave this blank in any internet-reachable deployment. |
+
+### Webhook Security
+
+| Area | Detail |
+|---|---|
+| **Per-repo HMAC** | Each registered repository gets a unique 32-byte hex webhook secret. Nyx verifies the `X-Hub-Signature-256` header on every delivery before processing the payload. |
+| **Pre-auth global HMAC** | Optionally set `NYX_WEBHOOK_SECRET` for a global pre-check before any database lookup, preventing unauthenticated repository enumeration. |
+| **Replay deduplication** | GitHub's `X-GitHub-Delivery` ID is stored on each scan record. Duplicate delivery IDs are rejected idempotently — re-deliveries from GitHub do not create duplicate scans. |
+| **Snyk signatures** | `SNYK_WEBHOOK_SECRET` enables HMAC verification of Snyk payloads. In production mode, Nyx rejects all Snyk webhooks if this secret is not configured. |
+
+### AI Integrity
+
+| Area | Detail |
+|---|---|
+| **Prompt injection protection** | File content passed to Claude is wrapped in structural delimiters (`<<<NYX_FILE_CONTENT_BEGIN>>>`). The system prompt instructs the model to treat content between markers as data only — not instructions. |
+| **Prompt storage** | The full rendered prompt is stored on each remediation record. Auditors can verify exactly what context Claude was given when generating a fix. |
+| **Diff hash** | A SHA-256 hash of `ai_fix_diff` is stored in `ai_diff_sha256`. Any post-hoc modification of the stored diff breaks this hash, making tampering detectable. |
+
+### Suppression Governance
+
+| Area | Detail |
+|---|---|
+| **Minimum reason length** | Suppressing a `CRITICAL` or `HIGH` finding requires a minimum 50-character justification. One-word reasons (`"fp"`, `"ok"`) are rejected. |
+| **ACCEPTED_RISK expiry** | Accepting risk requires an expiry date (maximum 180 days). Nyx automatically reopens findings when the expiry passes, forcing periodic re-review rather than indefinite deferral. |
+| **Suppression audit trail** | Every suppression records the actor's key name, the reason, the finding's severity, and the title in the audit log — meeting the evidence requirements for SOC 2 and ISO 27001 reviews. |
+
+### Network & Infrastructure
+
+| Area | Detail |
+|---|---|
+| **SSRF protection** | Outbound notification webhook calls (`NOTIFICATION_WEBHOOK_URL`) are checked against a blocklist of private IP ranges (RFC-1918, loopback, link-local, AWS metadata endpoint `169.254.169.254`) before the HTTP request is made. |
+| **Request size limit** | Incoming request bodies are capped at 50 MB. The import endpoint enforces this to prevent OOM attacks via oversized scanner payloads. |
+| **Rate limiting** | Export endpoint: 10 requests/minute. Bulk status update: 30 requests/minute. Webhook receivers: 60 requests/minute. |
+| **Security headers** | `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`, `Permissions-Policy`, and a strict `Content-Security-Policy: default-src 'none'` are set on all API responses. |
+| **HTTPS enforcement** | Set `HTTPS_ONLY=true` to redirect all HTTP traffic and add `Strict-Transport-Security: max-age=31536000; includeSubDomains`. |
+| **CORS** | Set `CORS_ORIGINS_STR` to exactly your frontend domain in production — `http://localhost:3000` is the default and must not be left in place. |
+
+### Supply Chain
+
+| Area | Detail |
+|---|---|
+| **CI tool checksums** | The generated `nyx-scan.yml` workflow verifies SHA-256 checksums for Gitleaks (against the published `checksums.txt`) and Hadolint (against the `.sha256` sidecar file) before executing either binary. A checksum mismatch fails the CI step with an explicit error. |
+| **GitHub Token** | Store in `.env` only — never commit. Rotate annually or on suspected exposure. Use GitHub Apps for production deployments at scale (higher rate limits, installation-scoped access). |
+| **JIRA Token** | Treat as a password — it has write access to your Jira projects. Rotate via Atlassian account settings if exposed. |
 
 ---
 
