@@ -76,6 +76,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | 🚫 | **False Positive Learning** | Suppression patterns are learned and surfaced as hints on similar future findings |
 | 👤 | **Finding Assignment** | Assign findings to engineers; assignments reflect on linked JIRA tickets |
 | 🔄 | **Regression Detection** | Re-opened previously fixed findings are flagged and alerted immediately |
+| 🔃 | **Regression Auto-Sort** | Findings that were previously marked ACCEPTED_RISK or SUPPRESSED are automatically restored to that status when they reappear — no engineer action required. A bell-notification alert records each batch with per-finding detail |
 | ⏱️ | **SLA Policy Engine** | Per-severity, per-repository SLA deadlines with auto-escalation via Slack or JIRA |
 | 📅 | **Scan Schedules** | Recurring automated scans on a configurable interval (6h – 1 week) |
 | ✅ | **GitHub Check Runs** | Inline PR annotations with security findings as GitHub status checks |
@@ -105,6 +106,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | 📉 | **Compliance Trend Analysis** | Weekly coverage percentage trend per framework over 30/60/90 days |
 | ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level |
 | 🚨 | **Regression Alerts** | Dashboard banner and KPI card for recently re-appeared findings |
+| 🔔 | **Unified Alert Bell** | Top-bar notification bell shows two tabs: SBOM component change alerts and Regression Auto-Sort alerts. Each tab has its own unread badge contributing to the total bell count |
 | 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action across findings, repos, remediations, scans, and SBOMs |
 
 ---
@@ -148,6 +150,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
                    │  │  Remediations · JiraLinks    │ │
                    │  │  SLAPolicies · Schedules     │ │
                    │  │  SuppressionPatterns · SBOM  │ │
+                   │  │  RegressionAutoAlerts        │ │
                    │  └─────────────────────────────┘ │
                    └───────────────┬─────────────────┘
                                    │
@@ -174,7 +177,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
 5.  scan_worker processes results:
       a. Normalise raw output → Finding schema
       b. Deduplicate against existing findings (fingerprint match)
-      c. Detect regressions (FIXED finding reappears → is_regression=True)
+      c. Detect regressions (FIXED finding reappears → check auto_close_status: auto-restore to ACCEPTED_RISK/SUPPRESSED if set, otherwise flag as regression with is_regression=True)
       d. Calculate priority score (CVSS + EPSS + age + SLA breach factor)
       e. Calculate SLA deadline based on active policy
       f. Update GitHub Check Run with inline annotations on the PR
@@ -928,6 +931,8 @@ The findings list is the core operational view for security engineers:
 - **Sorting** — Priority score (default), first seen, severity
 - **Bulk AI Fix** — Select multiple findings (up to 20) and request fixes in a single action
 - **Bulk Claude Prompt** — Select any findings and generate a structured Claude Code remediation prompt; findings are flipped to `IN_REMEDIATION`
+- **Mark Fixed** — Bulk action to mark selected findings as fixed (available in the toolbar when findings are selected)
+- **Accept Risk** — Bulk action to accept risk on selected findings; marks `auto_close_status` so they are auto-restored on future regressions instead of re-opening
 - **REGRESSION badge** — Orange badge on findings that have re-appeared after being fixed
 - **Assignee display** — Shows the assigned engineer directly in the list
 - **Export** — Download as CSV for reporting
@@ -939,13 +944,15 @@ The findings list is the core operational view for security engineers:
 
 Each finding has a dedicated page:
 
-- **Header** — Severity badge, scanner badge, status badge, REGRESSION badge (if applicable)
+- **Header** — Severity badge, scanner badge, status badge, REGRESSION badge (if applicable), **Claude Prompt** button to generate a Claude Code remediation prompt for this individual finding
+- **Repository link** — Displayed at the top of the Details sidebar; links to the repository detail page
 - **Description** — Full finding description with OWASP category tag
 - **Vulnerable Code** — Syntax-highlighted code snippet with line numbers
 - **Remediation Guidance** — Static guidance from the scanner or Nyx
 - **Engineer Notes** — Free-text notes field for context, workarounds, or investigation notes
-- **Suppress** — Suppress with a required reason; creates a learned pattern for future similar findings
-- **Accept Risk** — Mark as accepted risk without fixing
+- **Mark Fixed** — Manually mark a finding as fixed (e.g. after an out-of-band fix)
+- **Accept Risk** — Mark as accepted risk; sets `auto_close_status` so future regressions are auto-sorted
+- **Suppress** — Suppress with a required reason; creates a learned pattern for future similar findings; sets `auto_close_status` so future regressions are auto-sorted
 - **Sidebar — Details** — Rule ID, category, priority score, CVSS, EPSS, CVE link, first seen, SLA deadline
 - **Sidebar — Assignment** — Assign to an engineer (email/username); syncs to linked JIRA ticket
 - **Sidebar — Suppression Suggestion** — If this rule has been suppressed before, shows count and previous reason
@@ -1212,6 +1219,14 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 |---|---|---|
 | `GET` | `/audit` | Paginated audit log; filters: `actor`, `action`, `resource_type`, `search`, `date_from`, `date_to` |
 | `GET` | `/audit/download` | Download up to 10,000 audit entries as `json` or `csv` (pass `?fmt=json\|csv`) |
+
+**Regression Auto-Sort Alerts**
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/regression-alerts` | List regression auto-sort alerts; pass `unacknowledged_only=true` for badge count |
+| `POST` | `/regression-alerts/{id}/acknowledge` | Acknowledge a specific alert |
+| `POST` | `/regression-alerts/acknowledge-all` | Acknowledge all unacknowledged alerts |
 
 </details>
 

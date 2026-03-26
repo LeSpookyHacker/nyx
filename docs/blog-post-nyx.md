@@ -78,7 +78,7 @@ flowchart TD
     J --> K[Scan Worker]
     K --> K1[Normalize to Finding schema]
     K1 --> K2[Deduplicate by fingerprint]
-    K2 --> K3[Detect regressions]
+    K2 --> K3[Detect regressions\nAuto-sort ACCEPTED_RISK/SUPPRESSED]
     K3 --> K4[Calculate priority score\nCVSS + EPSS + age + SLA]
     K4 --> K5[Set SLA deadline]
     K5 --> K6[Create GitHub Check Run\nwith inline PR annotations]
@@ -175,6 +175,7 @@ You can generate a prompt from:
 - Selected findings in the Findings list (any combination across repositories)
 - The repository card on the Repositories page (all open findings for that repo)
 - The repository detail page — both from the header card (all open findings) and from the inner findings tab (selected findings)
+- The **individual finding detail page** — a Claude Prompt button in the header generates a focused, single-finding prompt for when you want to hand one specific issue to a Claude Code session without the surrounding context of a bulk sweep
 
 ---
 
@@ -253,11 +254,31 @@ The report is fetched with the API key sent as a header — the key never appear
 
 ---
 
+### Regression Auto-Sort
+
+One of the more subtle quality-of-life features, and one that became important quickly once I was running Nyx against real repositories:
+
+When a finding is marked ACCEPTED_RISK or SUPPRESSED, engineers have made a deliberate decision. They have looked at it and said: this is not something we are going to fix right now, and here is why.
+
+The problem is that scanners keep running. The same finding reappears on the next scan, is flagged as a regression, and lands back in the OPEN queue — requiring a human to re-make the same decision they already made. On a busy codebase this can happen dozens of times a week.
+
+Nyx now tracks the `auto_close_status` for every finding that a human has intentionally resolved as ACCEPTED_RISK or SUPPRESSED. When that finding reappears in a scan, the system checks: did an engineer already decide how to handle this? If yes, it silently restores the finding to that status instead of flagging it as a regression.
+
+No alert. No ticket. No engineer time spent.
+
+For genuine regressions — findings that were marked FIXED and then reappeared — behavior is unchanged: they surface in the dashboard with the REGRESSION badge.
+
+The only user-visible side effect is a new **Auto-Sorted** tab in the notification bell, right next to the SBOM alerts tab. It shows a timestamped record of each batch of auto-sorted findings, with severity, title, and the status they were restored to. Engineers can review it when they want to, or dismiss it when they are satisfied.
+
+---
+
 ### SBOM Generation and Diff Alerts
 
 For every repository with the Nyx GitHub Actions workflow installed, you can trigger a CycloneDX SBOM generation (via Trivy) with one click. Each submission is snapshotted. When the component list changes between snapshots — a package added, removed, or version-bumped — Nyx creates a change alert.
 
 This gives you supply chain visibility without manually comparing lock files.
+
+The notification bell in the top bar now has two tabs: SBOM alerts and Auto-Sorted regression alerts. Both contribute to the badge count. Each can be individually dismissed or bulk-cleared.
 
 ---
 
