@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # nyx.sh — Start Nyx (or wake it up after a break)
 #
-# Usage: ./nyx.sh [--refresh-after HOURS]
+# Usage: ./nyx.sh [--refresh-after HOURS] [--build]
 #   --refresh-after HOURS  Trigger all scan schedules if Nyx has been running
 #                          longer than this many hours (default: 4)
+#   --build                Rebuild Docker images before starting (required after
+#                          pulling updates that add new dependencies)
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -11,11 +13,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REFRESH_AFTER_HOURS=4
 API_BASE="http://localhost:8000/api/v1"
 FRONTEND_URL="http://localhost:3000"
+FORCE_BUILD=false
 
 # ── Args ─────────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
     --refresh-after) REFRESH_AFTER_HOURS="$2"; shift 2 ;;
+    --build) FORCE_BUILD=true; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -39,9 +43,16 @@ api_curl() {
   curl "${args[@]}" "$@"
 }
 
-# ── Step 1: Check which services are running ──────────────────────────────────
-bold "==> Checking Nyx status..."
+# ── Step 1: Rebuild if requested ─────────────────────────────────────────────
 cd "$SCRIPT_DIR"
+if $FORCE_BUILD; then
+  bold "==> Rebuilding Docker images..."
+  docker compose build backend frontend
+  green "  Build complete."
+fi
+
+# ── Step 2: Check which services are running ──────────────────────────────────
+bold "==> Checking Nyx status..."
 
 # Get running service names from docker compose
 running_services=$(docker compose ps --services --filter status=running 2>/dev/null || true)
