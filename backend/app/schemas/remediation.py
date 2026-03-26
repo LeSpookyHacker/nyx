@@ -55,6 +55,8 @@ class RemediationResponse(BaseModel):
     ai_fix_summary: Optional[str] = None
     ai_confidence: Optional[float] = None
     ai_model: Optional[str] = None
+    ai_prompt: Optional[str] = None
+    ai_diff_sha256: Optional[str] = None
     pr_number: Optional[int] = None
     pr_url: Optional[str] = None
     pr_branch: Optional[str] = None

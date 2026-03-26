@@ -72,6 +72,8 @@ class FindingResponse(BaseModel):
     fix_pr_url: Optional[str] = None
     notes: Optional[str] = None
     suppression_reason: Optional[str] = None
+    suppressed_by: Optional[str] = None
+    suppressed_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
 

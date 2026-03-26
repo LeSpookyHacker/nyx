@@ -178,13 +178,14 @@ async def export_findings(
     # CSV
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["ID", "Title", "Severity", "Scanner", "Category", "File", "Line", "Status", "Priority Score", "CVE", "First Seen", "Last Seen"])
+    writer.writerow(["ID", "Title", "Severity", "Scanner", "Category", "File", "Line", "Status", "Priority Score", "CVE", "First Seen", "Last Seen", "Suppressed By", "Suppressed At"])
     for f in findings:
         writer.writerow([
             f.id, f.title, f.severity, f.scanner, f.category,
             f.file_path or "", f.line_start or "", f.status,
             f.priority_score, f.cve_id or "",
             f.first_seen_at.isoformat(), f.last_seen_at.isoformat(),
+            f.suppressed_by or "", f.suppressed_at.isoformat() if f.suppressed_at else "",
         ])
 
     return Response(
@@ -256,7 +257,7 @@ async def suppress_finding(
 
     finding.status = FindingStatus.SUPPRESSED.value
     finding.suppression_reason = body.reason
-    finding.suppressed_by = "api"
+    finding.suppressed_by = _key
     finding.suppressed_at = datetime.now(timezone.utc)
     finding.auto_close_status = FindingStatus.SUPPRESSED.value
     if body.expires_days:
@@ -308,11 +309,20 @@ async def unsuppress_finding(
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found")
 
+    old_suppressed_by = finding.suppressed_by
     finding.status = FindingStatus.OPEN.value
     finding.suppression_reason = None
     finding.suppressed_by = None
     finding.suppressed_at = None
     finding.resolved_at = None
+
+    db.add(AuditLog(
+        actor=_key,
+        action="finding.unsuppressed",
+        resource_type="finding",
+        resource_id=finding_id,
+        metadata_json=json.dumps({"previously_suppressed_by": old_suppressed_by}),
+    ))
 
     await db.commit()
     await db.refresh(finding)
@@ -644,6 +654,7 @@ async def bulk_update_status(
     findings = result.scalars().all()
     now = datetime.now(timezone.utc)
     for f in findings:
+        old_status = f.status
         f.status = body.status.value
         if body.notes:
             f.notes = body.notes
@@ -651,5 +662,12 @@ async def bulk_update_status(
             f.resolved_at = now
         if body.status in (FindingStatus.ACCEPTED_RISK, FindingStatus.SUPPRESSED):
             f.auto_close_status = body.status.value
+        db.add(AuditLog(
+            actor=_key,
+            action="finding.bulk_status_update",
+            resource_type="finding",
+            resource_id=f.id,
+            metadata_json=json.dumps({"old_status": old_status, "new_status": body.status.value}),
+        ))
     await db.commit()
     return {"updated": len(findings)}

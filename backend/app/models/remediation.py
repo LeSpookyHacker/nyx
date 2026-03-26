@@ -32,6 +32,9 @@ class Remediation(Base, TimestampMixin):
     ai_model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     prompt_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     completion_tokens: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Non-repudiation: stores the exact prompt sent to Claude and a tamper-evident hash of the diff
+    ai_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    ai_diff_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
 
     # Additional context provided by engineer for re-generation
     engineer_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

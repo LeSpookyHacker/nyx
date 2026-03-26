@@ -69,6 +69,11 @@ async def import_scan_results_json(
         curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
              -H "Content-Type: application/json" -H "X-API-Key: $NYX_API_KEY" -d @-
     """
+    _MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MB
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Payload too large (max 50 MB)")
+
     repo_result = await db.execute(select(Repository).where(Repository.id == body.repository_id))
     if not repo_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Repository not found")

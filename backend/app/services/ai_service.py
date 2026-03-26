@@ -61,6 +61,7 @@ class AIFixResult:
     model: str
     prompt_tokens: int
     completion_tokens: int
+    fix_prompt: str         # The exact prompt sent to Claude (non-repudiation)
 
 
 async def generate_fix(finding: Finding, file_content: str, engineer_context: str = "") -> AIFixResult:
@@ -144,6 +145,7 @@ async def generate_fix(finding: Finding, file_content: str, engineer_context: st
                 completion_tokens=(
                     diff_response.usage.output_tokens + explain_response.usage.output_tokens
                 ),
+                fix_prompt=fix_prompt,
             )
         except anthropic.APIError as e:
             last_error = str(e)

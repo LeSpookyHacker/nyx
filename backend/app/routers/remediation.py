@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from typing import List
 
@@ -80,6 +81,8 @@ async def _run_ai_fix(remediation_id: str, finding_id: str, engineer_context: st
             remediation.ai_model = fix_result.model
             remediation.prompt_tokens = fix_result.prompt_tokens
             remediation.completion_tokens = fix_result.completion_tokens
+            remediation.ai_prompt = fix_result.fix_prompt
+            remediation.ai_diff_sha256 = hashlib.sha256(fix_result.fix_diff.encode()).hexdigest()
             remediation.status = RemediationStatus.REVIEW.value
 
         except Exception as e:
@@ -261,6 +264,8 @@ async def regenerate_remediation(
     rem.engineer_context = body.engineer_context
     rem.ai_explanation = None
     rem.ai_fix_diff = None
+    rem.ai_prompt = None
+    rem.ai_diff_sha256 = None
     rem.error_message = None
     await log_event(db, actor=_key, action="remediation.regenerated", resource_type="remediation",
         resource_id=remediation_id,
