@@ -63,6 +63,8 @@ class RemediationResponse(BaseModel):
     engineer_approved: Optional[bool] = None
     engineer_notes: Optional[str] = None
     error_message: Optional[str] = None
+    ci_status: Optional[str] = None
+    ci_failure_details: Optional[str] = None
     jira_issue_key: Optional[str] = None
     jira_issue_url: Optional[str] = None
     created_at: datetime

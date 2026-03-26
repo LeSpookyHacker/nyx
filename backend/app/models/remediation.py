@@ -49,6 +49,12 @@ class Remediation(Base, TimestampMixin):
 
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # ── CI Check Results ──────────────────────────────────────────────────────────
+    # Populated by the check_run webhook when CI runs on the nyx/fix/* branch.
+    # Values: None (no data yet) | "pending" | "pass" | "fail"
+    ci_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    ci_failure_details: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
     # ── JIRA Tracking ─────────────────────────────────────────────────────────────
     jira_issue_key: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)   # e.g. SEC-42
     jira_issue_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)         # full browser URL

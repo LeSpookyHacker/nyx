@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { remediationApi } from '../api/remediation'
 import type { Remediation } from '../types'
 import { formatDistanceToNow } from 'date-fns'
-import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2 } from 'lucide-react'
+import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { clsx } from 'clsx'
@@ -64,6 +64,16 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: s
           onClick={e => e.stopPropagation()}>
           <GitPullRequest size={11} /> View PR <ExternalLink size={10} />
         </a>
+      )}
+      {rem.ci_status === 'fail' && (
+        <span className="flex items-center gap-1 mt-1.5 text-xs text-red-400 font-medium">
+          <ShieldAlert size={11} /> CI checks failed
+        </span>
+      )}
+      {rem.ci_status === 'pass' && (
+        <span className="flex items-center gap-1 mt-1.5 text-xs text-green-400">
+          <ShieldCheck size={11} /> CI passed
+        </span>
       )}
       {rem.jira_issue_key && (
         <span className="text-nyx-mist text-xs flex items-center gap-1 mt-1">
@@ -178,7 +188,7 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
         )}
 
         {/* Regenerate */}
-        {['REVIEW', 'FAILED', 'REJECTED'].includes(rem.status) && (
+        {(['REVIEW', 'FAILED', 'REJECTED'].includes(rem.status) || (rem.status === 'PR_OPEN' && rem.ci_status === 'fail')) && (
           <div className="nyx-card p-4 space-y-3">
             <h3 className="text-nyx-mist font-semibold text-sm">Regenerate Fix</h3>
             <textarea
@@ -203,11 +213,38 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
 
         {rem.pr_url && (
           <div className="nyx-card p-4">
-            <p className="text-nyx-mist text-sm mb-1">Pull Request</p>
+            <div className="flex items-center justify-between mb-1">
+              <p className="text-nyx-mist text-sm">Pull Request</p>
+              {rem.ci_status === 'fail' && (
+                <span className="flex items-center gap-1 text-xs text-red-400 font-medium">
+                  <ShieldAlert size={12} /> CI failed
+                </span>
+              )}
+              {rem.ci_status === 'pass' && (
+                <span className="flex items-center gap-1 text-xs text-green-400">
+                  <ShieldCheck size={12} /> CI passed
+                </span>
+              )}
+              {rem.ci_status === 'pending' && (
+                <span className="flex items-center gap-1 text-xs text-yellow-400">
+                  <RefreshCw size={12} className="animate-spin" /> CI running
+                </span>
+              )}
+            </div>
             <a href={rem.pr_url} target="_blank" rel="noopener noreferrer"
               className="text-nyx-stardust flex items-center gap-1 hover:text-nyx-amethyst text-sm">
               <GitPullRequest size={14} /> PR #{rem.pr_number} <ExternalLink size={12} />
             </a>
+          </div>
+        )}
+
+        {rem.ci_status === 'fail' && rem.ci_failure_details && (
+          <div className="nyx-card p-4 border border-red-800/40">
+            <p className="text-red-400 text-sm font-semibold mb-2 flex items-center gap-1.5">
+              <ShieldAlert size={14} /> CI Check Failures
+            </p>
+            <p className="text-nyx-mist text-xs leading-relaxed whitespace-pre-wrap font-mono">{rem.ci_failure_details}</p>
+            <p className="text-nyx-mist/60 text-xs mt-3">The fix was committed but CI failed. Review the PR, fix the issues, or regenerate the fix with additional context below.</p>
           </div>
         )}
 

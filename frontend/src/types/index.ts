@@ -102,6 +102,8 @@ export interface Remediation {
   engineer_approved?: boolean
   engineer_notes?: string
   error_message?: string
+  ci_status?: 'pending' | 'pass' | 'fail' | null
+  ci_failure_details?: string | null
   jira_issue_key?: string
   jira_issue_url?: string
   created_at: string

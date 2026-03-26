@@ -10,7 +10,9 @@ Responsibilities:
 """
 from __future__ import annotations
 
+import ast
 import base64
+import difflib
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -386,7 +388,7 @@ async def register_webhook(repo_full_name: str) -> Tuple[int, str]:
                 "secret": secret,
                 "insecure_ssl": "0",
             },
-            events=["push", "pull_request", "check_run"],
+            events=["push", "pull_request", "check_run", "check_suite"],
             active=True,
         )
         return hook.id, secret

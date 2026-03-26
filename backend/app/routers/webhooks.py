@@ -83,6 +83,8 @@ async def github_webhook(
             await _handle_push(payload, repo, background_tasks, db)
         elif event == "pull_request":
             await _handle_pull_request(payload, repo, db, background_tasks)
+        elif event == "check_run":
+            await _handle_check_run(payload, db)
         # Other events are accepted but ignored
 
         await db.commit()
@@ -295,3 +297,55 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
             background_tasks.add_task(
                 notify_pr_merged, repo.github_full_name, pr_number, finding.title
             )
+
+
+async def _handle_check_run(payload: dict, db) -> None:
+    """
+    When a CI check run completes on a nyx/fix/** branch, stamp the matching
+    remediation with ci_status=pass|fail and store failure details.
+
+    GitHub delivers check_run events for every individual check (ESLint,
+    TypeScript, etc.).  We aggregate: any failure marks the remediation
+    ci_status=fail; the first passing conclusion for a branch that has no
+    failures yet marks it pass.
+    """
+    if payload.get("action") != "completed":
+        return
+
+    check_run = payload.get("check_run", {})
+    conclusion = check_run.get("conclusion")  # success | failure | cancelled | skipped | ...
+    branch = check_run.get("check_suite", {}).get("head_branch", "")
+
+    if not branch.startswith("nyx/fix/"):
+        return  # Only care about Nyx-created branches
+
+    from app.models.remediation import Remediation
+
+    rem_result = await db.execute(
+        select(Remediation).where(Remediation.pr_branch == branch)
+    )
+    rem = rem_result.scalar_one_or_none()
+    if not rem:
+        return
+
+    check_name = check_run.get("name", "CI")
+    details_url = check_run.get("details_url", "")
+
+    if conclusion in ("failure", "timed_out", "action_required"):
+        output = check_run.get("output", {})
+        summary = output.get("summary") or output.get("title") or "CI check failed."
+        failure_msg = f"**{check_name}** failed"
+        if details_url:
+            failure_msg += f" — [view details]({details_url})"
+        failure_msg += f"\n\n{summary}"
+
+        # Accumulate multiple check failures
+        if rem.ci_failure_details:
+            rem.ci_failure_details = rem.ci_failure_details + "\n\n---\n\n" + failure_msg
+        else:
+            rem.ci_failure_details = failure_msg
+        rem.ci_status = "fail"
+
+    elif conclusion == "success" and rem.ci_status != "fail":
+        # Only set pass if no failure has been recorded yet
+        rem.ci_status = "pass"
