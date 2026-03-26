@@ -107,8 +107,8 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level |
 | 🚨 | **Regression Alerts** | Dashboard banner and KPI card for recently re-appeared findings |
 | 🔔 | **Unified Alert Bell** | Top-bar notification bell shows two tabs: SBOM component change alerts and Regression Auto-Sort alerts. Each tab has its own unread badge contributing to the total bell count |
-| 🔑 | **API Key Management** | Create, rotate, and revoke database-backed API keys from the Settings page. Each key carries a name, optional expiry, and last-used timestamp. The bootstrap key is seeded from `NYX_API_KEY` automatically on first start |
-| 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action across findings, repos, remediations, scans, SBOMs, SLA policies, scan schedules, JIRA tickets, and API key lifecycle events |
+| 🔑 | **API Key Management** | Create, rotate, and revoke database-backed API keys with four permission scopes: `scanner` (submit scans only), `readonly` (read-only access), `analyst` (update/suppress findings), `admin` (full access). Each key carries a name, optional expiry, last-used timestamp, and scope. The bootstrap key is seeded from `NYX_API_KEY` automatically on first start with `admin` scope |
+| 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action with tamper-evident HMAC hash chain. Each entry carries `entry_hash` and `prev_hash` — walk the full chain via `GET /audit/verify` to detect any modification, insertion, or deletion |
 
 ---
 
@@ -143,6 +143,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
                    │  │  Risk Snapshots (daily)      │ │
                    │  │  Scan Schedules (5 min)      │ │
                    │  │  Suppression Expiry (hourly) │ │
+                   │  │  Key Expiry Warnings (daily) │ │
                    │  └───────────────┬─────────────┘ │
                    │                  │               │
                    │  ┌───────────────▼─────────────┐ │
@@ -207,7 +208,7 @@ cd nyx
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum fill in these four values:
+Edit `.env` — at minimum fill in these values:
 
 ```bash
 # Required — AI fix generation
@@ -221,6 +222,10 @@ GITHUB_WEBHOOK_ENDPOINT=https://your-public-url.example.com
 # On first startup Nyx seeds this value as the "bootstrap" DB key automatically.
 # You can then rotate or add new keys from the Settings page without restarting.
 NYX_API_KEY=your-secret-key-here
+
+# Strongly recommended — enables audit log HMAC chain + webhook secret encryption at rest
+# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+NYX_SECRET_KEY=your-32-byte-hex-secret
 ```
 
 ```bash
@@ -240,7 +245,10 @@ docker compose logs backend | grep -i "seed\|startup complete"
 | **Settings / API Keys** | http://localhost:3000 → Settings (gear icon) |
 
 > [!TIP]
-> After the first start, go to **Settings → API Keys** to create purpose-specific keys for CI/CD pipelines and rotate or deactivate the bootstrap key when you're ready.
+> After the first start, go to **Settings → API Keys** to create purpose-specific keys for CI/CD pipelines and rotate or deactivate the bootstrap key when you're ready. Create CI/CD keys with `scanner` scope — they can submit scans but cannot modify findings or manage keys.
+
+> [!NOTE]
+> After pulling updates that add new dependencies, rebuild the Docker image before starting: `./nyx.sh --build` (or `docker compose build backend && docker compose up -d`).
 
 > [!WARNING]
 > If `NYX_API_KEY` is left blank, the API is unauthenticated — any request is accepted. This is fine for local evaluation but **must not be deployed publicly without a key set**.
@@ -657,6 +665,12 @@ The easiest way to integrate any repository with Nyx is to use the **Push Workfl
 | `NYX_ZAP_TARGET` | Full URL to scan for DAST (optional) | Repository → Settings → Variables → Actions |
 | `SNYK_TOKEN` | Snyk API token — get one at https://snyk.io | Repository → Settings → Secrets → Actions |
 
+> [!TIP]
+> Use a **`scanner`-scoped API key** for CI/CD (`NYX_API_KEY` secret in GitHub). Scanner keys can submit scans but cannot suppress findings, manage other keys, or access audit exports — limiting blast radius if a CI secret is compromised.
+
+> [!TIP]
+> **Scan submission provenance:** Workflows can optionally sign scan payloads by including an `X-Nyx-Submission-HMAC: sha256=<hmac>` header — computed as `HMAC-SHA256(key=repo_webhook_secret, msg=SHA256(request_body))`. Nyx verifies this on import and marks verified scans with `submission_verified=true`. Unsigned submissions are accepted but flagged.
+
 The generated workflow runs the full scanner suite:
 - **Semgrep** — SAST across all languages
 - **Trivy** — SCA vulnerability scan + CycloneDX SBOM submission
@@ -822,7 +836,9 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 
 | Variable | Default | Description |
 |---|---|---|
-| `NYX_API_KEY` | _(blank)_ | Bootstrap API key. On first startup Nyx registers this value in the database as the `bootstrap` key. All subsequent key management (create / rotate / revoke) is done through the Settings UI or `/api/v1/api-keys`. Leave blank to disable auth in development only — **never deploy without this set in production**. |
+| `NYX_API_KEY` | _(blank)_ | Bootstrap API key. On first startup Nyx registers this value in the database as the `bootstrap` key with `admin` scope. All subsequent key management (create / rotate / revoke) is done through the Settings UI or `/api/v1/api-keys`. Leave blank to disable auth in development only — **never deploy without this set in production**. |
+| `NYX_SECRET_KEY` | _(blank)_ | Master secret key for two functions: (1) HMAC signing of each audit log entry — enables tamper detection via `/audit/verify`; (2) Fernet encryption of webhook secrets at rest in the database. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. Strongly recommended for any non-local deployment. |
+| `API_KEY_MAX_LIFETIME_DAYS` | `0` | Maximum API key lifetime in days. `0` = no limit. When set, keys created without an explicit expiry are automatically capped at this limit. A daily background task warns (log + audit event) about keys expiring within 7 days. |
 | `CORS_ORIGINS_STR` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed CORS origins |
 | `HTTPS_ONLY` | `false` | Set `true` in production to enforce HTTPS + HSTS |
 | `ENVIRONMENT` | `development` | Set `production` to enable stricter security defaults |
@@ -1058,35 +1074,47 @@ The SBOM page gives per-repository software supply chain visibility:
 <details>
 <summary><strong>API Key Management</strong></summary>
 
-Nyx manages API keys in the database rather than relying solely on a single env-var secret. This enables key rotation, per-consumer keys, expiry enforcement, and a complete audit trail — without restarting the service.
+Nyx manages API keys in the database rather than relying solely on a single env-var secret. This enables key rotation, per-consumer keys, scoped permissions, expiry enforcement, and a complete audit trail — without restarting the service.
 
 **Settings page → API Keys:**
 
-- **Key list** — Shows name, active status, expiry date, last-used timestamp, and the actor that created each key. The plaintext key and hash are never shown after creation.
-- **Create key** — Enter a name (e.g., `github-actions-prod`) and an optional expiry (1–730 days). The plaintext key is returned once — copy it immediately.
-- **Deactivate** — Soft-deletes the key. It is rejected on the next request and the deactivation is recorded in the audit log.
+- **Key list** — Shows name, scope, active status, expiry date, last-used timestamp, and the actor that created each key. The plaintext key and hash are never shown after creation.
+- **Create key** — Enter a name (e.g., `github-actions-prod`), choose a scope, and set an optional expiry (1–730 days). The plaintext key is returned once — copy it immediately. Requires `admin` scope.
+- **Deactivate** — Soft-deletes the key. It is rejected on the next request and the deactivation is recorded in the audit log. Requires `admin` scope.
+
+**Key scopes:**
+
+| Scope | Permitted operations |
+|---|---|
+| `scanner` | Submit scan results (`POST /scans/import`), read repositories |
+| `readonly` | Read findings, repositories, audit log, dashboard, reports |
+| `analyst` | All of `readonly` + update finding status, suppress/unsuppress, add notes |
+| `admin` | Everything — manage API keys, push workflows, full audit access |
 
 **Bootstrap flow:**
-On first startup, Nyx automatically registers `NYX_API_KEY` from `.env` as the `bootstrap` key. This means zero-touch setup: copy `.env.example`, set the key, start — it just works. Once running, you can create a dedicated key for CI/CD and deactivate `bootstrap`.
+On first startup, Nyx automatically registers `NYX_API_KEY` from `.env` as the `bootstrap` key with `admin` scope. Once running, create dedicated scoped keys for each consumer and deactivate `bootstrap`.
 
 **Recommended key hygiene:**
-1. Create one key per consumer: `github-actions`, `local-dev`, `siem-integration`
-2. Set appropriate expiry dates (e.g., 365 days for CI keys)
+1. Create one key per consumer with the minimum required scope: CI/CD → `scanner`, dashboards → `readonly`, security engineers → `analyst`, admin tooling → `admin`
+2. Set appropriate expiry dates (e.g., 365 days for CI keys). Use `API_KEY_MAX_LIFETIME_DAYS` to enforce a cap globally
 3. Deactivate the bootstrap key after creating purpose-specific replacements
 4. Review `last_used_at` monthly — deactivate any keys not seen in 30+ days
+5. A daily background task logs a warning and writes an `api_key.expiry_warning` audit event for any key expiring within 7 days
 
 </details>
 
 <details>
 <summary><strong>Audit Log</strong></summary>
 
-Every action taken in Nyx is recorded in an immutable audit log. Each entry captures the actor (key name), action, resource type and ID, IP address, and full JSON metadata.
+Every action taken in Nyx is recorded in an append-only audit log with hash chain integrity. Each entry captures the actor (key name), scope used, action, resource type and ID, IP address, and full JSON metadata.
 
-- **Covered events** — Finding status changes, suppression (with reason), unsuppression, notes updates, assignment, bulk status updates, AI fix requests/approvals/rejections/regenerations, JIRA ticket lifecycle, scan imports, repository registration/updates/deletion, workflow pushes, SBOM submissions and alerts, SLA policy and schedule CRUD, API key creation and deactivation, regression auto-sort alerts
+- **Covered events** — Finding status changes, suppression (with reason and escalation event for CRITICAL/HIGH), unsuppression, notes updates, assignment, bulk status updates, AI fix requests/approvals/rejections/regenerations, JIRA ticket lifecycle, scan imports (`submission_verified` flag included), repository registration/updates/deletion, workflow pushes, SBOM submissions and alerts, SLA policy and schedule CRUD, API key creation and deactivation, API key expiry warnings, regression auto-sort alerts
+- **Hash chain integrity** — Every entry carries `entry_hash` (HMAC-SHA256 over all content fields, keyed by `NYX_SECRET_KEY`) and `prev_hash` (the previous entry's hash). Tampering with, deleting, or inserting any entry breaks the chain and is detectable
+- **Chain verification** — `GET /api/v1/audit/verify` walks the complete chain chronologically and returns a report listing any breaks, with the entry ID, timestamp, and error type (`entry_hash mismatch` or `prev_hash mismatch`)
 - **Filter bar** — Search by text (searches action name and metadata), filter by action prefix (finding, remediation, repository, scan, sbom, api_key, sla_policy, schedule), resource type, and date range
 - **Expandable rows** — Click any row to expand the full JSON metadata for that event
 - **Color coding** — Actions are color-coded by type for quick visual scanning
-- **Download** — Export up to 10,000 entries as CSV or JSON for ingestion into a SIEM or external log management system
+- **Download** — Export up to 10,000 entries as CSV or JSON. Pass `?include_hashes=true` to include `entry_hash` and `prev_hash` for out-of-band verification. JSON exports include a `chain_tip` field (hash of the last entry in the export) for integrity anchoring
 
 </details>
 
@@ -1144,7 +1172,7 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/scans` | List scans (filter by repository, status, scanner) |
-| `POST` | `/scans/import` | Import scanner JSON results |
+| `POST` | `/scans/import` | Import scanner JSON results. Requires `scanner` or `analyst` scope. Optionally include `X-Nyx-Submission-HMAC: sha256=<hmac>` for provenance verification — verified scans are flagged `submission_verified=true` |
 
 </details>
 
@@ -1254,7 +1282,8 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/audit` | Paginated audit log; filters: `actor`, `action`, `resource_type`, `search`, `date_from`, `date_to` |
-| `GET` | `/audit/download` | Download up to 10,000 audit entries as `json` or `csv` (pass `?fmt=json\|csv`) |
+| `GET` | `/audit/verify` | Walk the full audit log hash chain and report any tampered, deleted, or inserted entries. Returns `valid: true/false`, counts, and a list of chain breaks with entry ID and timestamp |
+| `GET` | `/audit/download` | Download up to 10,000 audit entries as `json` or `csv`. Pass `?fmt=json\|csv` and `?include_hashes=true` to include `entry_hash`/`prev_hash` for out-of-band verification |
 
 **Regression Auto-Sort Alerts**
 
@@ -1268,9 +1297,9 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api-keys` | List all API keys — never returns the plaintext key or hash |
-| `POST` | `/api-keys` | Create a new key; body: `{"name": "ci-pipeline", "expires_in_days": 365}`. Returns the plaintext key **once** — store it immediately |
-| `DELETE` | `/api-keys/{key_id}` | Deactivate a key (soft delete — preserves audit trail). Rejected immediately on next use |
+| `GET` | `/api-keys` | List all API keys — returns name, scopes, expiry, last-used, created-by. Never returns plaintext key or hash |
+| `POST` | `/api-keys` | Create a new key. Body: `{"name": "ci-pipeline", "expires_in_days": 365, "scopes": "scanner"}`. Valid scopes: `scanner`, `readonly`, `analyst`, `admin`. Requires `admin` scope. Returns the plaintext key **once** — store it immediately |
+| `DELETE` | `/api-keys/{key_id}` | Deactivate a key (soft delete — preserves audit trail). Requires `admin` scope. Rejected immediately on next use |
 
 </details>
 
@@ -1598,6 +1627,21 @@ Nyx inspects files in the repository via the GitHub API. If the detection misses
 </details>
 
 <details>
+<summary><strong>API returning 403 on a valid key</strong></summary>
+
+A 403 (vs 401) means the key is valid but lacks the required scope for that endpoint.
+
+1. Check the key's scope in **Settings → API Keys** — the scope column shows `scanner`, `readonly`, `analyst`, or `admin`
+2. Match the required scope to the operation:
+   - Submitting scans → `scanner` or `analyst`
+   - Suppressing findings → `analyst` or `admin`
+   - Creating/deactivating API keys → `admin` only
+3. If the key needs broader access, deactivate it and create a new key with the appropriate scope. Scopes cannot be edited on existing keys.
+4. The bootstrap key and env-var fallback always have `admin` scope.
+
+</details>
+
+<details>
 <summary><strong>High memory / CPU usage</strong></summary>
 
 For repositories with thousands of findings:
@@ -1622,8 +1666,10 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | Area | Detail |
 |---|---|
 | **API keys** | Database-backed. Each key stores a SHA-256 hash — the plaintext is never persisted. Keys carry an optional expiry; expired keys are rejected automatically. `last_used_at` is updated on every authenticated request. |
-| **Bootstrap key** | `NYX_API_KEY` in `.env` is seeded into the DB on first startup as the `bootstrap` key. You can rotate it out via the Settings page without downtime. |
-| **Key rotation** | Create a new key via Settings → API Keys, distribute it, then deactivate the old key. Zero downtime; old key is rejected immediately after deactivation. |
+| **Key scopes** | Every API key is assigned a scope: `scanner` (submit scans only), `readonly` (read-only), `analyst` (update/suppress findings), or `admin` (full access). Scope is enforced at the endpoint level — a `scanner` key cannot suppress findings or create other keys even if it somehow obtained the URL. |
+| **Bootstrap key** | `NYX_API_KEY` in `.env` is seeded into the DB on first startup as the `bootstrap` key with `admin` scope. You can rotate it out via the Settings page without downtime. |
+| **Key rotation** | Create a new key via Settings → API Keys with the appropriate scope, distribute it, then deactivate the old key. Zero downtime; old key is rejected immediately after deactivation. |
+| **Key lifetime** | Set `API_KEY_MAX_LIFETIME_DAYS` to enforce a maximum key age. A daily background task emits log warnings and `api_key.expiry_warning` audit events for keys expiring within 7 days. |
 | **Auth failures** | Every failed authentication attempt is logged with the client IP, endpoint path, and failure reason (`missing` / `invalid` / `expired`). Forward backend logs to your SIEM to alert on brute-force attempts. |
 | **Dev mode** | If `NYX_API_KEY` is blank, the API is unauthenticated and logs a warning per request. Never leave this blank in any internet-reachable deployment. |
 
@@ -1631,10 +1677,22 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 
 | Area | Detail |
 |---|---|
-| **Per-repo HMAC** | Each registered repository gets a unique 32-byte hex webhook secret. Nyx verifies the `X-Hub-Signature-256` header on every delivery before processing the payload. |
+| **Per-repo HMAC** | Each registered repository gets a unique 32-byte hex webhook secret stored encrypted in the database (when `NYX_SECRET_KEY` is set). Nyx verifies the `X-Hub-Signature-256` header on every delivery before processing the payload. |
+| **Webhook secrets encrypted at rest** | When `NYX_SECRET_KEY` is configured, `Repository.webhook_secret` is encrypted with Fernet (AES-128-CBC + HMAC-SHA256). A DB breach does not expose secrets that could be used to forge future payloads. |
 | **Pre-auth global HMAC** | Optionally set `NYX_WEBHOOK_SECRET` for a global pre-check before any database lookup, preventing unauthenticated repository enumeration. |
 | **Replay deduplication** | GitHub's `X-GitHub-Delivery` ID is stored on each scan record. Duplicate delivery IDs are rejected idempotently — re-deliveries from GitHub do not create duplicate scans. |
+| **Timestamp validation** | GitHub push events are checked against `repository.pushed_at`. Payloads older than 10 minutes are rejected with `403`. This limits the replay window beyond what delivery ID deduplication covers. PR and check_run events are not time-gated. |
+| **Scan submission HMAC** | CI workflows can include an `X-Nyx-Submission-HMAC: sha256=<hmac>` header — `HMAC-SHA256(key=repo_webhook_secret, msg=SHA256(request_body))`. Nyx verifies this on import. Verified scans are flagged `submission_verified=true`; absent header accepted but flagged unverified. A compromised CI API key cannot fabricate a verified scan without also knowing the webhook secret. |
 | **Snyk signatures** | `SNYK_WEBHOOK_SECRET` enables HMAC verification of Snyk payloads. In production mode, Nyx rejects all Snyk webhooks if this secret is not configured. |
+
+### Audit Integrity
+
+| Area | Detail |
+|---|---|
+| **HMAC hash chain** | Every audit log entry carries `entry_hash` — `HMAC-SHA256(NYX_SECRET_KEY, actor|action|resource_type|resource_id|metadata|ip|timestamp|prev_hash)` — and `prev_hash` (previous entry's hash). Modifying, deleting, or inserting any entry breaks the chain. |
+| **Chain verification** | `GET /api/v1/audit/verify` walks the full chain and returns a machine-readable report. Run this on a schedule or before compliance reviews to confirm log integrity. |
+| **Weak-key fallback** | If `NYX_SECRET_KEY` is not set, entries still carry hashes (using an internal fallback key) — they provide tamper detection but not authentication of the signing source. Set `NYX_SECRET_KEY` for production. |
+| **Export verification** | JSON exports with `?include_hashes=true` include a `chain_tip` field — the hash of the last exported entry. Retain this value to verify future re-exports against a consistent baseline. |
 
 ### AI Integrity
 
@@ -1648,9 +1706,11 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 
 | Area | Detail |
 |---|---|
+| **Scope enforcement** | Suppressing findings requires `analyst` or `admin` scope. A `scanner`-scoped CI key cannot suppress findings even if it has API access. |
 | **Minimum reason length** | Suppressing a `CRITICAL` or `HIGH` finding requires a minimum 50-character justification. One-word reasons (`"fp"`, `"ok"`) are rejected. |
+| **CRITICAL/HIGH escalation** | Suppressing any `CRITICAL` or `HIGH` finding fires two additional actions: a dedicated `finding.critical_suppressed` audit event (separate from the standard `finding.suppressed` — easier to alert on) and an outbound Slack notification via `NOTIFICATION_WEBHOOK_URL` including the actor, severity, title, repository, and truncated reason. This ensures CRITICAL suppressions are never silent. |
 | **ACCEPTED_RISK expiry** | Accepting risk requires an expiry date (maximum 180 days). Nyx automatically reopens findings when the expiry passes, forcing periodic re-review rather than indefinite deferral. |
-| **Suppression audit trail** | Every suppression records the actor's key name, the reason, the finding's severity, and the title in the audit log — meeting the evidence requirements for SOC 2 and ISO 27001 reviews. |
+| **Suppression audit trail** | Every suppression records the actor's key name, the reason, the finding's severity, and the title in the audit log — meeting the evidence requirements for SOC 2 and ISO 27001 reviews. All audit entries are HMAC-signed and chain-linked for tamper detection. |
 
 ### Network & Infrastructure
 
