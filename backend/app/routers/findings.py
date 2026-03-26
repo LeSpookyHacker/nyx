@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import FindingStatus
 from app.core.exceptions import FindingNotFound
 from app.core.limiter import limiter
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.finding import Finding
@@ -260,7 +260,7 @@ async def suppress_finding(
     finding_id: str,
     body: FindingSuppressRequest,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope("analyst")),
 ):
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
@@ -297,6 +297,38 @@ async def suppress_finding(
         }),
         ip_address=get_client_ip(request),
     ))
+
+    # Escalation: CRITICAL/HIGH suppressions get a dedicated audit event and Slack notification
+    if finding.severity in ("CRITICAL", "HIGH"):
+        import asyncio
+        from app.services.audit_service import log_event as _log_escalation
+        from app.services.notification_service import notify_critical_suppression
+        from app.models.repository import Repository as _Repo
+        repo_res = await db.execute(select(_Repo).where(_Repo.id == finding.repository_id))
+        repo_obj = repo_res.scalar_one_or_none()
+        repo_name = repo_obj.github_full_name if repo_obj else finding.repository_id
+        await _log_escalation(
+            db,
+            actor=_key,
+            action="finding.critical_suppressed",
+            resource_type="finding",
+            resource_id=finding_id,
+            metadata={
+                "severity": finding.severity,
+                "title": finding.title,
+                "reason": body.reason,
+                "repository": repo_name,
+            },
+            ip_address=get_client_ip(request),
+        )
+        asyncio.create_task(notify_critical_suppression(
+            finding_id=finding_id,
+            title=finding.title,
+            severity=finding.severity,
+            repo=repo_name,
+            actor=_key,
+            reason=body.reason,
+        ))
 
     # Learn suppression pattern — upsert by rule_id + scanner + repository_id
     existing_pattern = await db.execute(

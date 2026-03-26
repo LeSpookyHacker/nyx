@@ -94,3 +94,25 @@ async def notify_pr_merged(repo: str, pr_number: int, finding_title: str) -> Non
         "finding_title": finding_title,
         "message": f"✅ Fix merged: PR #{pr_number} in {repo} closed finding '{finding_title}'",
     })
+
+
+async def notify_critical_suppression(
+    finding_id: str,
+    title: str,
+    severity: str,
+    repo: str,
+    actor: str,
+    reason: str,
+) -> None:
+    await notify("finding.critical_suppressed", {
+        "finding_id": finding_id,
+        "title": title,
+        "severity": severity,
+        "repository": repo,
+        "actor": actor,
+        "reason": reason[:200],  # truncate for notification body
+        "message": (
+            f"⚠️ {severity} finding suppressed by {actor}: [{severity}] {title} "
+            f"in {repo} — requires review"
+        ),
+    })

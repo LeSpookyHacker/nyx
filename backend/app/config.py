@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     # ─── Nyx API Auth ────────────────────────────────────────────────────────────
     NYX_API_KEY: str = ""
 
+    # ─── Secret key for at-rest encryption and audit HMAC chain ────────────────
+    # Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+    NYX_SECRET_KEY: str = ""
+
+    # ─── API key lifetime ─────────────────────────────────────────────────────
+    # Maximum lifetime for API keys in days. 0 = no limit.
+    API_KEY_MAX_LIFETIME_DAYS: int = 0
+
     # ─── CORS — stored as plain string, parsed via property ──────────────────────
     CORS_ORIGINS_STR: str = "http://localhost:5173,http://localhost:3000"
 

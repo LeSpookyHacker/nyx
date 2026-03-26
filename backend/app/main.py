@@ -302,11 +302,56 @@ async def _seed_api_key_from_env() -> None:
                     key_hash=key_hash,
                     is_active=True,
                     created_by="system",
+                    scopes="admin",
                 ))
                 await db.commit()
                 logger.info("Seeded bootstrap API key from NYX_API_KEY environment variable")
     except Exception:
         logger.exception("Failed to seed bootstrap API key — DB auth will fall back to env var")
+
+
+async def _api_key_expiry_warning_loop() -> None:
+    """Daily: warn about API keys expiring within 7 days."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select
+    from app.database import AsyncSessionLocal
+    from app.models.api_key import ApiKey
+    from app.services.audit_service import log_event
+
+    await asyncio.sleep(60)  # Brief startup delay
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                now = datetime.now(timezone.utc)
+                soon = now + timedelta(days=7)
+                result = await db.execute(
+                    select(ApiKey).where(
+                        ApiKey.is_active.is_(True),
+                        ApiKey.expires_at.isnot(None),
+                        ApiKey.expires_at <= soon,
+                        ApiKey.expires_at > now,
+                    )
+                )
+                expiring = result.scalars().all()
+                for key in expiring:
+                    days_left = (key.expires_at - now).days
+                    logger.warning(
+                        "API_KEY_EXPIRY_SOON key_id=%s name=%r days_left=%d",
+                        key.id, key.name, days_left,
+                    )
+                    await log_event(
+                        db,
+                        actor="system",
+                        action="api_key.expiry_warning",
+                        resource_type="api_key",
+                        resource_id=key.id,
+                        metadata={"name": key.name, "days_left": days_left, "scopes": key.scopes},
+                    )
+                if expiring:
+                    await db.commit()
+        except Exception:
+            logger.exception("Error in API key expiry warning loop")
+        await asyncio.sleep(86400)  # Daily
 
 
 @asynccontextmanager
@@ -334,6 +379,9 @@ async def lifespan(app: FastAPI):
     # Scan schedule runner — triggers due scheduled scans every 5 minutes
     if settings.SCAN_SCHEDULES_ENABLED:
         tasks.append(asyncio.create_task(_scan_schedule_loop()))
+
+    # API key expiry warnings — daily check for keys expiring within 7 days
+    tasks.append(asyncio.create_task(_api_key_expiry_warning_loop()))
 
     if settings.CODE_SCANNING_SYNC_ENABLED:
         from app.services.code_scanning_service import run_poll_loop

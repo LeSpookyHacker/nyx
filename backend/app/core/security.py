@@ -1,5 +1,6 @@
 """
-Security utilities: API key authentication and webhook HMAC verification.
+Security utilities: API key authentication, scope enforcement,
+webhook HMAC verification, and scan submission integrity.
 """
 from __future__ import annotations
 
@@ -7,8 +8,9 @@ import hashlib
 import hmac
 import logging
 import secrets
+from typing import Optional
 
-from fastapi import HTTPException, Request, Security, status
+from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader
 
 from app.config import get_settings
@@ -17,6 +19,14 @@ settings = get_settings()
 logger = logging.getLogger("nyx.security")
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+
+# Valid scope values
+SCOPE_SCANNER = "scanner"
+SCOPE_READONLY = "readonly"
+SCOPE_ANALYST = "analyst"
+SCOPE_ADMIN = "admin"
+
+_ALL_SCOPES = {SCOPE_SCANNER, SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN}
 
 
 def _key_identity(api_key: str) -> str:
@@ -42,6 +52,7 @@ async def require_api_key(
 ) -> str:
     """
     Dependency that enforces API key authentication.
+    Sets request.state.key_scopes on success (used by require_scope).
 
     Auth order:
       1. Hash the supplied key and look it up in the api_keys DB table.
@@ -69,6 +80,7 @@ async def require_api_key(
                 "NYX_API_KEY is not set — request allowed in development mode. "
                 "Set NYX_API_KEY to enable authentication."
             )
+            request.state.key_scopes = SCOPE_ADMIN
             return "dev"
         logger.warning("AUTH_FAILURE ip=%s endpoint=%s reason=missing", ip, request.url.path)
         raise HTTPException(
@@ -106,6 +118,7 @@ async def require_api_key(
                     )
                 record.last_used_at = now
                 await db.commit()
+                request.state.key_scopes = record.scopes or SCOPE_ADMIN
                 return f"apikey:{record.name}"
     except HTTPException:
         raise
@@ -123,6 +136,7 @@ async def require_api_key(
             "NYX_API_KEY is not set — request allowed in development mode. "
             "Set NYX_API_KEY to enable authentication."
         )
+        request.state.key_scopes = SCOPE_ADMIN
         return "dev"
 
     if not secrets.compare_digest(api_key, settings.NYX_API_KEY):
@@ -136,7 +150,30 @@ async def require_api_key(
             detail="Invalid or missing API key",
             headers={"WWW-Authenticate": "ApiKey"},
         )
+    request.state.key_scopes = SCOPE_ADMIN
     return _key_identity(api_key)
+
+
+def require_scope(*required_scopes: str):
+    """
+    Dependency factory: at least one of the listed scopes must be present,
+    OR the key must have 'admin' scope (which supersedes all).
+
+    Usage:
+        _key: str = Depends(require_scope("analyst", "admin"))
+    """
+    async def _check_scope(
+        request: Request,
+        actor: str = Depends(require_api_key),
+    ) -> str:
+        key_scopes = set(getattr(request.state, "key_scopes", SCOPE_ADMIN).split(","))
+        if SCOPE_ADMIN in key_scopes or any(s in key_scopes for s in required_scopes):
+            return actor
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"This operation requires one of these scopes: {', '.join(required_scopes)}",
+        )
+    return _check_scope
 
 
 def warn_insecure_config() -> None:
@@ -151,6 +188,9 @@ def warn_insecure_config() -> None:
         if settings.ENVIRONMENT == "production":
             raise RuntimeError(f"[SECURITY] {msg}. Cannot start in production mode without authentication.")
         issues.append(msg)
+
+    if not settings.NYX_SECRET_KEY:
+        issues.append("NYX_SECRET_KEY is not set — webhook secrets are stored plaintext and audit HMAC chain uses a weak default key")
 
     if not settings.SNYK_WEBHOOK_SECRET:
         issues.append("SNYK_WEBHOOK_SECRET is not set — Snyk webhooks are accepted without signature verification")
@@ -251,6 +291,80 @@ def verify_global_webhook_hmac(body: bytes, signature_header: str) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid webhook signature",
         )
+
+
+def verify_webhook_timestamp(payload: dict, event_type: str, max_age_seconds: int = 600) -> None:
+    """
+    Validate that a GitHub push webhook payload is recent (within max_age_seconds).
+    Only applied to push events — PR and check_run events are not time-constrained.
+    Logs a warning and rejects if the push timestamp is too old.
+    """
+    if event_type != "push":
+        return
+
+    from datetime import datetime, timezone
+
+    # GitHub push payloads include repository.pushed_at (Unix timestamp)
+    pushed_at_raw = payload.get("repository", {}).get("pushed_at")
+    if not pushed_at_raw:
+        # No timestamp available — allow (conservative)
+        return
+
+    try:
+        pushed_at = datetime.fromtimestamp(int(pushed_at_raw), tz=timezone.utc)
+        age = (datetime.now(timezone.utc) - pushed_at).total_seconds()
+        if age > max_age_seconds:
+            logger.warning(
+                "WEBHOOK_REPLAY_SUSPECTED pushed_at=%s age_seconds=%d max=%d",
+                pushed_at.isoformat(), int(age), max_age_seconds,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Webhook payload is too old ({int(age)}s). Max allowed: {max_age_seconds}s.",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        # If we can't parse the timestamp, allow the request
+        logger.debug("Could not parse pushed_at from webhook payload — skipping timestamp check")
+
+
+def verify_submission_hmac(
+    body_bytes: bytes,
+    submission_hmac_header: Optional[str],
+    repo_webhook_secret: str,
+) -> bool:
+    """
+    Verify the optional X-Nyx-Submission-HMAC header on scan imports.
+
+    The CI workflow computes:
+        HMAC-SHA256(key=repo_webhook_secret, msg=SHA256(payload_bytes))
+    and sends it as: sha256=<hexdigest>
+
+    Returns True if verified, False if header is absent (unverified but accepted).
+    Raises 403 if the header is present but invalid.
+    """
+    if not submission_hmac_header:
+        return False  # Absent — unverified but not rejected
+
+    if not submission_hmac_header.startswith("sha256="):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Malformed X-Nyx-Submission-HMAC header (expected sha256=<hex>)",
+        )
+
+    payload_hash = hashlib.sha256(body_bytes).digest()
+    expected = "sha256=" + hmac.new(
+        repo_webhook_secret.encode(), payload_hash, hashlib.sha256
+    ).hexdigest()
+
+    if not hmac.compare_digest(submission_hmac_header, expected):
+        logger.warning("SCAN_SUBMISSION_HMAC_INVALID: forged or tampered scan payload rejected")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid X-Nyx-Submission-HMAC — scan payload integrity check failed",
+        )
+    return True
 
 
 def generate_webhook_secret() -> str:

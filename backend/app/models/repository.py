@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, List, Optional
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.crypto import EncryptedString
 from app.database import Base
 from app.models.base import TimestampMixin, new_uuid
 
@@ -26,9 +27,9 @@ class Repository(Base, TimestampMixin):
     language: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_private: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # Webhook configuration
+    # Webhook configuration — webhook_secret is encrypted at rest when NYX_SECRET_KEY is set
     webhook_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    webhook_secret: Mapped[str] = mapped_column(String(64), default="")
+    webhook_secret: Mapped[str] = mapped_column(EncryptedString, default="")
     webhook_active: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Enabled scanners (comma-separated)

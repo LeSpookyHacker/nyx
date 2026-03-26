@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import List, Optional
-
-from typing import Any
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
@@ -14,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import ScanStatus, ScanTrigger
 from app.core.limiter import limiter
-from app.core.security import require_api_key
+from app.core.security import require_api_key, require_scope, verify_submission_hmac, SCOPE_SCANNER, SCOPE_ANALYST
 from app.database import get_db
 from app.models.repository import Repository
 from app.models.scan import Scan
@@ -55,19 +53,23 @@ async def import_scan_results_json(
     body: ScanImportJsonRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_SCANNER, SCOPE_ANALYST)),
 ):
     """
     Import raw scanner JSON output via a JSON body (CI/CD-friendly alternative to multipart).
 
-    Accepts the same scanner output formats as /import.
+    Optionally include X-Nyx-Submission-HMAC header for provenance verification:
+        HMAC-SHA256(key=repo_webhook_secret, msg=SHA256(request_body_bytes))
+    Verified scans are flagged as submission_verified=True in the database.
 
     Example (GitHub Actions / curl):
         jq -n --arg repo "$REPO_ID" --arg scanner "SEMGREP" --arg ref "$GIT_REF" \\
                --slurpfile data results.json \\
            '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$data[0]}' | \\
         curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
-             -H "Content-Type: application/json" -H "X-API-Key: $NYX_API_KEY" -d @-
+             -H "Content-Type: application/json" -H "X-API-Key: $NYX_API_KEY" \\
+             -H "X-Nyx-Submission-HMAC: sha256=$(echo -n '...' | openssl dgst -sha256 -hmac '$SECRET')" \\
+             -d @-
     """
     _MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MB
     content_length = request.headers.get("content-length")
@@ -75,8 +77,16 @@ async def import_scan_results_json(
         raise HTTPException(status_code=413, detail="Payload too large (max 50 MB)")
 
     repo_result = await db.execute(select(Repository).where(Repository.id == body.repository_id))
-    if not repo_result.scalar_one_or_none():
+    repo = repo_result.scalar_one_or_none()
+    if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
+
+    # Verify optional submission HMAC for provenance checking
+    submission_hmac_header = request.headers.get("X-Nyx-Submission-HMAC")
+    body_bytes = await request.body()
+    submission_verified = False
+    if repo.webhook_secret:
+        submission_verified = verify_submission_hmac(body_bytes, submission_hmac_header, repo.webhook_secret)
 
     scan = Scan(
         repository_id=body.repository_id,
@@ -86,6 +96,7 @@ async def import_scan_results_json(
         git_ref=body.git_ref,
         raw_output=json.dumps(body.data),
         started_at=datetime.now(timezone.utc),
+        submission_verified=submission_verified,
     )
     db.add(scan)
     await db.commit()
@@ -94,7 +105,12 @@ async def import_scan_results_json(
     background_tasks.add_task(process_scan_results, scan.id, body.data)
     await log_event(db, actor=_key, action="scan.imported", resource_type="scan",
         resource_id=scan.id,
-        metadata={"scanner": scan.scanner, "repository_id": body.repository_id, "git_ref": body.git_ref})
+        metadata={
+            "scanner": scan.scanner,
+            "repository_id": body.repository_id,
+            "git_ref": body.git_ref,
+            "submission_verified": submission_verified,
+        })
     await db.commit()
     return scan
 

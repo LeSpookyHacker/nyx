@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, List, Optional
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import ScanStatus, ScanTrigger, ScannerType
@@ -45,6 +45,9 @@ class Scan(Base, TimestampMixin):
 
     # GitHub delivery ID — prevents replay of identical webhook events
     delivery_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, unique=True, index=True)
+
+    # Scan submission integrity — True if X-Nyx-Submission-HMAC was present and valid
+    submission_verified: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Error info
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

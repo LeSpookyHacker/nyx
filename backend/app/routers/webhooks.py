@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.core.constants import ScanStatus, ScanTrigger
 from app.core.limiter import limiter
-from app.core.security import verify_github_signature, verify_global_webhook_hmac, verify_snyk_signature
+from app.core.security import verify_github_signature, verify_global_webhook_hmac, verify_snyk_signature, verify_webhook_timestamp
 from app.database import AsyncSessionLocal
 from app.models.repository import Repository
 from app.models.scan import Scan
@@ -55,6 +55,9 @@ async def github_webhook(
         payload = json.loads(body)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    # Validate push event timestamp to prevent webhook replay (> 10 min old payloads rejected)
+    verify_webhook_timestamp(payload, event_type=x_github_event or "")
 
     # Look up the repository
     repo_full_name = payload.get("repository", {}).get("full_name", "")

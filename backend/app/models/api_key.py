@@ -21,3 +21,5 @@ class ApiKey(Base, TimestampMixin):
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_by: Mapped[str] = mapped_column(String(255), default="system")
+    # Comma-separated scope list: scanner, readonly, analyst, admin
+    scopes: Mapped[str] = mapped_column(String(255), default="admin")
