@@ -1,6 +1,67 @@
+import { useState } from 'react'
+import { KeyRound, Check, Eye, EyeOff } from 'lucide-react'
+
+function ApiKeyCard() {
+  const [value, setValue] = useState(() => localStorage.getItem('nyx_api_key') ?? '')
+  const [saved, setSaved] = useState(false)
+  const [show, setShow] = useState(false)
+
+  function save() {
+    if (value.trim()) {
+      localStorage.setItem('nyx_api_key', value.trim())
+    } else {
+      localStorage.removeItem('nyx_api_key')
+    }
+    setSaved(true)
+    setTimeout(() => setSaved(false), 2000)
+  }
+
+  return (
+    <div className="nyx-card p-6">
+      <div className="flex items-center gap-2 mb-1">
+        <KeyRound size={15} className="text-nyx-amethyst" />
+        <h2 className="text-nyx-moonbeam font-bold">Dashboard API Key</h2>
+      </div>
+      <p className="text-nyx-mist text-sm mb-4">
+        Enter the <code className="text-nyx-amethyst">NYX_API_KEY</code> value from your <code className="text-nyx-amethyst">.env</code> file.
+        This is stored in your browser and sent with every request.
+      </p>
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <input
+            type={show ? 'text' : 'password'}
+            value={value}
+            onChange={e => setValue(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && save()}
+            placeholder="nyx-your-secret-key-here"
+            className="w-full bg-nyx-dusk border border-nyx-iris/20 rounded-lg px-3 py-2 text-sm text-nyx-moonbeam placeholder-nyx-mist/30 focus:outline-none focus:border-nyx-amethyst/60 pr-9"
+          />
+          <button
+            type="button"
+            onClick={() => setShow(s => !s)}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-nyx-mist hover:text-nyx-moonbeam"
+          >
+            {show ? <EyeOff size={14} /> : <Eye size={14} />}
+          </button>
+        </div>
+        <button
+          onClick={save}
+          className="nyx-btn-primary px-4 py-2 text-sm flex items-center gap-1.5 shrink-0"
+        >
+          {saved ? <><Check size={14} /> Saved</> : 'Save'}
+        </button>
+      </div>
+      {!localStorage.getItem('nyx_api_key') && (
+        <p className="text-yellow-400/80 text-xs mt-2">No key set — all API requests will be unauthenticated.</p>
+      )}
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   return (
     <div className="max-w-2xl space-y-6">
+      <ApiKeyCard />
       <div className="nyx-card p-6">
         <h2 className="text-nyx-moonbeam font-bold mb-1">Configuration</h2>
         <p className="text-nyx-mist text-sm mb-5">
