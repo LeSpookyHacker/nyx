@@ -14,7 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.constants import FindingStatus
 from app.core.exceptions import FindingNotFound
 from app.core.limiter import limiter
-from app.core.security import get_client_ip, require_api_key, require_scope
+from app.core.security import (
+    get_client_ip, require_api_key, require_scope,
+    SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN,
+)
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.finding import Finding
@@ -117,7 +120,7 @@ async def list_findings(
     sort_by: str = Query("priority_score"),
     sort_desc: bool = Query(True),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """List findings with filtering, sorting, and pagination."""
     stmt = select(Finding)
@@ -161,7 +164,7 @@ async def export_findings(
     repository_id: Optional[str] = Query(None, max_length=36, pattern=r"^[0-9a-f-]{36}$"),
     format: str = Query("csv", pattern="^(csv|json)$"),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Export findings as CSV or JSON."""
     stmt = select(Finding)
@@ -202,7 +205,7 @@ async def export_findings(
 async def get_finding(
     finding_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()

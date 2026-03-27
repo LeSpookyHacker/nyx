@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac as _hmac
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import List, Literal, Optional
@@ -27,7 +28,7 @@ _VALID_SCOPES = {SCOPE_SCANNER, SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN}
 class ApiKeyCreate(BaseModel):
     name: str
     expires_in_days: Optional[int] = None
-    scopes: str = SCOPE_ADMIN  # default admin for backward compat
+    scopes: str = SCOPE_READONLY  # default readonly — explicit escalation required for elevated scopes (M5)
 
     @field_validator("name")
     @classmethod
@@ -96,7 +97,17 @@ async def create_api_key(
     settings = get_settings()
 
     raw_key = secrets.token_urlsafe(32)
-    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    # Use HMAC-SHA256 keyed on NYX_SECRET_KEY to defeat rainbow table attacks (H6).
+    # Falls back to plain SHA-256 if NYX_SECRET_KEY is not configured (with a warning).
+    if settings.NYX_SECRET_KEY:
+        key_hash = _hmac.new(settings.NYX_SECRET_KEY.encode(), raw_key.encode(), hashlib.sha256).hexdigest()
+    else:
+        import logging as _logging
+        _logging.getLogger("nyx.security").warning(
+            "NYX_SECRET_KEY not set — API key stored with unsalted SHA-256. "
+            "Set NYX_SECRET_KEY to enable HMAC-keyed key hashing."
+        )
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
 
     # Resolve expiry: use provided value, or enforce max lifetime if configured
     expires_at = None

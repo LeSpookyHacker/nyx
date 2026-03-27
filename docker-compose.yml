@@ -1,14 +1,6 @@
 services:
-  autoheal:
-    image: willfarrell/autoheal:latest
-    restart: always
-    environment:
-      - AUTOHEAL_CONTAINER_LABEL=autoheal
-      - AUTOHEAL_INTERVAL=30
-      - AUTOHEAL_START_PERIOD=60
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-
+  # autoheal removed — it required mounting /var/run/docker.sock which enables container
+  # escape if the container is compromised (H1). Use Docker's native restart policy instead.
   backend:
     build:
       context: ./backend
@@ -26,11 +18,12 @@ services:
       # WARNING: bind to 127.0.0.1 in production — never expose directly to the internet
       - "127.0.0.1:8000:8000"
     restart: unless-stopped
-    labels:
-      - autoheal=true
     # Prevent privilege escalation after entrypoint drops to nyx user (H4)
     security_opt:
       - no-new-privileges:true
+    # Drop all Linux capabilities — the backend process needs none (M10)
+    cap_drop:
+      - ALL
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -55,6 +48,12 @@ services:
     depends_on:
       - backend
     restart: unless-stopped
+    # Drop all Linux capabilities — nginx needs none beyond defaults (M10)
+    cap_drop:
+      - ALL
+    # nginx needs NET_BIND_SERVICE to listen on port 80 inside the container
+    cap_add:
+      - NET_BIND_SERVICE
     deploy:
       resources:
         limits:

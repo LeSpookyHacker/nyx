@@ -19,14 +19,30 @@ _CHAIN_GENESIS = "0" * 64  # prev_hash for the very first entry
 
 
 def _get_hmac_key() -> bytes:
-    """Return the HMAC key for audit chain integrity. Falls back to a weak default if not set."""
+    """
+    Return the HMAC key for audit chain integrity (H5).
+    Raises RuntimeError in production if NYX_SECRET_KEY is not set — a weak fallback
+    key would silently undermine tamper-evidence guarantees.
+    """
     try:
         from app.config import get_settings
-        secret = get_settings().NYX_SECRET_KEY
-        if secret:
-            return secret.encode()
+        settings = get_settings()
+        if settings.NYX_SECRET_KEY:
+            return settings.NYX_SECRET_KEY.encode()
+        if settings.ENVIRONMENT == "production":
+            raise RuntimeError(
+                "[SECURITY] NYX_SECRET_KEY is not set. "
+                "Cannot start in production mode without a secret key for audit chain integrity. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+    except RuntimeError:
+        raise
     except Exception:
         pass
+    logger.warning(
+        "NYX_SECRET_KEY not set — audit HMAC chain uses a weak default key. "
+        "Set NYX_SECRET_KEY before deploying to production."
+    )
     return b"nyx-audit-chain-default"
 
 

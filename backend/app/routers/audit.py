@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import require_scope, SCOPE_ADMIN
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.services.audit_service import _CHAIN_GENESIS, _compute_entry_hash, _get_hmac_key
@@ -82,7 +82,7 @@ async def get_audit_log(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ADMIN)),
 ):
     base = _build_query(actor, action, resource_type, search, date_from, date_to)
 
@@ -106,7 +106,7 @@ async def get_audit_log(
 @router.get("/verify")
 async def verify_audit_chain(
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ADMIN)),
 ):
     """
     Walk the audit log hash chain in chronological order and detect tampering.
@@ -195,7 +195,7 @@ async def download_audit_log(
     date_to: Optional[str] = Query(None),
     include_hashes: bool = Query(False),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ADMIN)),
 ):
     """Download audit log as JSON or CSV (max 10,000 rows)."""
     stmt = _build_query(actor, action, resource_type, search, date_from, date_to).limit(10_000)

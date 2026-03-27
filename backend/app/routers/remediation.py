@@ -7,12 +7,12 @@ import json
 from typing import List
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import FindingStatus, RemediationStatus
 from app.core.limiter import limiter
-from app.core.security import require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
+from app.core.security import require_scope, SCOPE_ANALYST, SCOPE_ADMIN, SCOPE_READONLY
 from app.database import get_db
 from app.models.finding import Finding
 from app.models.remediation import Remediation
@@ -95,7 +95,7 @@ async def _run_ai_fix(remediation_id: str, finding_id: str, engineer_context: st
 @router.get("", response_model=List[RemediationResponse])
 async def list_remediations(
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     result = await db.execute(
         select(Remediation).order_by(Remediation.created_at.desc())
@@ -113,6 +113,24 @@ async def request_remediation(
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Request AI-powered fix for a finding. AI generation runs in background."""
+    # Per-key daily AI cost rate limit — cap AI spend to 50 remediations per actor per day (M3)
+    _AI_DAILY_LIMIT = 50
+    from datetime import datetime, timedelta, timezone as _tz
+    from app.models.audit_log import AuditLog as _AuditLog
+    _day_start = datetime.now(_tz.utc) - timedelta(hours=24)
+    _count_result = await db.execute(
+        select(func.count()).select_from(_AuditLog).where(
+            _AuditLog.actor == _key,
+            _AuditLog.action == "remediation.requested",
+            _AuditLog.created_at >= _day_start,
+        )
+    )
+    if (_count_result.scalar_one() or 0) >= _AI_DAILY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily AI remediation limit of {_AI_DAILY_LIMIT} reached for this key. Try again tomorrow.",
+        )
+
     # Verify finding exists — load with repository for ownership audit (H6)
     finding_result = await db.execute(select(Finding).where(Finding.id == body.finding_id))
     finding = finding_result.scalar_one_or_none()
@@ -155,7 +173,7 @@ async def request_remediation(
 async def get_remediation(
     remediation_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
     rem = result.scalar_one_or_none()
@@ -166,11 +184,12 @@ async def get_remediation(
 
 @router.post("/{remediation_id}/approve", response_model=RemediationResponse)
 async def approve_remediation(
+    request: Request,
     remediation_id: str,
     body: RemediationApprove,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Approve the AI-generated fix and trigger PR creation."""
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
@@ -180,6 +199,15 @@ async def approve_remediation(
 
     if rem.status != RemediationStatus.REVIEW.value:
         raise HTTPException(status_code=400, detail=f"Cannot approve remediation in status '{rem.status}'")
+
+    # Auto-merge bypasses human review — restrict to admin scope only (H2)
+    if body.auto_merge:
+        key_scopes = set(getattr(request.state, "key_scopes", "").split(","))
+        if SCOPE_ADMIN not in key_scopes:
+            raise HTTPException(
+                status_code=403,
+                detail="auto_merge requires admin scope. Use branch protection rules for mandatory review.",
+            )
 
     rem.engineer_approved = True
     rem.engineer_notes = body.engineer_notes
@@ -201,7 +229,7 @@ async def reject_remediation(
     remediation_id: str,
     body: RemediationReject,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
     rem = result.scalar_one_or_none()
@@ -230,7 +258,7 @@ async def reject_remediation(
 async def dismiss_remediation(
     remediation_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Dismiss (delete) a FAILED or REJECTED remediation record."""
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
@@ -254,7 +282,7 @@ async def regenerate_remediation(
     body: RemediationRegenerate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Re-run AI fix generation with additional engineer context."""
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
@@ -289,7 +317,7 @@ async def bulk_request_remediation(
     body: dict,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):  # noqa: E501
     """Request AI fixes for multiple findings at once (max 20)."""
     finding_ids = body.get("finding_ids", [])
@@ -337,7 +365,7 @@ async def bulk_request_remediation(
 async def get_pr_status(
     remediation_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Poll the current PR and deployment status from GitHub."""
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
@@ -392,6 +420,12 @@ def _validate_diff_scope(diff: str, expected_file_path: str) -> None:
     touched = set(_re.findall(r"^(?:---|\+\+\+) [ab]/(.+)$", diff, _re.MULTILINE))
     for path in touched:
         path_lower = path.lower()
+        # Block path traversal sequences (M4)
+        parts = path.replace("\\", "/").split("/")
+        if ".." in parts:
+            raise ValueError(
+                f"AI-generated diff contains path traversal sequence in: {path!r}. Aborting PR creation."
+            )
         for blocked in _BLOCKED_DIFF_PATHS:
             if path_lower.startswith(blocked.lower()) or path_lower == blocked.lower():
                 raise ValueError(
@@ -438,6 +472,16 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
                 repo.default_branch,
             )
 
+            # Re-verify diff integrity before applying — detect DB tampering (H9)
+            if rem.ai_diff_sha256:
+                import hashlib as _hashlib
+                computed_sha = _hashlib.sha256((rem.ai_fix_diff or "").encode()).hexdigest()
+                if computed_sha != rem.ai_diff_sha256:
+                    raise ValueError(
+                        "AI diff integrity check failed — hash mismatch. "
+                        "The stored diff may have been tampered with. Aborting PR creation."
+                    )
+
             # Validate diff only touches the expected file (H5 — excessive AI agency)
             _validate_diff_scope(rem.ai_fix_diff, finding.file_path)
 
@@ -447,7 +491,9 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
                 raise ValueError("Could not apply diff cleanly — the file may have changed since the fix was generated.")
 
             branch_name = f"nyx/fix/{rem.id[:8]}"
-            pr_title = rem.ai_fix_summary or f"fix: Nyx AI remediation for {finding.title[:60]}"
+            # Sanitize PR title — finding.title comes from scanner output (H8)
+            safe_pr_title = _sanitize_md(rem.ai_fix_summary or finding.title, 120)
+            pr_title = safe_pr_title or f"fix: Nyx AI remediation {rem.id[:8]}"
 
             pr_body = _build_pr_body(finding, rem)
 

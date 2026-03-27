@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,11 +39,32 @@ async def list_scans(
     return result.scalars().all()
 
 
+def _check_json_depth(obj: Any, max_depth: int = 20, _current: int = 0) -> None:
+    """Reject excessively nested JSON objects to prevent JSON bomb DoS (H3)."""
+    if _current > max_depth:
+        raise ValueError(f"JSON payload exceeds maximum nesting depth of {max_depth}")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _check_json_depth(v, max_depth, _current + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _check_json_depth(item, max_depth, _current + 1)
+
+
 class ScanImportJsonRequest(BaseModel):
     repository_id: str
     scanner: str
     git_ref: Optional[str] = None
     data: Any  # raw scanner output — dict or list
+
+    @field_validator("data")
+    @classmethod
+    def validate_depth(cls, v: Any) -> Any:
+        try:
+            _check_json_depth(v)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        return v
 
 
 @router.post("/import-json", response_model=ScanResponse, status_code=202)

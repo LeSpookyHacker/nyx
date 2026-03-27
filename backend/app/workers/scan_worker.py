@@ -27,6 +27,35 @@ from app.models.repository import Repository
 from app.models.scan import Scan
 from app.services.deduplication_service import find_existing
 from app.services.normalization import get_normalizer
+
+# Known scanner identifiers — reject payloads claiming to be unknown scanners (M7)
+_KNOWN_SCANNERS = frozenset({
+    "SEMGREP", "BANDIT", "TRIVY", "GRYPE", "CHECKOV", "HADOLINT",
+    "SNYK", "GITLEAKS", "CODEQL", "ZAP", "CODE_SCANNING", "DEPENDABOT",
+})
+
+import re as _re
+# Strip control characters and limit field length for stored finding data (H4)
+_CTRL_RE = _re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
+
+
+def _sanitize_field(value: str | None, max_len: int = 2000) -> str | None:
+    """Strip dangerous characters from scanner-sourced fields before DB storage (H4)."""
+    if value is None:
+        return None
+    cleaned = _CTRL_RE.sub("", value)
+    return cleaned[:max_len]
+
+
+def _sanitize_path(value: str | None) -> str | None:
+    """Sanitize file paths — block absolute paths and traversal sequences (H4)."""
+    if value is None:
+        return None
+    cleaned = _CTRL_RE.sub("", value)[:500]
+    # Block absolute paths and traversal sequences
+    if cleaned.startswith("/") or cleaned.startswith("\\") or ".." in cleaned.split("/"):
+        cleaned = cleaned.lstrip("/\\").replace("../", "").replace("..\\", "")
+    return cleaned or None
 from app.services.prioritization_service import compute_priority_score, fetch_epss_score
 
 
@@ -45,6 +74,12 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
         await db.commit()
 
         try:
+            # Validate scanner identifier against known list — reject unknown/spoofed scanners (M7)
+            if scan.scanner.upper() not in _KNOWN_SCANNERS:
+                raise ValueError(
+                    f"Unknown scanner: {scan.scanner!r}. "
+                    f"Accepted scanners: {', '.join(sorted(_KNOWN_SCANNERS))}"
+                )
             normalizer = get_normalizer(scan.scanner)
             # Snyk webhooks deliver newIssues under a special key
             if isinstance(raw_data, dict) and "_snyk_webhook_issues" in raw_data:
@@ -75,27 +110,28 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
                     sev = Severity(nf.severity) if nf.severity in [s.value for s in Severity] else Severity.MEDIUM
                     sla_breach_at = now + timedelta(days=sev.sla_days)
 
+                    # Sanitize all scanner-sourced fields before persistence (H4)
                     finding = Finding(
                         fingerprint=nf.fingerprint(scan.repository_id),
                         repository_id=scan.repository_id,
                         scan_id=scan.id,
-                        title=nf.title,
-                        description=nf.description,
-                        rule_id=nf.rule_id,
+                        title=_sanitize_field(nf.title, 500),
+                        description=_sanitize_field(nf.description, 5000),
+                        rule_id=_sanitize_field(nf.rule_id, 255),
                         scanner=nf.scanner,
-                        scanner_native_id=nf.scanner_native_id or "",
+                        scanner_native_id=_sanitize_field(nf.scanner_native_id, 255) or "",
                         scanner_sources=nf.scanner,
-                        category=nf.category,
+                        category=_sanitize_field(nf.category, 100),
                         severity=nf.severity,
-                        file_path=nf.file_path,
+                        file_path=_sanitize_path(nf.file_path),
                         line_start=nf.line_start,
                         line_end=nf.line_end,
-                        code_snippet=nf.code_snippet,
-                        url=nf.url,
+                        code_snippet=_sanitize_field(nf.code_snippet, 10000),
+                        url=_sanitize_field(nf.url, 2000),
                         cwe_ids=nf.cwe_ids_json(),
-                        cve_id=nf.cve_id,
-                        owasp_category=nf.owasp_category,
-                        remediation_guidance=nf.remediation_guidance,
+                        cve_id=_sanitize_field(nf.cve_id, 50),
+                        owasp_category=_sanitize_field(nf.owasp_category, 100),
+                        remediation_guidance=_sanitize_field(nf.remediation_guidance, 5000),
                         cvss_score=nf.cvss_score,
                         is_exploitable=nf.is_exploitable,
                         status=FindingStatus.OPEN.value,

@@ -4,10 +4,12 @@ webhook HMAC verification, and scan submission integrity.
 """
 from __future__ import annotations
 
+import collections
 import hashlib
 import hmac
 import logging
 import secrets
+import time
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, Security, status
@@ -28,10 +30,67 @@ SCOPE_ADMIN = "admin"
 
 _ALL_SCOPES = {SCOPE_SCANNER, SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN}
 
+# Simple in-memory brute-force lockout tracker (M8).
+# Resets on restart — sufficient for blocking automated spraying within a session.
+# Each entry: {ip: (failure_count, first_failure_ts)}
+_FAILED_AUTH: dict[str, tuple[int, float]] = {}
+_LOCKOUT_THRESHOLD = 20      # lock after this many failures
+_LOCKOUT_WINDOW_S = 600      # within this rolling window (seconds)
+_LOCKOUT_DURATION_S = 900    # lock out for this long (seconds)
+
 
 def _key_identity(api_key: str) -> str:
     """Return a short, non-reversible identifier for an API key for audit logs."""
     return "key:" + hashlib.sha256(api_key.encode()).hexdigest()[:12]
+
+
+def _is_locked_out(ip: str) -> bool:
+    """Return True if the IP has exceeded the auth failure threshold (M8)."""
+    entry = _FAILED_AUTH.get(ip)
+    if not entry:
+        return False
+    count, first_ts = entry
+    now = time.monotonic()
+    if now - first_ts > _LOCKOUT_WINDOW_S:
+        # Window has elapsed — reset
+        _FAILED_AUTH.pop(ip, None)
+        return False
+    return count >= _LOCKOUT_THRESHOLD
+
+
+def _record_auth_failure(ip: str) -> None:
+    """Increment the failure counter for an IP (M8)."""
+    now = time.monotonic()
+    entry = _FAILED_AUTH.get(ip)
+    if entry:
+        count, first_ts = entry
+        if now - first_ts > _LOCKOUT_WINDOW_S:
+            _FAILED_AUTH[ip] = (1, now)
+        else:
+            _FAILED_AUTH[ip] = (count + 1, first_ts)
+    else:
+        _FAILED_AUTH[ip] = (1, now)
+
+
+def _clear_auth_failure(ip: str) -> None:
+    """Clear failure counter on successful auth (M8)."""
+    _FAILED_AUTH.pop(ip, None)
+
+
+def _compute_key_hashes(api_key: str) -> list[str]:
+    """
+    Return the list of hashes to try when looking up an API key in the DB.
+    Prefers HMAC-SHA256 (keyed with NYX_SECRET_KEY) over plain SHA-256 (H6).
+    Both are returned so old keys stored as SHA-256 still work after migration.
+    """
+    hashes = []
+    if settings.NYX_SECRET_KEY:
+        hashes.append(
+            hmac.new(settings.NYX_SECRET_KEY.encode(), api_key.encode(), hashlib.sha256).hexdigest()
+        )
+    # Always include plain SHA-256 for backward compat with pre-NYX_SECRET_KEY keys
+    hashes.append(hashlib.sha256(api_key.encode()).hexdigest())
+    return hashes
 
 
 def get_client_ip(request: Request) -> str:
@@ -55,11 +114,11 @@ async def require_api_key(
     Sets request.state.key_scopes on success (used by require_scope).
 
     Auth order:
-      1. Hash the supplied key and look it up in the api_keys DB table.
+      1. Read key from X-API-Key header OR nyx_session HTTP-only cookie (C1).
+      2. Check per-IP brute-force lockout (M8).
+      3. Hash and look up in the api_keys DB table using HMAC-SHA256 or SHA-256 (H6).
          If found (active, not expired): accept and update last_used_at.
-      2. Fall back to comparing against NYX_API_KEY env var — this covers
-         bootstrap deployments before the DB key is seeded, and is the
-         sole path in development mode when NYX_API_KEY is not set.
+      4. Fall back to comparing against NYX_API_KEY env var — bootstrap / dev.
 
     If NYX_API_KEY is not configured and no DB key matches:
       - In 'production' ENVIRONMENT: raises 503.
@@ -67,7 +126,19 @@ async def require_api_key(
     """
     from datetime import datetime, timezone
 
+    # Also accept the HTTP-only session cookie as a key source (C1)
+    if not api_key:
+        api_key = request.cookies.get("nyx_session")
+
     ip = get_client_ip(request)
+
+    # Brute-force lockout check (M8)
+    if _is_locked_out(ip):
+        logger.warning("AUTH_LOCKOUT ip=%s endpoint=%s", ip, request.url.path)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many authentication failures. Try again later.",
+        )
 
     if not api_key:
         if not settings.NYX_API_KEY:
@@ -83,23 +154,24 @@ async def require_api_key(
             request.state.key_scopes = SCOPE_ADMIN
             return "dev"
         logger.warning("AUTH_FAILURE ip=%s endpoint=%s reason=missing", ip, request.url.path)
+        _record_auth_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
             headers={"WWW-Authenticate": "ApiKey"},
         )
 
-    # ── 1. DB-backed key lookup ────────────────────────────────────────────────
+    # ── 1. DB-backed key lookup (HMAC-SHA256 preferred, SHA-256 fallback) (H6) ─
     try:
         from sqlalchemy import select as sa_select
         from app.database import AsyncSessionLocal
         from app.models.api_key import ApiKey
 
-        key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+        key_hashes = _compute_key_hashes(api_key)
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 sa_select(ApiKey).where(
-                    ApiKey.key_hash == key_hash,
+                    ApiKey.key_hash.in_(key_hashes),
                     ApiKey.is_active.is_(True),
                 )
             )
@@ -111,6 +183,7 @@ async def require_api_key(
                         "AUTH_FAILURE ip=%s endpoint=%s reason=expired key_id=%s",
                         ip, request.url.path, record.id,
                     )
+                    _record_auth_failure(ip)
                     raise HTTPException(
                         status_code=status.HTTP_401_UNAUTHORIZED,
                         detail="API key has expired",
@@ -118,6 +191,7 @@ async def require_api_key(
                     )
                 record.last_used_at = now
                 await db.commit()
+                _clear_auth_failure(ip)
                 request.state.key_scopes = record.scopes or SCOPE_ADMIN
                 return f"apikey:{record.name}"
     except HTTPException:
@@ -145,11 +219,13 @@ async def require_api_key(
             ip,
             request.url.path,
         )
+        _record_auth_failure(ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",
             headers={"WWW-Authenticate": "ApiKey"},
         )
+    _clear_auth_failure(ip)
     request.state.key_scopes = SCOPE_ADMIN
     return _key_identity(api_key)
 
@@ -202,10 +278,19 @@ def warn_insecure_config() -> None:
         issues.append("JIRA_MOCK_MODE=true in production — JIRA tickets will not be created")
 
     if settings.DEBUG and settings.ENVIRONMENT == "production":
-        issues.append("DEBUG=true in production — SQL queries and tracebacks may be exposed")
+        raise RuntimeError(
+            "[SECURITY] DEBUG=true in production — SQL queries and tracebacks may be exposed. "
+            "Set DEBUG=false before running in production."
+        )
 
     if not settings.HTTPS_ONLY and settings.ENVIRONMENT == "production":
-        issues.append("HTTPS_ONLY=false in production — API traffic is not enforced over HTTPS (L-4)")
+        issues.append("HTTPS_ONLY=false in production — API traffic is not enforced over HTTPS")
+
+    if settings.API_KEY_MAX_LIFETIME_DAYS == 0 and settings.ENVIRONMENT == "production":
+        issues.append(
+            "API_KEY_MAX_LIFETIME_DAYS=0 in production — API keys never expire. "
+            "Set a maximum lifetime (e.g., API_KEY_MAX_LIFETIME_DAYS=90) to limit credential exposure."
+        )
 
     for issue in issues:
         logger.warning("[SECURITY CONFIG] %s", issue)

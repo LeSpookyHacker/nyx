@@ -5,6 +5,8 @@ const apiClient = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  // Send session cookie with every request (C1 — HTTP-only cookie replaces localStorage)
+  withCredentials: true,
   // FastAPI expects repeated query keys for arrays: ?severity=CRITICAL&severity=HIGH
   // Axios default bracket notation (?severity[]=CRITICAL) is not recognised by FastAPI.
   paramsSerializer: (params) => {
@@ -21,17 +23,11 @@ const apiClient = axios.create({
   },
 })
 
-apiClient.interceptors.request.use((config) => {
-  const key = localStorage.getItem('nyx_api_key')
-  if (key) config.headers['X-API-Key'] = key
-  return config
-})
-
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      console.error('Nyx: Authentication required. Set VITE_NYX_API_KEY.')
+      console.error('Nyx: Authentication required. Set your API key in Settings.')
     }
     return Promise.reject(error)
   }

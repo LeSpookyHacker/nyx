@@ -1,19 +1,33 @@
 import { useState } from 'react'
-import { KeyRound, Check, Eye, EyeOff } from 'lucide-react'
+import { KeyRound, Check, Eye, EyeOff, LogOut } from 'lucide-react'
+import axios from 'axios'
 
 function ApiKeyCard() {
-  const [value, setValue] = useState(() => localStorage.getItem('nyx_api_key') ?? '')
+  const [value, setValue] = useState('')
   const [saved, setSaved] = useState(false)
   const [show, setShow] = useState(false)
+  const [error, setError] = useState('')
 
-  function save() {
+  async function save() {
+    setError('')
     if (value.trim()) {
-      localStorage.setItem('nyx_api_key', value.trim())
-    } else {
-      localStorage.removeItem('nyx_api_key')
+      try {
+        // POST key to backend — server sets an HTTP-only SameSite=Strict cookie (C1).
+        // The key is never stored in localStorage or any JS-accessible storage.
+        await axios.post('/auth/session', { api_key: value.trim() }, { withCredentials: true })
+        setValue('')
+        setSaved(true)
+        setTimeout(() => setSaved(false), 2000)
+      } catch {
+        setError('Invalid API key — check the value and try again.')
+      }
     }
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  }
+
+  async function logout() {
+    await axios.post('/auth/logout', {}, { withCredentials: true })
+    setValue('')
+    setSaved(false)
   }
 
   return (
@@ -24,7 +38,7 @@ function ApiKeyCard() {
       </div>
       <p className="text-nyx-mist text-sm mb-4">
         Enter the <code className="text-nyx-amethyst">NYX_API_KEY</code> value from your <code className="text-nyx-amethyst">.env</code> file.
-        This is stored in your browser and sent with every request.
+        The key is validated by the server and stored in an HTTP-only cookie — never in your browser's local storage.
       </p>
       <div className="flex gap-2">
         <div className="relative flex-1">
@@ -50,10 +64,15 @@ function ApiKeyCard() {
         >
           {saved ? <><Check size={14} /> Saved</> : 'Save'}
         </button>
+        <button
+          onClick={logout}
+          title="Clear session"
+          className="px-3 py-2 text-sm text-nyx-mist hover:text-nyx-moonbeam border border-nyx-iris/20 rounded-lg"
+        >
+          <LogOut size={14} />
+        </button>
       </div>
-      {!localStorage.getItem('nyx_api_key') && (
-        <p className="text-yellow-400/80 text-xs mt-2">No key set — all API requests will be unauthenticated.</p>
-      )}
+      {error && <p className="text-red-400 text-xs mt-2">{error}</p>}
     </div>
   )
 }

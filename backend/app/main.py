@@ -8,7 +8,7 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -363,10 +363,10 @@ async def lifespan(app: FastAPI):
     # Surface security misconfigurations at startup
     warn_insecure_config()
 
-    # Warn when SQLite is used in production — it has no access controls or encryption (M5)
+    # Hard-fail when SQLite is used in production — it has no access controls or encryption (M14)
     if settings.ENVIRONMENT == "production" and "sqlite" in settings.DATABASE_URL.lower():
-        logger.warning(
-            "[SECURITY CONFIG] DATABASE_URL is SQLite in production — SQLite has no access controls, "
+        raise RuntimeError(
+            "[SECURITY] DATABASE_URL is SQLite in production. SQLite has no access controls, "
             "no encryption at rest, and is not suitable for multi-user production deployments. "
             "Set DATABASE_URL to a PostgreSQL connection string."
         )
@@ -503,6 +503,82 @@ app.include_router(sla_policies.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(regression_alerts.router, prefix=API_PREFIX)
 app.include_router(api_keys.router, prefix=API_PREFIX)
+
+
+@app.post("/auth/session", tags=["auth"])
+async def create_session(request: Request, response: Response):
+    """
+    Exchange an API key for an HTTP-only session cookie (C1).
+    The cookie is SameSite=Strict and HttpOnly — not accessible to JavaScript.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        from fastapi import HTTPException as _HTTPEx
+        raise _HTTPEx(status_code=400, detail="JSON body with 'api_key' field required")
+
+    api_key = (body.get("api_key") or "").strip()
+    if not api_key:
+        from fastapi import HTTPException as _HTTPEx
+        raise _HTTPEx(status_code=400, detail="api_key is required")
+
+    # Validate the key using the same logic as require_api_key
+    from app.core.security import _compute_key_hashes, _clear_auth_failure, _record_auth_failure
+    from sqlalchemy import select as _sa_select
+    from app.database import AsyncSessionLocal as _ASL
+    from app.models.api_key import ApiKey as _ApiKey
+    from datetime import datetime, timezone
+    import secrets as _secrets
+
+    ip = request.client.host if request.client else "unknown"
+    key_valid = False
+
+    try:
+        key_hashes = _compute_key_hashes(api_key)
+        async with _ASL() as db:
+            result = await db.execute(
+                _sa_select(_ApiKey).where(
+                    _ApiKey.key_hash.in_(key_hashes),
+                    _ApiKey.is_active.is_(True),
+                )
+            )
+            record = result.scalar_one_or_none()
+            if record:
+                now = datetime.now(timezone.utc)
+                if not (record.expires_at and record.expires_at < now):
+                    record.last_used_at = now
+                    await db.commit()
+                    key_valid = True
+    except Exception:
+        pass
+
+    # Fallback: compare against NYX_API_KEY env var
+    if not key_valid and settings.NYX_API_KEY:
+        key_valid = _secrets.compare_digest(api_key, settings.NYX_API_KEY)
+
+    if not key_valid:
+        _record_auth_failure(ip)
+        from fastapi import HTTPException as _HTTPEx
+        raise _HTTPEx(status_code=401, detail="Invalid API key")
+
+    _clear_auth_failure(ip)
+    response.set_cookie(
+        key="nyx_session",
+        value=api_key,
+        httponly=True,
+        samesite="strict",
+        secure=settings.HTTPS_ONLY,
+        max_age=86400 * 7,  # 7 days
+        path="/",
+    )
+    return {"status": "ok"}
+
+
+@app.post("/auth/logout", tags=["auth"])
+async def logout(response: Response):
+    """Clear the session cookie (C1)."""
+    response.delete_cookie(key="nyx_session", path="/", samesite="strict")
+    return {"status": "ok"}
 
 
 @app.get("/health", tags=["system"])
