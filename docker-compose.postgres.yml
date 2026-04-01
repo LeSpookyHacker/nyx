@@ -1,0 +1,54 @@
+# docker-compose.postgres.yml — PostgreSQL profile for Nyx
+#
+# Use this when you need a production-grade database.
+# PostgreSQL provides access controls, WAL-based backup, and concurrent writes
+# that SQLite cannot offer.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
+#
+# Environment variables required in .env:
+#   POSTGRES_PASSWORD=<choose a strong password>
+#   DATABASE_URL=postgresql+asyncpg://nyx:${POSTGRES_PASSWORD}@postgres:5432/nyx
+#
+# For external managed PostgreSQL (AWS RDS, Azure Database, etc.):
+#   Skip this file and set DATABASE_URL directly in your .env.
+#
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: nyx
+      POSTGRES_USER: nyx
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - nyx_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nyx -d nyx"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Bind to internal network only — not exposed externally
+    networks:
+      - nyx_internal
+    security_opt:
+      - no-new-privileges:true
+
+  backend:
+    # Override the DATABASE_URL to point at the Postgres container
+    environment:
+      DATABASE_URL: postgresql+asyncpg://nyx:${POSTGRES_PASSWORD:-changeme}@postgres:5432/nyx
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - nyx_internal
+
+volumes:
+  nyx_postgres_data:
+    driver: local
+
+networks:
+  nyx_internal:
+    driver: bridge

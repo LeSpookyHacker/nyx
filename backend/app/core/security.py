@@ -4,12 +4,12 @@ webhook HMAC verification, and scan submission integrity.
 """
 from __future__ import annotations
 
-import collections
 import hashlib
 import hmac
+import ipaddress
 import logging
 import secrets
-import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, Security, status
@@ -30,51 +30,212 @@ SCOPE_ADMIN = "admin"
 
 _ALL_SCOPES = {SCOPE_SCANNER, SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN}
 
-# Simple in-memory brute-force lockout tracker (M8).
-# Resets on restart — sufficient for blocking automated spraying within a session.
-# Each entry: {ip: (failure_count, first_failure_ts)}
-_FAILED_AUTH: dict[str, tuple[int, float]] = {}
 _LOCKOUT_THRESHOLD = 20      # lock after this many failures
 _LOCKOUT_WINDOW_S = 600      # within this rolling window (seconds)
 _LOCKOUT_DURATION_S = 900    # lock out for this long (seconds)
 
+# ── Trusted proxy CIDR cache ──────────────────────────────────────────────────
+# Parsed once from settings at module load.  An empty list means no proxy is
+# trusted, so X-Forwarded-For is *never* believed (safest default).
+_TRUSTED_PROXY_NETS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
 
-def _key_identity(api_key: str) -> str:
-    """Return a short, non-reversible identifier for an API key for audit logs."""
-    return "key:" + hashlib.sha256(api_key.encode()).hexdigest()[:12]
+def _build_trusted_proxy_nets() -> None:
+    """Parse TRUSTED_PROXY_CIDRS from settings into network objects."""
+    global _TRUSTED_PROXY_NETS
+    nets = []
+    for cidr in settings.TRUSTED_PROXY_CIDRS.split(","):
+        cidr = cidr.strip()
+        if not cidr:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            logger.warning("TRUSTED_PROXY_CIDRS: invalid CIDR %r — ignored", cidr)
+    _TRUSTED_PROXY_NETS = nets
+
+
+_build_trusted_proxy_nets()
+
+
+def _is_trusted_proxy(ip: str) -> bool:
+    """Return True if the TCP peer IP is within a configured trusted proxy range."""
+    if not _TRUSTED_PROXY_NETS:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip)
+        return any(addr in net for net in _TRUSTED_PROXY_NETS)
+    except ValueError:
+        return False
+
+
+def get_client_ip(request: Request) -> str:
+    """
+    Extract the real client IP address.
+
+    X-Forwarded-For is ONLY trusted when the direct TCP peer is in TRUSTED_PROXY_CIDRS.
+    Without that configuration, the raw TCP peer address is returned — preventing any
+    client from spoofing their IP to bypass per-IP brute-force lockouts.
+    """
+    peer_ip = request.client.host if request.client else "unknown"
+    if _is_trusted_proxy(peer_ip):
+        forwarded_for = request.headers.get("X-Forwarded-For", "")
+        if forwarded_for:
+            # Take the leftmost (client-supplied) entry — the proxy appends its own IP last
+            return forwarded_for.split(",")[0].strip()
+    return peer_ip
+
+
+# ── Persistent brute-force lockout ─────────────────────────────────────────────
+# The in-memory dict is the fast path; the DB is the source of truth that survives
+# container restarts.  We hydrate memory from DB at startup (see hydrate_lockout_from_db).
+
+_FAILED_AUTH: dict[str, tuple[int, datetime]] = {}  # ip -> (failure_count, first_failure_at_utc)
+_LOCKOUT_UNTIL: dict[str, datetime] = {}            # ip -> locked_until_utc
 
 
 def _is_locked_out(ip: str) -> bool:
-    """Return True if the IP has exceeded the auth failure threshold (M8)."""
+    """Return True if the IP is currently locked out (memory fast-path)."""
+    now = datetime.now(timezone.utc)
+
+    # Active lockout
+    locked_until = _LOCKOUT_UNTIL.get(ip)
+    if locked_until and now < locked_until:
+        return True
+    if locked_until:
+        _LOCKOUT_UNTIL.pop(ip, None)
+
+    # Failure window check
     entry = _FAILED_AUTH.get(ip)
     if not entry:
         return False
     count, first_ts = entry
-    now = time.monotonic()
-    if now - first_ts > _LOCKOUT_WINDOW_S:
-        # Window has elapsed — reset
+    if (now - first_ts).total_seconds() > _LOCKOUT_WINDOW_S:
         _FAILED_AUTH.pop(ip, None)
         return False
     return count >= _LOCKOUT_THRESHOLD
 
 
 def _record_auth_failure(ip: str) -> None:
-    """Increment the failure counter for an IP (M8)."""
-    now = time.monotonic()
+    """Increment failure counter for an IP and set lockout if threshold exceeded."""
+    now = datetime.now(timezone.utc)
     entry = _FAILED_AUTH.get(ip)
     if entry:
         count, first_ts = entry
-        if now - first_ts > _LOCKOUT_WINDOW_S:
+        if (now - first_ts).total_seconds() > _LOCKOUT_WINDOW_S:
             _FAILED_AUTH[ip] = (1, now)
+            count = 1
         else:
-            _FAILED_AUTH[ip] = (count + 1, first_ts)
+            count += 1
+            _FAILED_AUTH[ip] = (count, first_ts)
     else:
-        _FAILED_AUTH[ip] = (1, now)
+        count = 1
+        _FAILED_AUTH[ip] = (count, now)
+        first_ts = now
+
+    if count >= _LOCKOUT_THRESHOLD:
+        locked_until = now + timedelta(seconds=_LOCKOUT_DURATION_S)
+        _LOCKOUT_UNTIL[ip] = locked_until
+        # Persist asynchronously — fire-and-forget
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_persist_lockout(ip, count, _FAILED_AUTH[ip][1], locked_until))
+        except RuntimeError:
+            pass  # No running event loop (unit tests etc.)
 
 
 def _clear_auth_failure(ip: str) -> None:
-    """Clear failure counter on successful auth (M8)."""
+    """Clear failure state for an IP on successful authentication."""
     _FAILED_AUTH.pop(ip, None)
+    _LOCKOUT_UNTIL.pop(ip, None)
+    # Persist the clearance asynchronously
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_clear_lockout_db(ip))
+    except RuntimeError:
+        pass
+
+
+async def _persist_lockout(ip: str, count: int, first_failure_at: datetime, locked_until: datetime) -> None:
+    """Write lockout state to DB (called as a background task)."""
+    try:
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        from app.database import AsyncSessionLocal
+        from app.models.auth_lockout import AuthLockout
+        async with AsyncSessionLocal() as db:
+            now = datetime.now(timezone.utc)
+            existing = await db.get(AuthLockout, ip)
+            if existing:
+                existing.failure_count = count
+                existing.first_failure_at = first_failure_at
+                existing.locked_until = locked_until
+                existing.updated_at = now
+            else:
+                db.add(AuthLockout(
+                    ip=ip,
+                    failure_count=count,
+                    first_failure_at=first_failure_at,
+                    locked_until=locked_until,
+                    updated_at=now,
+                ))
+            await db.commit()
+    except Exception:
+        pass  # Lockout persistence is best-effort — never fail the auth path
+
+
+async def _clear_lockout_db(ip: str) -> None:
+    """Remove lockout record from DB (called as a background task)."""
+    try:
+        from app.database import AsyncSessionLocal
+        from app.models.auth_lockout import AuthLockout
+        async with AsyncSessionLocal() as db:
+            record = await db.get(AuthLockout, ip)
+            if record:
+                await db.delete(record)
+                await db.commit()
+    except Exception:
+        pass
+
+
+async def hydrate_lockout_from_db() -> None:
+    """
+    Called at startup: load active lockout records from DB into the in-memory dicts.
+    This ensures brute-force lockout state survives container restarts.
+    """
+    try:
+        from sqlalchemy import select
+        from app.database import AsyncSessionLocal
+        from app.models.auth_lockout import AuthLockout
+        now = datetime.now(timezone.utc)
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(AuthLockout))
+            for record in result.scalars().all():
+                first_ts = record.first_failure_at
+                # If the failure window has elapsed, skip (no need to load stale records)
+                if first_ts.tzinfo is None:
+                    first_ts = first_ts.replace(tzinfo=timezone.utc)
+                age = (now - first_ts).total_seconds()
+                if age > _LOCKOUT_WINDOW_S + _LOCKOUT_DURATION_S:
+                    # Stale record — clean up
+                    await db.delete(record)
+                    continue
+                _FAILED_AUTH[record.ip] = (record.failure_count, first_ts)
+                if record.locked_until:
+                    lu = record.locked_until
+                    if lu.tzinfo is None:
+                        lu = lu.replace(tzinfo=timezone.utc)
+                    if lu > now:
+                        _LOCKOUT_UNTIL[record.ip] = lu
+            await db.commit()
+        logger.info("AUTH_LOCKOUT hydrated %d records from DB", len(_FAILED_AUTH))
+    except Exception:
+        logger.warning("AUTH_LOCKOUT hydration from DB failed — lockout state starts fresh", exc_info=True)
+
+
+def _key_identity(api_key: str) -> str:
+    """Return a short, non-reversible identifier for an API key for audit logs."""
+    return "key:" + hashlib.sha256(api_key.encode()).hexdigest()[:12]
 
 
 def _compute_key_hashes(api_key: str) -> list[str]:
@@ -93,18 +254,6 @@ def _compute_key_hashes(api_key: str) -> list[str]:
     return hashes
 
 
-def get_client_ip(request: Request) -> str:
-    """
-    Extract the most likely real client IP.
-    Checks X-Forwarded-For first (set by load balancers/reverse proxies),
-    then falls back to the direct TCP peer address.
-    """
-    forwarded_for = request.headers.get("X-Forwarded-For", "")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
-
-
 async def require_api_key(
     request: Request,
     api_key: str | None = Security(_api_key_header),
@@ -115,7 +264,7 @@ async def require_api_key(
 
     Auth order:
       1. Read key from X-API-Key header OR nyx_session HTTP-only cookie (C1).
-      2. Check per-IP brute-force lockout (M8).
+      2. Check per-IP brute-force lockout (M8) — memory-fast-path, DB-persistent.
       3. Hash and look up in the api_keys DB table using HMAC-SHA256 or SHA-256 (H6).
          If found (active, not expired): accept and update last_used_at.
       4. Fall back to comparing against NYX_API_KEY env var — bootstrap / dev.
@@ -124,15 +273,13 @@ async def require_api_key(
       - In 'production' ENVIRONMENT: raises 503.
       - Otherwise: allows with a 'dev' identity and logs a warning.
     """
-    from datetime import datetime, timezone
-
     # Also accept the HTTP-only session cookie as a key source (C1)
     if not api_key:
         api_key = request.cookies.get("nyx_session")
 
     ip = get_client_ip(request)
 
-    # Brute-force lockout check (M8)
+    # Brute-force lockout check (M8) — persisted across restarts
     if _is_locked_out(ip):
         logger.warning("AUTH_LOCKOUT ip=%s endpoint=%s", ip, request.url.path)
         raise HTTPException(
@@ -292,6 +439,13 @@ def warn_insecure_config() -> None:
             "Set a maximum lifetime (e.g., API_KEY_MAX_LIFETIME_DAYS=90) to limit credential exposure."
         )
 
+    if not settings.TRUSTED_PROXY_CIDRS and settings.ENVIRONMENT == "production":
+        issues.append(
+            "TRUSTED_PROXY_CIDRS is not set — X-Forwarded-For is ignored for IP extraction. "
+            "If Nyx runs behind a reverse proxy, set TRUSTED_PROXY_CIDRS to the proxy's IP range "
+            "so per-IP brute-force lockouts use the real client IP."
+        )
+
     for issue in issues:
         logger.warning("[SECURITY CONFIG] %s", issue)
 
@@ -387,8 +541,6 @@ def verify_webhook_timestamp(payload: dict, event_type: str, max_age_seconds: in
     if event_type != "push":
         return
 
-    from datetime import datetime, timezone
-
     # GitHub push payloads include repository.pushed_at (Unix timestamp)
     pushed_at_raw = payload.get("repository", {}).get("pushed_at")
     if not pushed_at_raw:
@@ -426,11 +578,18 @@ def verify_submission_hmac(
         HMAC-SHA256(key=repo_webhook_secret, msg=SHA256(payload_bytes))
     and sends it as: sha256=<hexdigest>
 
-    Returns True if verified, False if header is absent (unverified but accepted).
-    Raises 403 if the header is present but invalid.
+    Returns True if verified.
+    Returns False if header is absent AND REQUIRE_SUBMISSION_HMAC is False.
+    Raises 403 if the header is present but invalid, OR if absent and
+    REQUIRE_SUBMISSION_HMAC=True.
     """
     if not submission_hmac_header:
-        return False  # Absent — unverified but not rejected
+        if settings.REQUIRE_SUBMISSION_HMAC:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="X-Nyx-Submission-HMAC header is required (REQUIRE_SUBMISSION_HMAC=true)",
+            )
+        return False  # Absent and not required — unverified but accepted
 
     if not submission_hmac_header.startswith("sha256="):
         raise HTTPException(
@@ -452,6 +611,131 @@ def verify_submission_hmac(
     return True
 
 
+# ── GitHub IP allowlist ────────────────────────────────────────────────────────
+# GitHub publishes its webhook source IP ranges at https://api.github.com/meta
+# Cache the parsed ranges in memory; refresh lazily on first use.
+_GITHUB_WEBHOOK_NETS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
+_GITHUB_NETS_FALLBACK = [
+    # Fallback hardcoded ranges if the meta API is unreachable
+    # Updated as of 2025-Q1 — should be refreshed periodically
+    ipaddress.ip_network("192.30.252.0/22"),
+    ipaddress.ip_network("185.199.108.0/22"),
+    ipaddress.ip_network("140.82.112.0/20"),
+    ipaddress.ip_network("143.55.64.0/20"),
+]
+
+
+async def _load_github_webhook_ips() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Fetch GitHub's current webhook source IP ranges from their meta API."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get("https://api.github.com/meta")
+            data = resp.json()
+            nets = []
+            for cidr in data.get("hooks", []):
+                try:
+                    nets.append(ipaddress.ip_network(cidr, strict=False))
+                except ValueError:
+                    pass
+            return nets if nets else _GITHUB_NETS_FALLBACK
+    except Exception:
+        return _GITHUB_NETS_FALLBACK
+
+
+async def verify_github_source_ip(request: Request) -> None:
+    """
+    When GITHUB_WEBHOOK_IP_ALLOWLIST_ENABLED=true, verify the request originates
+    from a known GitHub IP range.  Uses TRUSTED_PROXY_CIDRS-aware IP extraction
+    so this works correctly behind a reverse proxy.
+    """
+    if not settings.GITHUB_WEBHOOK_IP_ALLOWLIST_ENABLED:
+        return
+
+    global _GITHUB_WEBHOOK_NETS
+    if _GITHUB_WEBHOOK_NETS is None:
+        _GITHUB_WEBHOOK_NETS = await _load_github_webhook_ips()
+
+    ip_str = get_client_ip(request)
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        if any(addr in net for net in _GITHUB_WEBHOOK_NETS):
+            return
+    except ValueError:
+        pass
+
+    logger.warning("WEBHOOK_IP_BLOCKED ip=%s — not in GitHub IP allowlist", ip_str)
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Request does not originate from a known GitHub IP range",
+    )
+
+
 def generate_webhook_secret() -> str:
     """Generate a cryptographically random 32-byte hex webhook secret."""
     return secrets.token_hex(32)
+
+
+async def rotate_secret_key(new_secret_key: str) -> dict:
+    """
+    Re-encrypt all Fernet-encrypted database fields with a new NYX_SECRET_KEY.
+
+    This is necessary when rotating the master secret — without this, all
+    existing encrypted values (webhook secrets) become unreadable.
+
+    Returns a dict with counts of rotated and failed records.
+    """
+    from app.database import AsyncSessionLocal
+    from app.models.repository import Repository
+    from app.core.crypto import EncryptedString
+    from sqlalchemy import select
+
+    if not new_secret_key:
+        raise ValueError("new_secret_key must not be empty")
+
+    rotated = 0
+    failed = 0
+
+    async with AsyncSessionLocal() as db:
+        repos_result = await db.execute(select(Repository))
+        repos = repos_result.scalars().all()
+
+        for repo in repos:
+            try:
+                # Read the current plaintext value (decrypted with old key from settings)
+                current_secret = repo.webhook_secret
+                if not current_secret:
+                    continue
+
+                # Re-encrypt with the new key by temporarily using the new key
+                from cryptography.fernet import Fernet
+                import base64
+                import hashlib as _hashlib
+
+                # Derive new Fernet key from new_secret_key
+                new_key_bytes = _hashlib.pbkdf2_hmac(
+                    "sha256",
+                    new_secret_key.encode(),
+                    b"nyx-fernet-salt",
+                    100_000,
+                    dklen=32,
+                )
+                new_fernet = Fernet(base64.urlsafe_b64encode(new_key_bytes))
+                new_encrypted = new_fernet.encrypt(current_secret.encode()).decode()
+
+                # Store raw encrypted value directly (bypass the ORM type decorator)
+                from sqlalchemy import update
+                await db.execute(
+                    update(Repository)
+                    .where(Repository.id == repo.id)
+                    .values(webhook_secret=new_encrypted)
+                )
+                rotated += 1
+            except Exception as e:
+                logger.error("KEY_ROTATION_FAILED repo_id=%s error=%s", repo.id, e)
+                failed += 1
+
+        await db.commit()
+
+    logger.info("KEY_ROTATION_COMPLETE rotated=%d failed=%d", rotated, failed)
+    return {"rotated": rotated, "failed": failed}

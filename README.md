@@ -93,6 +93,11 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | 🪄 | **Claude Code Prompt Generator** | Select any findings in the Findings list and generate a structured, copy-ready prompt for Claude Code — grouped by scanner category with full finding context, code snippets, CVE data, and a built-in completion report template |
 | 📋 | **Bulk Repository Prompt** | Generate a Claude Code prompt covering all open findings in a specific repository in one click from the Repositories page or the repository detail view |
 | 🔄 | **IN_REMEDIATION Status** | Findings used to generate a Claude prompt are automatically flipped to `IN_REMEDIATION` status so the team knows active work is in progress |
+| 🌊 | **SSE Fix Streaming** | `GET /remediation/{id}/stream` streams AI fix generation progress as Server-Sent Events — useful for long-running fixes without polling |
+| 🔀 | **Alternative Fix Suggestions** | `POST /remediation/{id}/alternatives` requests 2–3 independently reasoned fix approaches with trade-off analysis, letting engineers choose the best fit for their codebase |
+| 🧪 | **Test File Context** | Nyx automatically locates test files for the finding's source file (common naming conventions: `test_foo.py`, `foo_test.py`, `tests/test_foo.py`) and includes their content in the AI prompt — enabling Claude to generate fixes that pass existing tests |
+| ⚠️ | **AI Confidence Gating** | Fixes with confidence below `AI_MIN_CONFIDENCE_THRESHOLD` are flagged `REVIEW_LOW_CONFIDENCE` and surfaced for human review before merge consideration |
+| 🔬 | **Diff Security Scanning** | Generated diffs are heuristically scanned for dangerous patterns (`os.system`, `eval`, `exec`, hardcoded secrets, shell injection) before storage. Flagged warnings are stored and returned with the remediation record |
 
 ### Visibility & Reporting
 
@@ -104,11 +109,16 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | 🕵️ | **Scanner Coverage Gaps** | Identify stale, unconfigured, or partially-covered repositories |
 | 📋 | **Compliance Mapping** | PCI DSS, SOC 2, NIST 800-53, CIS Controls, OWASP Top 10 — findings mapped to controls |
 | 📉 | **Compliance Trend Analysis** | Weekly coverage percentage trend per framework over 30/60/90 days |
-| ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level |
+| ⏰ | **MTTR Tracking** | Mean Time to Remediate per severity level, broken down by scanner and category |
 | 🚨 | **Regression Alerts** | Dashboard banner and KPI card for recently re-appeared findings |
 | 🔔 | **Unified Alert Bell** | Top-bar notification bell shows two tabs: SBOM component change alerts and Regression Auto-Sort alerts. Each tab has its own unread badge contributing to the total bell count |
 | 🔑 | **API Key Management** | Create, rotate, and revoke database-backed API keys with four permission scopes: `scanner` (submit scans only), `readonly` (read-only access), `analyst` (update/suppress findings), `admin` (full access). Each key carries a name, optional expiry, last-used timestamp, and scope. The bootstrap key is seeded from `NYX_API_KEY` automatically on first start with `admin` scope |
 | 📝 | **Audit Log** | Comprehensive, searchable, downloadable record of every action with tamper-evident HMAC hash chain. Each entry carries `entry_hash` and `prev_hash` — walk the full chain via `GET /audit/verify` to detect any modification, insertion, or deletion |
+| 📊 | **Velocity Analytics** | Finding rate metrics, net-new vs fixed per day, burndown estimate, weekly trend, and MTTR breakdown by severity, scanner, and category |
+| 💰 | **AI Cost Dashboard** | Token usage totals, estimated Claude API spend (input/output tokens × published pricing), daily time series, and top-10 most expensive remediations — all from `GET /dashboard/ai-costs` |
+| 📐 | **Custom Compliance Frameworks** | Define your own compliance frameworks and controls in the DB with CWE/OWASP mappings. Custom frameworks appear alongside built-in ones in all compliance views and reports |
+| ✅ | **Risk Acceptance Workflow** | Formal risk acceptance with business justification, compensating controls, evidence URL, approver, and configurable expiry. Approvals and revocations are tracked with full audit trail |
+| 🏥 | **Integration Health Check** | `GET /health/integrations` probes database, Anthropic API, GitHub, JIRA, and notification webhook — returns per-integration status for monitoring and alerting |
 
 ---
 
@@ -198,6 +208,18 @@ Engineering and security teams face a common problem: dozens of scanners produce
 
 > [!NOTE]
 > Nyx requires Docker with Compose v2. Get it running in under 5 minutes for local evaluation.
+
+### Automated setup (recommended)
+
+```bash
+git clone https://github.com/your-org/nyx.git
+cd nyx
+./setup.sh
+```
+
+`setup.sh` is an interactive first-run wizard that checks dependencies, generates secure secrets, prompts for your GitHub token and Anthropic API key, validates them via API, builds Docker images, and starts Nyx. It also supports `--non-interactive` for CI/CD pipelines and `--skip-start` if you want to review the generated `.env` before starting.
+
+### Manual setup
 
 ```bash
 # 1. Clone the repository
@@ -844,6 +866,9 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 | `CORS_ORIGINS_STR` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed CORS origins |
 | `HTTPS_ONLY` | `false` | Set `true` in production to enforce HTTPS + HSTS |
 | `ENVIRONMENT` | `development` | Set `production` to enable stricter security defaults |
+| `TRUSTED_PROXY_CIDRS` | _(blank)_ | Comma-separated CIDRs of trusted reverse proxies (e.g. `10.0.0.0/8,172.16.0.0/12`). Only requests from these IPs have their `X-Forwarded-For` header trusted for client IP resolution. Leave blank to always use the direct peer address. |
+| `REQUIRE_SUBMISSION_HMAC` | `false` | When `true`, scan submissions missing the `X-Nyx-Submission-HMAC` header are rejected with HTTP 403. Enables strict CI/CD submission integrity enforcement. |
+| `GITHUB_WEBHOOK_IP_ALLOWLIST_ENABLED` | `false` | When `true`, GitHub webhook deliveries are rejected unless they originate from GitHub's published IP ranges. Fetched from `api.github.com/meta`. |
 
 </details>
 
@@ -853,7 +878,9 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 | Variable | Default | Description |
 |---|---|---|
 | `ANTHROPIC_MODEL` | `claude-sonnet-4-6` | Claude model for fix generation |
-| `AI_MAX_TOKENS` | `4096` | Maximum tokens for AI-generated fixes |
+| `AI_MAX_OUTPUT_TOKENS` | `8192` | Maximum output tokens for AI-generated fixes. Higher values allow Claude to generate larger diffs for complex fixes. |
+| `AI_MIN_CONFIDENCE_THRESHOLD` | `0.4` | Fixes with confidence below this value receive `REVIEW_LOW_CONFIDENCE` status and are flagged for human review before merge consideration. |
+| `ANTHROPIC_TIMEOUT` | `90.0` | Per-call timeout (seconds) for Anthropic API requests. Increase for very large files; decrease to fail fast on network issues. |
 
 </details>
 
@@ -1311,37 +1338,17 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 
 ### Switch to PostgreSQL
 
+A ready-to-use Compose override file is included:
+
 ```bash
-# .env
+# 1. Set the DATABASE_URL in .env
 DATABASE_URL=postgresql+asyncpg://nyx:your-password@postgres:5432/nyx
+
+# 2. Start with the postgres override (adds a postgres:16-alpine service and wires DATABASE_URL)
+docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d
 ```
 
-Add PostgreSQL to `docker-compose.yml`:
-
-```yaml
-services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: nyx
-      POSTGRES_USER: nyx
-      POSTGRES_PASSWORD: your-password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U nyx"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  backend:
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-volumes:
-  postgres_data:
-```
+`docker-compose.postgres.yml` provides a `postgres:16-alpine` service with a health check, a named `postgres_data` volume, and wires `DATABASE_URL` in the backend service — no manual edits to `docker-compose.yml` required.
 
 ### Nginx Reverse Proxy
 
@@ -1669,7 +1676,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 |---|---|
 | **API keys** | Database-backed. When `NYX_SECRET_KEY` is set, each key is stored as `HMAC-SHA256(NYX_SECRET_KEY, raw_key)` — defeating rainbow table attacks even if the DB is leaked. Falls back to SHA-256 with a warning if `NYX_SECRET_KEY` is not configured. The plaintext key is never persisted. |
 | **HTTP-only session cookie** | The dashboard Settings page exchanges the API key for an HTTP-only, SameSite=Strict session cookie via `POST /auth/session`. The key is never stored in `localStorage` or any JS-accessible storage — XSS cannot steal it. CI/CD tooling continues to use the `X-API-Key` header. |
-| **Brute-force lockout** | After 20 failed authentication attempts from a single IP within a 10-minute window, that IP is blocked for 15 minutes with HTTP 429. Counters reset on restart. |
+| **Brute-force lockout** | After 20 failed authentication attempts from a single IP within a 10-minute window, that IP is blocked for 15 minutes with HTTP 429. Lockout state is persisted in the database and rehydrated on startup — container restarts do not reset active lockouts. |
 | **Key scopes** | Every API key is assigned a scope: `scanner` (submit scans only), `readonly` (read-only access to findings and remediations), `analyst` (update/suppress findings, request/approve/reject remediations), or `admin` (full access including audit log and key management). Scope is enforced on every endpoint. **New keys default to `readonly` scope** — explicit escalation required. |
 | **Scope enforcement** | `GET /findings`, `GET /findings/{id}`, and `GET /findings/export` require at least `readonly` scope — scanner keys cannot read findings. All audit log endpoints (`GET /audit`) require `admin` scope. Remediation approval, rejection, regeneration, and bulk dispatch require `analyst` or `admin` scope. |
 | **Bootstrap key** | `NYX_API_KEY` in `.env` is seeded into the DB on first startup as the `bootstrap` key with `admin` scope. You can rotate it out via the Settings page without downtime. |
@@ -1729,7 +1736,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | Area | Detail |
 |---|---|
 | **SSRF protection** | Outbound webhook calls (`NOTIFICATION_WEBHOOK_URL`) and Jira API calls (`JIRA_URL`) are checked against a blocklist of private IP ranges (RFC-1918, loopback, link-local, AWS metadata `169.254.169.254`) before any HTTP request is made. |
-| **Rate limiting** | Uses direct TCP peer address (`request.client.host`) — not `X-Forwarded-For` — preventing clients from spoofing their IP to bypass per-IP limits. Export: 10/min. Bulk update: 30/min. Webhook receivers: 60/min. |
+| **Rate limiting** | Client IP is resolved using only trusted reverse proxies (`TRUSTED_PROXY_CIDRS`). `X-Forwarded-For` is trusted only when the direct peer is in the configured CIDR list — preventing clients from spoofing their IP to bypass per-IP limits. Export: 10/min. Bulk update: 30/min. Webhook receivers: 60/min. |
 | **Request size limit** | Incoming request bodies are capped at 50 MB. The import endpoint enforces this to prevent OOM attacks via oversized scanner payloads. |
 | **JSON depth limit** | The JSON scan import endpoint rejects payloads with more than 20 levels of nesting — preventing JSON bomb / stack-overflow DoS via a crafted payload. |
 | **Scanner field sanitization** | All scanner-sourced finding fields (title, description, file path, code snippet, URL, remediation guidance) are sanitized before DB storage: control characters (including Unicode bidi-overrides) are stripped, lengths are capped, and file paths are checked for absolute paths and traversal sequences. Only whitelisted scanner identifiers are accepted. |
@@ -1737,7 +1744,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **HTTPS enforcement** | Set `HTTPS_ONLY=true` to redirect all HTTP traffic and add `Strict-Transport-Security: max-age=31536000; includeSubDomains`. |
 | **CORS** | Set `CORS_ORIGINS_STR` to exactly your frontend domain in production — `http://localhost:3000` is the default and must not be left in place. |
 | **BREACH mitigation** | gzip compression is disabled on `/api/` proxy routes in nginx. Only static asset types (`text/css`, `application/javascript`, etc.) are gzip-compressed. This eliminates the BREACH attack surface on JSON API responses over HTTPS. |
-| **Container hardening** | The backend container starts briefly as root (only to `chown` the data volume with mode `700`), then drops to the `nyx` user via `gosu`. `no-new-privileges: true` is set in docker-compose. Both backend and frontend containers use `cap_drop: ALL` (nginx adds back only `NET_BIND_SERVICE`). |
+| **Container hardening** | The backend container runs as the `nyx` user from the first instruction (`USER nyx` in Dockerfile). No `gosu` or setuid required — fully compatible with `no-new-privileges: true`. Both backend and frontend containers use `cap_drop: ALL` (nginx adds back only `NET_BIND_SERVICE`). |
 | **No Docker socket mount** | The `autoheal` sidecar — which required mounting `/var/run/docker.sock` and granting container escape capability — has been removed. Container self-healing uses Docker's native `restart: unless-stopped` policy instead. |
 | **Production startup checks** | In `ENVIRONMENT=production`, startup raises `RuntimeError` if: `NYX_API_KEY` is not set, `NYX_SECRET_KEY` is not set, `DEBUG=true`, or `DATABASE_URL` points to SQLite. The process will not start in an unsafe configuration. |
 | **API docs hidden in production** | `/docs` and `/redoc` are only served when `ENVIRONMENT != production`. This prevents CSP relaxation and Swagger UI CDN asset loading in production environments. |
@@ -1749,6 +1756,8 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **CI tool checksums** | The generated `nyx-scan.yml` workflow verifies SHA-256 checksums for Gitleaks (against the published `checksums.txt`) and Hadolint (against the `.sha256` sidecar file) before executing either binary. A checksum mismatch fails the CI step with an explicit error. |
 | **Actions pinned to SHA** | Both `actions/checkout` and `aquasecurity/trivy-action` are pinned to specific commit SHAs in `nyx-scan.yml`, preventing supply chain attacks via compromised upstream branches or force-pushed tags. |
 | **Dynamic repo ID** | The `NYX_REPO_ID` used in `nyx-scan.yml` is read from a GitHub Actions variable (`vars.NYX_REPO_ID`) rather than hardcoded — set this in your repo's **Settings → Variables → Actions**. |
+| **Bundled GHA scanning workflows** | Two GitHub Actions workflow templates are included in `.github/workflows/`: `nyx-scan-gitleaks.yml` (secret scanning with full history checkout on push, PR, and weekly schedule) and `nyx-scan-container.yml` (Trivy container image + IaC scanning on Dockerfile changes and daily schedule, results submitted to Nyx). Both are pinned to action commit SHAs. |
+| **Preflight integration check** | Run `./nyx.sh --check` to probe all integrations (database, Anthropic, GitHub, JIRA, Slack) before starting Nyx. Reports per-integration status with colour-coded output — useful in CI/CD before deploying a new environment. |
 | **Debug output gated** | The ZAP debug output step (which prints scan finding counts) is only active when `vars.NYX_DEBUG == 'true'`. Set this variable only when actively debugging. |
 | **Secrets detection** | A `.gitleaks.toml` configuration is included in the repo. Install gitleaks and add a pre-commit hook: `echo '#!/bin/sh\ngitleaks protect --staged' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit` |
 | **Dependency upper bounds** | All Python dependencies in `requirements.txt` now have both lower and upper version bounds (e.g., `fastapi>=0.115.0,<1.0.0`) to prevent silent major-version upgrades. For production, generate a pinned lockfile: `pip install pip-tools && pip-compile requirements.txt`. |

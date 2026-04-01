@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # nyx.sh — Start Nyx (or wake it up after a break)
 #
-# Usage: ./nyx.sh [--refresh-after HOURS] [--build]
+# Usage: ./nyx.sh [--refresh-after HOURS] [--build] [--check]
 #   --refresh-after HOURS  Trigger all scan schedules if Nyx has been running
 #                          longer than this many hours (default: 4)
 #   --build                Rebuild Docker images before starting (required after
 #                          pulling updates that add new dependencies)
+#   --check                Run integration preflight checks and exit (does not start Nyx)
 set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────────────────────
@@ -14,22 +15,127 @@ REFRESH_AFTER_HOURS=4
 API_BASE="http://localhost:8000/api/v1"
 FRONTEND_URL="http://localhost:3000"
 FORCE_BUILD=false
+CHECK_ONLY=false
 
 # ── Args ─────────────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case $1 in
     --refresh-after) REFRESH_AFTER_HOURS="$2"; shift 2 ;;
     --build) FORCE_BUILD=true; shift ;;
+    --check) CHECK_ONLY=true; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 bold()    { printf '\033[1m%s\033[0m\n' "$*"; }
+ok()      { printf '  \033[32m✓\033[0m  %s\n' "$*"; }
+warn()    { printf '  \033[33m⚠\033[0m  %s\n' "$*"; }
+fail()    { printf '  \033[31m✗\033[0m  %s\n' "$*"; }
 green()   { printf '\033[32m%s\033[0m\n' "$*"; }
 yellow()  { printf '\033[33m%s\033[0m\n' "$*"; }
 blue()    { printf '\033[34m%s\033[0m\n' "$*"; }
 dim()     { printf '\033[2m%s\033[0m\n' "$*"; }
+
+# ── --check: preflight integration probe and exit ────────────────────────────
+if $CHECK_ONLY; then
+  bold "==> Nyx preflight integration check"
+  echo ""
+
+  ENV_FILE="$SCRIPT_DIR/.env"
+  _env_get() { grep -E "^${1}=" "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true; }
+
+  GH_TOKEN=$(_env_get "GITHUB_TOKEN")
+  ANT_KEY=$(_env_get "ANTHROPIC_API_KEY")
+  JIRA_URL_VAL=$(_env_get "JIRA_URL")
+  JIRA_TOKEN=$(_env_get "JIRA_API_TOKEN")
+  JIRA_USER=$(_env_get "JIRA_USER_EMAIL")
+  NYX_KEY=$(_env_get "NYX_API_KEY")
+
+  # Backend health
+  if curl -sf --max-time 5 http://localhost:8000/health >/dev/null 2>&1; then
+    ok "Backend (http://localhost:8000/health)"
+  else
+    warn "Backend not reachable — run './nyx.sh' to start it"
+  fi
+
+  # Database (via /ready endpoint)
+  if curl -sf --max-time 5 http://localhost:8000/ready >/dev/null 2>&1; then
+    ok "Database (/ready)"
+  else
+    warn "Database readiness check failed"
+  fi
+
+  # Integration health endpoint (if backend is running)
+  if [[ -n "$NYX_KEY" ]]; then
+    INT_STATUS=$(curl -sf --max-time 10 -H "X-API-Key: $NYX_KEY" \
+      http://localhost:8000/health/integrations 2>/dev/null || echo "")
+    if [[ -n "$INT_STATUS" ]]; then
+      OVERALL=$(echo "$INT_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('overall','unknown'))" 2>/dev/null || echo "unknown")
+      if [[ "$OVERALL" == "ok" ]]; then
+        ok "Integration health: $OVERALL"
+      else
+        warn "Integration health: $OVERALL — run GET /health/integrations for details"
+      fi
+      # Per-integration breakdown
+      echo "$INT_STATUS" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for name, info in d.get('integrations', {}).items():
+    status = info.get('status', 'unknown')
+    detail = info.get('detail', info.get('authenticated_as', ''))
+    sym = '✓' if status in ('ok', 'mock') else ('–' if status == 'not_configured' else '⚠')
+    print(f'     {sym}  {name}: {status}' + (f' ({detail})' if detail else ''))
+" 2>/dev/null || true
+    else
+      warn "Could not reach integration health endpoint"
+    fi
+  else
+    warn "NYX_API_KEY not set — skipping integration health probe"
+  fi
+
+  # GitHub token direct check
+  if [[ -n "$GH_TOKEN" ]] && [[ "$GH_TOKEN" != "ghp_xxxxxxxxxxxx" ]]; then
+    GH_CODE=$(curl -sf -H "Authorization: token $GH_TOKEN" https://api.github.com/user \
+      -o /dev/null -w "%{http_code}" --max-time 8 2>/dev/null || echo "0")
+    if [[ "$GH_CODE" == "200" ]]; then
+      ok "GitHub token valid"
+    else
+      warn "GitHub token returned HTTP $GH_CODE"
+    fi
+  else
+    warn "GITHUB_TOKEN not configured"
+  fi
+
+  # Anthropic key check
+  if [[ -n "$ANT_KEY" ]] && [[ "$ANT_KEY" != "sk-ant-xxxxxxxxxxxx" ]]; then
+    ANT_CODE=$(curl -sf -H "x-api-key: $ANT_KEY" -H "anthropic-version: 2023-06-01" \
+      "https://api.anthropic.com/v1/models" -o /dev/null -w "%{http_code}" --max-time 8 2>/dev/null || echo "0")
+    if [[ "$ANT_CODE" == "200" ]]; then
+      ok "Anthropic API key valid"
+    else
+      warn "Anthropic API key returned HTTP $ANT_CODE"
+    fi
+  else
+    warn "ANTHROPIC_API_KEY not configured"
+  fi
+
+  # JIRA check
+  if [[ -n "$JIRA_URL_VAL" ]] && [[ -n "$JIRA_TOKEN" ]]; then
+    JIRA_CODE=$(curl -sf -u "${JIRA_USER}:${JIRA_TOKEN}" \
+      "${JIRA_URL_VAL%/}/rest/api/3/myself" -o /dev/null -w "%{http_code}" --max-time 8 2>/dev/null || echo "0")
+    if [[ "$JIRA_CODE" == "200" ]]; then
+      ok "JIRA credentials valid"
+    else
+      warn "JIRA returned HTTP $JIRA_CODE"
+    fi
+  else
+    warn "JIRA not configured"
+  fi
+
+  echo ""
+  exit 0
+fi
 
 # ── Load API key from .env ────────────────────────────────────────────────────
 NYX_API_KEY=""

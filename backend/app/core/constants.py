@@ -84,7 +84,8 @@ class ScanTrigger(str, enum.Enum):
 class RemediationStatus(str, enum.Enum):
     PENDING = "PENDING"
     GENERATING = "GENERATING"
-    REVIEW = "REVIEW"          # AI produced a diff, awaiting engineer approval
+    REVIEW = "REVIEW"                        # AI produced a diff, awaiting engineer approval
+    REVIEW_LOW_CONFIDENCE = "REVIEW_LOW_CONFIDENCE"  # AI confidence below threshold — extra scrutiny needed
     PR_CREATING = "PR_CREATING"
     PR_OPEN = "PR_OPEN"
     MERGED = "MERGED"

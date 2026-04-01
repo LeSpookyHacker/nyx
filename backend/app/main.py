@@ -8,24 +8,29 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from app.core.security import require_api_key  # noqa: E402
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.core.limiter import limiter
-from app.core.security import warn_insecure_config
+from app.core.security import require_api_key, warn_insecure_config
 from app.database import init_db
 from app.routers import (
     audit, api_keys, compliance, dashboard, findings, jira, remediation,
     repositories, reports, sbom, scans, schedules, sla_policies, webhooks,
     regression_alerts,
 )
+from app.routers import velocity, ai_costs  # new analytics routers
 # Ensure new models are registered with SQLAlchemy metadata
 from app.models import repo_risk_history, scan_schedule, sla_policy, suppression_pattern  # noqa: F401
 from app.models.api_key import ApiKey  # noqa: F401 — register api_keys table
+from app.models.auth_lockout import AuthLockout  # noqa: F401
+from app.models.custom_compliance import CustomFramework, CustomControl  # noqa: F401
+from app.models.risk_acceptance import RiskAcceptance  # noqa: F401
 
 settings = get_settings()
 
@@ -374,6 +379,10 @@ async def lifespan(app: FastAPI):
     await init_db()
     await _seed_api_key_from_env()
 
+    # Hydrate brute-force lockout state from DB so container restarts don't reset it
+    from app.core.security import hydrate_lockout_from_db
+    await hydrate_lockout_from_db()
+
     tasks = []
 
     # Suppression expiry — reopen findings whose suppression period has elapsed (M-7)
@@ -503,6 +512,8 @@ app.include_router(sla_policies.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(regression_alerts.router, prefix=API_PREFIX)
 app.include_router(api_keys.router, prefix=API_PREFIX)
+app.include_router(velocity.router, prefix=API_PREFIX)
+app.include_router(ai_costs.router, prefix=API_PREFIX)
 
 
 @app.post("/auth/session", tags=["auth"])
@@ -585,6 +596,86 @@ async def logout(response: Response):
 async def health():
     # Minimal response — do not expose service name or version (L5)
     return {"status": "ok"}
+
+
+@app.get("/health/integrations", tags=["system"])
+async def integration_health(_key: str = Depends(require_api_key)):
+    """
+    Probe each configured integration and report its connectivity status.
+    Requires a valid API key — this endpoint reveals integration configuration.
+
+    Returns per-integration status: 'ok' | 'error' | 'not_configured'
+    """
+    from app.core.security import require_api_key as _req  # already imported above
+    results: dict[str, dict] = {}
+
+    # ── Database ──────────────────────────────────────────────────────────────
+    try:
+        from app.database import AsyncSessionLocal
+        from sqlalchemy import text
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+        results["database"] = {"status": "ok"}
+    except Exception as e:
+        results["database"] = {"status": "error", "detail": str(e)[:100]}
+
+    # ── Anthropic / Claude ────────────────────────────────────────────────────
+    if not settings.ANTHROPIC_API_KEY:
+        results["anthropic"] = {"status": "not_configured"}
+    else:
+        try:
+            import anthropic as _ant
+            import httpx
+            client = _ant.AsyncAnthropic(
+                api_key=settings.ANTHROPIC_API_KEY,
+                timeout=httpx.Timeout(10.0),
+            )
+            # Use the models list endpoint as a lightweight probe
+            await client.models.list()
+            results["anthropic"] = {"status": "ok", "model": settings.ANTHROPIC_MODEL}
+        except Exception as e:
+            results["anthropic"] = {"status": "error", "detail": str(e)[:100]}
+
+    # ── GitHub ────────────────────────────────────────────────────────────────
+    if not settings.GITHUB_TOKEN:
+        results["github"] = {"status": "not_configured"}
+    else:
+        try:
+            from github import Github as _GH
+            g = _GH(settings.GITHUB_TOKEN)
+            user = g.get_user()
+            _ = user.login  # force the API call
+            results["github"] = {"status": "ok", "authenticated_as": user.login}
+        except Exception as e:
+            results["github"] = {"status": "error", "detail": str(e)[:100]}
+
+    # ── JIRA ──────────────────────────────────────────────────────────────────
+    if not settings.JIRA_URL or not settings.JIRA_API_TOKEN:
+        results["jira"] = {"status": "not_configured" if not settings.JIRA_MOCK_MODE else "mock"}
+    else:
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=8.0) as hx:
+                resp = await hx.get(
+                    f"{settings.JIRA_URL.rstrip('/')}/rest/api/3/myself",
+                    auth=(settings.JIRA_USER_EMAIL, settings.JIRA_API_TOKEN),
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                results["jira"] = {"status": "ok", "authenticated_as": data.get("displayName", "")}
+        except Exception as e:
+            results["jira"] = {"status": "error", "detail": str(e)[:100]}
+
+    # ── Slack / Notification webhook ─────────────────────────────────────────
+    if not settings.NOTIFICATION_WEBHOOK_URL:
+        results["notifications"] = {"status": "not_configured"}
+    else:
+        results["notifications"] = {"status": "ok", "type": "webhook"}
+
+    overall = "ok" if all(v["status"] in ("ok", "not_configured", "mock") for v in results.values()) else "degraded"
+    return {"overall": overall, "integrations": results}
+
+
 
 
 @app.get("/ready", tags=["system"])

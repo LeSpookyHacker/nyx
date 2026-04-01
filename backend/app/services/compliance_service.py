@@ -365,11 +365,51 @@ FRAMEWORK_META: Dict[str, Dict] = {
 }
 
 
+def _get_controls_for_framework(
+    framework_id: str,
+    custom_framework=None,
+) -> List[ComplianceControl]:
+    """
+    Return ComplianceControl objects for the given framework.
+    Handles both built-in frameworks (from FRAMEWORKS dict) and custom DB frameworks.
+    """
+    import json as _json
+
+    # Built-in
+    if framework_id in FRAMEWORKS:
+        return FRAMEWORKS[framework_id]
+
+    # Custom framework — convert CustomControl ORM objects to ComplianceControl dataclasses
+    if custom_framework is None:
+        return []
+
+    result = []
+    for ctrl in (custom_framework.controls or []):
+        try:
+            cwe_ids = _json.loads(ctrl.cwe_ids_json or "[]")
+        except Exception:
+            cwe_ids = []
+        try:
+            owasp_categories = _json.loads(ctrl.owasp_categories_json or "[]")
+        except Exception:
+            owasp_categories = []
+        result.append(ComplianceControl(
+            id=ctrl.control_id,
+            title=ctrl.title,
+            description=ctrl.description or "",
+            framework=framework_id,
+            cwe_ids=cwe_ids,
+            owasp_categories=owasp_categories,
+        ))
+    return result
+
+
 async def get_control_findings(
     db: AsyncSession,
     framework_id: str,
     control_id: str,
     repository_id: Optional[str] = None,
+    custom_framework=None,
 ) -> Optional[dict]:
     """
     Return open findings (with repository info) matched to a specific control.
@@ -378,7 +418,7 @@ async def get_control_findings(
     from app.models.finding import Finding
     from app.models.repository import Repository
 
-    controls = FRAMEWORKS.get(framework_id, [])
+    controls = _get_controls_for_framework(framework_id, custom_framework)
     control = next((c for c in controls if c.id == control_id), None)
     if control is None:
         return None
@@ -440,6 +480,7 @@ async def get_compliance_report(
     db: AsyncSession,
     framework_id: str,
     repository_id: Optional[str] = None,
+    custom_framework=None,
 ) -> List[ControlResult]:
     """
     For each control in the framework, count open and total (non-suppressed) findings
@@ -447,7 +488,7 @@ async def get_compliance_report(
     """
     from app.models.finding import Finding
 
-    controls = FRAMEWORKS.get(framework_id, [])
+    controls = _get_controls_for_framework(framework_id, custom_framework)
     results: List[ControlResult] = []
 
     for control in controls:

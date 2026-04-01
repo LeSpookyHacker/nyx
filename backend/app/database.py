@@ -3,6 +3,7 @@ Async SQLAlchemy database setup.
 """
 from __future__ import annotations
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -52,3 +53,25 @@ async def init_db() -> None:
     import app.models  # noqa: F401 – import all models to register metadata
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if _is_sqlite:
+            await _migrate_add_columns(conn)
+
+
+async def _migrate_add_columns(conn) -> None:
+    """Best-effort ADD COLUMN migrations for SQLite dev databases.
+
+    Alembic handles schema changes in production. For local SQLite databases
+    created before new columns were added, we issue ALTER TABLE statements and
+    silently swallow errors when the column already exists.
+    """
+    additions = [
+        ("remediations", "confidence_flagged", "BOOLEAN NOT NULL DEFAULT 0"),
+        ("remediations", "diff_warnings",      "TEXT"),
+    ]
+    for table, column, definition in additions:
+        try:
+            await conn.execute(
+                text(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            )
+        except Exception:
+            pass  # column already exists or table not yet created — both are fine

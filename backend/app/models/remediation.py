@@ -35,6 +35,10 @@ class Remediation(Base, TimestampMixin):
     # Non-repudiation: stores the exact prompt sent to Claude and a tamper-evident hash of the diff
     ai_prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     ai_diff_sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Confidence gating: True when ai_confidence < AI_MIN_CONFIDENCE_THRESHOLD
+    confidence_flagged: Mapped[bool] = mapped_column(Boolean, default=False)
+    # JSON array of heuristic security warnings found in the generated diff
+    diff_warnings: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     # Additional context provided by engineer for re-generation
     engineer_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

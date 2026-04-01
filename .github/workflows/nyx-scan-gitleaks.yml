@@ -1,0 +1,64 @@
+# nyx-scan-gitleaks.yml — Dedicated secrets detection workflow
+#
+# Run this alongside nyx-scan.yml for repos where secret leakage is a high priority.
+# Gitleaks scans the full git history, not just the current diff.
+#
+# Required GitHub settings on the target repository:
+#   vars.NYX_URL        — Nyx backend public URL (no trailing slash)
+#   vars.NYX_REPO_ID    — Repository ID from Nyx (UUID from POST /repositories)
+#   secrets.NYX_API_KEY — Nyx API key with 'scanner' scope
+
+name: Nyx Secret Scan (Gitleaks)
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * 1"  # Weekly Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  gitleaks:
+    name: Secrets Scan (Gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          fetch-depth: 0  # Full history required for Gitleaks
+
+      - name: Run Gitleaks
+        run: |
+          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
+            | tar xz -C /usr/local/bin gitleaks
+          gitleaks detect \
+            --source . \
+            --report-format json \
+            --report-path gitleaks.json \
+            --exit-code 0 || true
+
+      - name: Report → Nyx
+        if: hashFiles('gitleaks.json') != ''
+        env:
+          NYX_URL: ${{ vars.NYX_URL }}
+          NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+        run: |
+          NYX_URL="${NYX_URL// /}"
+          jq -n \
+            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg scanner "GITLEAKS" \
+            --arg ref     "$GITHUB_REF_NAME" \
+            --slurpfile d  gitleaks.json \
+            '{"repository_id": $repo, "scanner": $scanner, "ref": $ref, "results": $d[0]}' \
+          | curl -sf \
+              -X POST "${NYX_URL}/api/v1/scans/import-json" \
+              -H "Content-Type: application/json" \
+              -H "X-API-Key: ${NYX_API_KEY}" \
+              --data @- \
+            && echo "Gitleaks results submitted to Nyx" \
+            || echo "WARNING: Failed to submit to Nyx (non-fatal)"
