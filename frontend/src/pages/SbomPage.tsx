@@ -93,6 +93,7 @@ function AlertRow({ alert, onAck }: { alert: SbomAlert; onAck: () => void }) {
   )
 }
 
+/** Software bill of materials viewer with dependency alerts and change history. */
 export default function SbomPage() {
   const queryClient = useQueryClient()
   const [repoFilter, setRepoFilter] = useState<string>('all')

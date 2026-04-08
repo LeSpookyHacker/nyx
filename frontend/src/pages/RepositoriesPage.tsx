@@ -193,6 +193,7 @@ function RepoCard({ repo, onDelete, onRefreshWebhook, onSyncCodeScanning, onPush
   )
 }
 
+/** Repository inventory with onboarding, risk scores, and scan status overview. */
 export default function RepositoriesPage() {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)

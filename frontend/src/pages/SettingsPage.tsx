@@ -77,6 +77,7 @@ function ApiKeyCard() {
   )
 }
 
+/** Application settings including API key management and authentication. */
 export default function SettingsPage() {
   return (
     <div className="max-w-2xl space-y-6">

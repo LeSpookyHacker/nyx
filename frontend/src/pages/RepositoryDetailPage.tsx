@@ -20,16 +20,7 @@ import {
 import RepoTrends from '../components/charts/RepoTrends'
 import { clsx } from 'clsx'
 
-const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
-const STATUSES = ['OPEN', 'IN_REMEDIATION', 'FIXED', 'SUPPRESSED', 'ACCEPTED_RISK']
-
-const SEV_COLORS: Record<string, string> = {
-  CRITICAL: 'text-red-400',
-  HIGH: 'text-orange-400',
-  MEDIUM: 'text-yellow-400',
-  LOW: 'text-blue-400',
-  INFO: 'text-gray-400',
-}
+import { SEVERITIES, STATUSES, SEV_COLORS } from '../constants/theme'
 
 const SCAN_STATUS_COLORS: Record<string, string> = {
   COMPLETED: 'text-green-400',
@@ -97,9 +88,13 @@ function FindingsTab({ repoId }: { repoId: string }) {
 
   const copyPrompt = async () => {
     if (!claudePrompt) return
-    await navigator.clipboard.writeText(claudePrompt)
-    setPromptCopied(true)
-    setTimeout(() => setPromptCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(claudePrompt)
+      setPromptCopied(true)
+      setTimeout(() => setPromptCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy prompt to clipboard:', err)
+    }
   }
 
   const findings = data?.items || []
@@ -505,6 +500,7 @@ function JiraTab({ repoId }: { repoId: string }) {
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
+/** Repository detail view with findings, scans, JIRA tickets, trends, and risk analysis tabs. */
 export default function RepositoryDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()

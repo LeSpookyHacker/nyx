@@ -107,11 +107,7 @@ CURRENT_API_KEY=$(_env_get "NYX_API_KEY")
 if [[ -z "$CURRENT_API_KEY" ]] || [[ "$CURRENT_API_KEY" == "nyx-your-secret-key-here" ]]; then
   NEW_API_KEY="nyx-$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")"
   _env_set "NYX_API_KEY" "$NEW_API_KEY"
-  green "  Generated NYX_API_KEY: $NEW_API_KEY"
-  echo ""
-  yellow "  *** SAVE THIS KEY — it will not be shown again ***"
-  yellow "  NYX_API_KEY=$NEW_API_KEY"
-  echo ""
+  green "  Generated NYX_API_KEY (saved to .env)"
 else
   dim "  NYX_API_KEY already set."
 fi
@@ -266,7 +262,7 @@ bold "════════════════════════�
 echo ""
 green "  Dashboard:  http://localhost:3000"
 green "  API:        http://localhost:8000"
-dim   "  API Key:    $(_env_get "NYX_API_KEY")"
+dim   "  API Key:    (stored in .env)"
 echo ""
 bold  "  Next steps:"
 dim   "  1. Open http://localhost:3000 and enter your API key"

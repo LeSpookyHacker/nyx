@@ -141,6 +141,7 @@ const ACTION_PREFIXES = [
   { label: 'SBOM', value: 'sbom.' },
 ]
 
+/** Audit log viewer with filtering, search, and expandable event details. */
 export default function AuditPage() {
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')

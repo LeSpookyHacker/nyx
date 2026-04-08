@@ -266,6 +266,7 @@ const ACTIVE_STATUSES = ['PENDING', 'GENERATING', 'REVIEW', 'PR_CREATING', 'PR_O
 const ALL_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'MERGED', 'FAILED']
 const ACTIVE_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'FAILED']
 
+/** AI-driven remediation queue showing fix requests, diffs, and approval workflow. */
 export default function RemediationPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [showAll, setShowAll] = useState(false)

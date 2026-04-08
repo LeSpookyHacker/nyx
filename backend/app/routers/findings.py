@@ -48,7 +48,8 @@ def _build_filter_query(
     category: Optional[List[str]] = None,
     repository_id: Optional[str] = None,
     search: Optional[str] = None,
-):
+):  # noqa: ANN201 — returns the same Select type it receives
+    """Apply optional filter predicates to a findings query statement."""
     if severity:
         stmt = stmt.where(Finding.severity.in_([s.upper() for s in severity]))
     if scanner:
@@ -207,6 +208,7 @@ async def get_finding(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
+    """Retrieve a single finding by ID."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -222,6 +224,7 @@ async def update_finding_status(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
+    """Update the status of a finding (e.g. OPEN -> FIXED) with audit logging."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -265,6 +268,7 @@ async def suppress_finding(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope("analyst")),
 ):
+    """Suppress a finding as false positive. Learns suppression patterns for future suggestions."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -368,6 +372,7 @@ async def unsuppress_finding(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
+    """Remove suppression from a finding, reopening it."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -402,6 +407,7 @@ async def update_notes(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
+    """Update engineer notes on a finding."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
     finding = result.scalar_one_or_none()
     if not finding:
@@ -571,7 +577,7 @@ async def generate_claude_prompt(
     return {"prompt": prompt, "updated": len([f for f in findings if f.status == FindingStatus.IN_REMEDIATION.value])}
 
 
-def _build_claude_prompt(findings, repos: dict) -> str:
+def _build_claude_prompt(findings: list[Finding], repos: dict) -> str:
     """Generate a structured Claude Code remediation prompt."""
     # Group findings by scanner category
     SCA_SCANNERS = {"TRIVY", "SNYK", "DEPENDABOT", "GRYPE"}
@@ -728,6 +734,7 @@ async def bulk_update_status(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),
 ):
+    """Bulk update status for multiple findings at once."""
     result = await db.execute(select(Finding).where(Finding.id.in_(body.finding_ids)))
     findings = result.scalars().all()
     now = datetime.now(timezone.utc)

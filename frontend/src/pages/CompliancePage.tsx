@@ -215,6 +215,7 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
   )
 }
 
+/** Compliance framework dashboard showing control pass/fail status per repository. */
 export default function CompliancePage() {
   const [selectedFramework, setSelectedFramework] = useState('pci-dss')
 

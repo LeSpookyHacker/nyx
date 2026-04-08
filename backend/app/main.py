@@ -40,6 +40,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("nyx")
 
+# ── Background loop intervals (seconds) ─────────────────────────────────────
+STARTUP_DELAY_SECONDS = 15
+DAILY_INTERVAL_SECONDS = 86_400       # 24 hours
+HOURLY_INTERVAL_SECONDS = 3_600       # 1 hour
+SCAN_CHECK_INTERVAL_SECONDS = 300     # 5 minutes
+API_KEY_STARTUP_DELAY_SECONDS = 60    # brief startup delay for key expiry loop
+SESSION_COOKIE_MAX_AGE = 86_400 * 7   # 7 days
+
+# AI remediation cap — max requests per actor per 24-hour window
+REMEDIATION_DAILY_LIMIT = 50
+
 # ── Rate limiter (shared instance from app.core.limiter) ───────────────────────
 
 
@@ -53,20 +64,26 @@ async def _risk_history_snapshot_loop() -> None:
     from app.models.repository import Repository
     from app.models.repo_risk_history import RepoRiskHistory
 
-    await asyncio.sleep(15)  # Brief delay on startup
+    await asyncio.sleep(STARTUP_DELAY_SECONDS)
     while True:
         try:
             async with AsyncSessionLocal() as db:
                 repos_result = await db.execute(select(Repository))
                 repos = repos_result.scalars().all()
                 today = date.today()
-                for repo in repos:
-                    total_q = await db.execute(
-                        select(func.count()).select_from(FindingModel).where(
-                            FindingModel.repository_id == repo.id
-                        )
+
+                # Single GROUP BY query instead of N+1 per-repo counts
+                count_result = await db.execute(
+                    select(
+                        FindingModel.repository_id,
+                        func.count(),
                     )
-                    total = total_q.scalar_one()
+                    .group_by(FindingModel.repository_id)
+                )
+                finding_counts = {row[0]: row[1] for row in count_result}
+
+                for repo in repos:
+                    total = finding_counts.get(repo.id, 0)
                     existing = await db.execute(
                         select(RepoRiskHistory).where(
                             RepoRiskHistory.repository_id == repo.id,
@@ -98,7 +115,7 @@ async def _risk_history_snapshot_loop() -> None:
                 logger.info("Risk history snapshot completed for %d repos", len(repos))
         except Exception:
             logger.exception("Error in risk history snapshot loop")
-        await asyncio.sleep(86400)  # Daily
+        await asyncio.sleep(DAILY_INTERVAL_SECONDS)
 
 
 async def _sla_breach_check_loop() -> None:
@@ -112,7 +129,7 @@ async def _sla_breach_check_loop() -> None:
     from app.services.notification_service import notify_sla_breach
 
     while True:
-        await asyncio.sleep(3600)
+        await asyncio.sleep(HOURLY_INTERVAL_SECONDS)
         try:
             async with AsyncSessionLocal() as db:
                 now = datetime.now(timezone.utc)
@@ -174,8 +191,8 @@ async def _sla_breach_check_loop() -> None:
                                     jira_status=ticket.get("status"),
                                     jira_priority=ticket.get("priority"),
                                 ))
-                            except Exception:
-                                pass
+                            except Exception as jira_exc:
+                                logger.warning("SLA JIRA escalation failed for finding %s: %s", finding.id, jira_exc)
 
                     finding.sla_notified_at = now
 
@@ -198,7 +215,7 @@ async def _scan_schedule_loop() -> None:
     from app.workers.scan_worker import process_scan_results
 
     while True:
-        await asyncio.sleep(300)  # Check every 5 minutes
+        await asyncio.sleep(SCAN_CHECK_INTERVAL_SECONDS)
         try:
             async with AsyncSessionLocal() as db:
                 now = datetime.now(timezone.utc)
@@ -243,7 +260,7 @@ async def _suppression_expiry_loop() -> None:
     from app.models.finding import Finding
 
     while True:
-        await asyncio.sleep(3600)  # Check every hour
+        await asyncio.sleep(HOURLY_INTERVAL_SECONDS)
         try:
             async with AsyncSessionLocal() as db:
                 now = datetime.now(timezone.utc)
@@ -325,7 +342,7 @@ async def _api_key_expiry_warning_loop() -> None:
     from app.models.api_key import ApiKey
     from app.services.audit_service import log_event
 
-    await asyncio.sleep(60)  # Brief startup delay
+    await asyncio.sleep(API_KEY_STARTUP_DELAY_SECONDS)
     while True:
         try:
             async with AsyncSessionLocal() as db:
@@ -358,7 +375,7 @@ async def _api_key_expiry_warning_loop() -> None:
                     await db.commit()
         except Exception:
             logger.exception("Error in API key expiry warning loop")
-        await asyncio.sleep(86400)  # Daily
+        await asyncio.sleep(DAILY_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
@@ -560,8 +577,8 @@ async def create_session(request: Request, response: Response):
                     record.last_used_at = now
                     await db.commit()
                     key_valid = True
-    except Exception:
-        pass
+    except Exception as db_exc:
+        logger.debug("Session DB key lookup failed, falling back to env var: %s", db_exc)
 
     # Fallback: compare against NYX_API_KEY env var
     if not key_valid and settings.NYX_API_KEY:
@@ -579,7 +596,7 @@ async def create_session(request: Request, response: Response):
         httponly=True,
         samesite="strict",
         secure=settings.HTTPS_ONLY,
-        max_age=86400 * 7,  # 7 days
+        max_age=SESSION_COOKIE_MAX_AGE,
         path="/",
     )
     return {"status": "ok"}

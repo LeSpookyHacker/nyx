@@ -143,6 +143,7 @@ function JiraPanel({ findingId }: { findingId: string }) {
   )
 }
 
+/** Individual finding detail view with metadata, code snippets, remediation, and JIRA integration. */
 export default function FindingDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -416,7 +417,7 @@ export default function FindingDetailPage() {
                 { label: 'First Seen', value: format(new Date(finding.first_seen_at), 'MMM d, yyyy') },
                 { label: 'Last Seen', value: formatDistanceToNow(new Date(finding.last_seen_at)) + ' ago' },
                 finding.sla_breach_at ? { label: 'SLA Breach', value: <span className="text-orange-400">{format(new Date(finding.sla_breach_at), 'MMM d, yyyy')}</span> } : null,
-              ].filter(Boolean).map((row: any) => (
+              ].filter((row) => row !== null).map((row) => (
                 <div key={row.label} className="flex justify-between gap-2">
                   <dt className="text-nyx-mist">{row.label}</dt>
                   <dd className="text-nyx-moonbeam text-right">{row.value}</dd>
@@ -531,10 +532,14 @@ export default function FindingDetailPage() {
             </div>
             <div className="flex items-center gap-3 px-5 py-4 border-t border-nyx-iris/20">
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(claudePrompt)
-                  setPromptCopied(true)
-                  setTimeout(() => setPromptCopied(false), 2000)
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(claudePrompt)
+                    setPromptCopied(true)
+                    setTimeout(() => setPromptCopied(false), 2000)
+                  } catch (err) {
+                    console.error('Failed to copy prompt to clipboard:', err)
+                  }
                 }}
                 className={`nyx-btn-primary gap-2 flex-1 ${promptCopied ? 'bg-green-700 border-green-600' : ''}`}
               >

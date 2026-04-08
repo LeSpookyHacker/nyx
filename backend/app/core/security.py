@@ -180,8 +180,9 @@ async def _persist_lockout(ip: str, count: int, first_failure_at: datetime, lock
                     updated_at=now,
                 ))
             await db.commit()
-    except Exception:
-        pass  # Lockout persistence is best-effort — never fail the auth path
+    except (OSError, RuntimeError) as exc:
+        # Lockout persistence is best-effort — never fail the auth path
+        logger.debug("Lockout persistence failed: %s", exc)
 
 
 async def _clear_lockout_db(ip: str) -> None:
@@ -194,8 +195,8 @@ async def _clear_lockout_db(ip: str) -> None:
             if record:
                 await db.delete(record)
                 await db.commit()
-    except Exception:
-        pass
+    except (OSError, RuntimeError) as exc:
+        logger.debug("Lockout clearance failed: %s", exc)
 
 
 async def hydrate_lockout_from_db() -> None:

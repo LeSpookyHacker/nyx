@@ -21,7 +21,8 @@ services:
     environment:
       POSTGRES_DB: nyx
       POSTGRES_USER: nyx
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      # Required: set POSTGRES_PASSWORD in .env or environment before starting
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env or environment}
     volumes:
       - nyx_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -38,7 +39,7 @@ services:
   backend:
     # Override the DATABASE_URL to point at the Postgres container
     environment:
-      DATABASE_URL: postgresql+asyncpg://nyx:${POSTGRES_PASSWORD:-changeme}@postgres:5432/nyx
+      DATABASE_URL: postgresql+asyncpg://nyx:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env or environment}@postgres:5432/nyx
     depends_on:
       postgres:
         condition: service_healthy

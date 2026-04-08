@@ -130,8 +130,8 @@ async def request_remediation(
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Request AI-powered fix for a finding. AI generation runs in background."""
-    # Per-key daily AI cost rate limit — cap AI spend to 50 remediations per actor per day (M3)
-    _AI_DAILY_LIMIT = 50
+    # Per-key daily AI cost rate limit (M3)
+    from app.main import REMEDIATION_DAILY_LIMIT as _AI_DAILY_LIMIT
     from datetime import datetime, timedelta, timezone as _tz
     from app.models.audit_log import AuditLog as _AuditLog
     _day_start = datetime.now(_tz.utc) - timedelta(hours=24)
@@ -192,6 +192,7 @@ async def get_remediation(
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
+    """Retrieve a single remediation record by ID."""
     result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
     rem = result.scalar_one_or_none()
     if not rem:
@@ -570,9 +571,10 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
                         jira_priority=ticket.get("priority"),
                     )
                     db.add(new_link)
-            except Exception:
+            except Exception as jira_exc:
                 # JIRA is optional — never fail PR creation because of it
-                pass
+                import logging
+                logging.getLogger("nyx.remediation").debug("JIRA ticket creation skipped: %s", jira_exc)
 
         except Exception as e:
             rem.status = RemediationStatus.FAILED.value

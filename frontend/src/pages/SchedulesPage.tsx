@@ -17,6 +17,7 @@ const INTERVAL_OPTIONS = [
   { label: '1 week', value: 168 },
 ]
 
+/** Scan schedule management with CRUD for cron-based recurring scans. */
 export default function SchedulesPage() {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)

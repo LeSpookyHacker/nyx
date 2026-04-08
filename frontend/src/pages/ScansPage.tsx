@@ -19,6 +19,7 @@ const STATUS_COLOR: Record<string, string> = {
   PENDING: 'text-slate-400',
 }
 
+/** Scan history and status overview across all repositories and scanners. */
 export default function ScansPage() {
   const { data: scans = [], isLoading } = useQuery({
     queryKey: ['scans'],

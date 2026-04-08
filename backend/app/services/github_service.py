@@ -7,9 +7,13 @@ Responsibilities:
   - Creating branches and pull requests with AI-generated fixes
   - Polling PR status and deployment environments
   - Creating Check Runs for PR security annotations
+
+Note: PyGithub is a synchronous library. All blocking calls are wrapped with
+asyncio.to_thread() to avoid blocking the FastAPI event loop.
 """
 from __future__ import annotations
 
+import asyncio
 import ast
 import base64
 import difflib
@@ -29,6 +33,7 @@ settings = get_settings()
 
 
 def _get_client() -> Github:
+    """Return a synchronous PyGithub client. Callers must use asyncio.to_thread()."""
     if not settings.GITHUB_TOKEN:
         raise GitHubError("GITHUB_TOKEN is not configured")
     return Github(settings.GITHUB_TOKEN)
@@ -365,7 +370,7 @@ async def push_nyx_workflow(repo_full_name: str, repo_id: str, default_branch: s
 
 async def get_repository_info(full_name: str) -> dict:
     """Fetch basic metadata for a GitHub repository."""
-    try:
+    def _sync():
         g = _get_client()
         repo = g.get_repo(full_name)
         return {
@@ -375,6 +380,8 @@ async def get_repository_info(full_name: str) -> dict:
             "language": repo.language,
             "is_private": repo.private,
         }
+    try:
+        return await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to fetch repo info for {full_name}: {e}") from e
 
@@ -388,10 +395,11 @@ async def register_webhook(repo_full_name: str) -> Tuple[int, str]:
         raise GitHubError(
             "GITHUB_WEBHOOK_ENDPOINT is not configured. Set it to your public Nyx URL."
         )
-    try:
+    secret = generate_webhook_secret()
+
+    def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
-        secret = generate_webhook_secret()
         hook = repo.create_hook(
             name="web",
             config={
@@ -403,25 +411,32 @@ async def register_webhook(repo_full_name: str) -> Tuple[int, str]:
             events=["push", "pull_request", "check_run", "check_suite"],
             active=True,
         )
-        return hook.id, secret
+        return hook.id
+
+    try:
+        hook_id = await asyncio.to_thread(_sync)
+        return hook_id, secret
     except GithubException as e:
         raise GitHubError(f"Failed to register webhook for {repo_full_name}: {e}") from e
 
 
 async def remove_webhook(repo_full_name: str, webhook_id: int) -> None:
     """Remove the Nyx webhook from a repository."""
-    try:
+    def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
         hook = repo.get_hook(webhook_id)
         hook.delete()
+
+    try:
+        await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to remove webhook: {e}") from e
 
 
 async def get_file_content(repo_full_name: str, file_path: str, ref: str = "") -> str:
     """Fetch the content of a file from a GitHub repository."""
-    try:
+    def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
         kwargs = {"ref": ref} if ref else {}
@@ -429,6 +444,9 @@ async def get_file_content(repo_full_name: str, file_path: str, ref: str = "") -
         if isinstance(contents, list):
             raise GitHubError(f"{file_path} is a directory, not a file")
         return base64.b64decode(contents.content).decode("utf-8", errors="replace")
+
+    try:
+        return await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to fetch {file_path} from {repo_full_name}: {e}") from e
 
@@ -447,7 +465,7 @@ async def create_fix_pr(
     Create a branch with the fixed file and open a pull request.
     Returns (pr_number, pr_url).
     """
-    try:
+    def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
 
@@ -481,6 +499,9 @@ async def create_fix_pr(
             pass  # Labels may not exist; non-fatal
 
         return pr.number, pr.html_url
+
+    try:
+        return await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to create fix PR for {repo_full_name}: {e}") from e
 
@@ -514,7 +535,7 @@ async def merge_pr(repo_full_name: str, pr_number: int, branch_name: str) -> boo
     Merge a pull request and delete the source branch.
     Returns True on success, raises GitHubError on failure.
     """
-    try:
+    def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
         pr = repo.get_pull(pr_number)
@@ -526,13 +547,16 @@ async def merge_pr(repo_full_name: str, pr_number: int, branch_name: str) -> boo
             except GithubException:
                 pass  # Branch cleanup is best-effort
         return result.merged
+
+    try:
+        return await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to merge PR #{pr_number}: {e}") from e
 
 
 async def get_pr_status(repo_full_name: str, pr_number: int) -> dict:
     """Return current PR state and merged status."""
-    try:
+    def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
         pr = repo.get_pull(pr_number)
@@ -540,8 +564,11 @@ async def get_pr_status(repo_full_name: str, pr_number: int) -> dict:
             "state": pr.state,
             "merged": pr.merged,
             "merged_at": pr.merged_at,
-            "deployment_url": None,  # Extend: poll repo.get_environments() for staging deploy
+            "deployment_url": None,
         }
+
+    try:
+        return await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to get PR status: {e}") from e
 
@@ -567,8 +594,9 @@ async def create_check_run(repo_full_name: str, head_sha: str, name: str = "Nyx 
             })
             if resp.status_code in (200, 201):
                 return resp.json().get("id")
-    except Exception:
-        pass
+    except (httpx.HTTPError, KeyError) as exc:
+        import logging
+        logging.getLogger("nyx.github").debug("Check run creation failed: %s", exc)
     return None
 
 
@@ -602,8 +630,9 @@ async def complete_check_run(
                     "annotations": annotations[:50],
                 },
             })
-    except Exception:
-        pass
+    except (httpx.HTTPError, KeyError) as exc:
+        import logging
+        logging.getLogger("nyx.github").debug("Check run completion failed: %s", exc)
 
 
 def _fix_hunk_headers(diff: str) -> str:
@@ -690,5 +719,7 @@ def apply_unified_diff(original: str, diff: str) -> Optional[str]:
                 offset += len(new_lines) - len(source_lines)
 
         return "".join(result_lines)
-    except Exception:
+    except (unidiff.errors.UnidiffParseError, IndexError, ValueError) as exc:
+        import logging
+        logging.getLogger("nyx.github").debug("Diff application failed: %s", exc)
         return None

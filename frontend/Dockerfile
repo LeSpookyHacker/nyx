@@ -50,4 +50,9 @@ server {
 }
 EOF
 
+# Run as non-root for security hardening
+RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx && \
+    chmod -R 755 /usr/share/nginx/html
+USER nginx
+
 EXPOSE 80

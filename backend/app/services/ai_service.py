@@ -154,7 +154,7 @@ async def generate_fix(
                 if owasp_code:
                     owasp_info = f"\nOWASP Category: {OWASP_TOP_10[owasp_code]}"
                     break
-        except Exception:
+        except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
     # Build test context snippet
@@ -257,7 +257,7 @@ async def generate_alternatives(
                 if owasp_code:
                     owasp_info = f"\nOWASP Category: {OWASP_TOP_10[owasp_code]}"
                     break
-        except Exception:
+        except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
     prompt = _build_alternatives_prompt(
@@ -305,7 +305,7 @@ async def stream_fix_generation(
                 if owasp_code:
                     owasp_info = f"\nOWASP Category: {OWASP_TOP_10[owasp_code]}"
                     break
-        except Exception:
+        except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
     fix_prompt = _build_fix_prompt(finding, truncated_content, owasp_info, safe_context, "")
@@ -383,7 +383,7 @@ def _build_fix_prompt(
         cwe_list = json.loads(finding.cwe_ids or "[]")
         safe_cwes = [c for c in cwe_list if isinstance(c, str) and _CWE_ID_RE.match(c)]
         cwe_str = _safe(", ".join(safe_cwes) if safe_cwes else "Unknown", 200)
-    except Exception:
+    except (json.JSONDecodeError, TypeError):
         cwe_str = ""
 
     # Sanitize all finding fields sourced from scanners before prompt interpolation (C2)
@@ -547,7 +547,7 @@ def _parse_explanation(text: str) -> tuple[str, str, float]:
         fix_summary = data.get("fix_summary", "fix: address security vulnerability")
         confidence = float(data.get("confidence", 0.7))
         return explanation, fix_summary, confidence
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         # Fallback: return raw text as explanation — cap length (M2)
         truncated = text[:2000] if len(text) > 2000 else text
         return truncated, "fix: address security vulnerability", 0.5
@@ -573,7 +573,7 @@ def _parse_alternatives(text: str, file_path: str) -> list[AIAlternativeFix]:
                 trade_offs=str(item.get("trade_offs", ""))[:500],
             ))
         return result
-    except Exception:
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         return []
 
 

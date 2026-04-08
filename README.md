@@ -57,6 +57,8 @@ Engineering and security teams face a common problem: dozens of scanners produce
 - [Development Guide](#development-guide)
 - [Troubleshooting](#troubleshooting)
 - [Security Considerations](#security-considerations)
+- [Contributing](#contributing)
+- [Security Policy](#security-policy)
 
 ---
 
@@ -1744,7 +1746,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **HTTPS enforcement** | Set `HTTPS_ONLY=true` to redirect all HTTP traffic and add `Strict-Transport-Security: max-age=31536000; includeSubDomains`. |
 | **CORS** | Set `CORS_ORIGINS_STR` to exactly your frontend domain in production — `http://localhost:3000` is the default and must not be left in place. |
 | **BREACH mitigation** | gzip compression is disabled on `/api/` proxy routes in nginx. Only static asset types (`text/css`, `application/javascript`, etc.) are gzip-compressed. This eliminates the BREACH attack surface on JSON API responses over HTTPS. |
-| **Container hardening** | The backend container runs as the `nyx` user from the first instruction (`USER nyx` in Dockerfile). No `gosu` or setuid required — fully compatible with `no-new-privileges: true`. Both backend and frontend containers use `cap_drop: ALL` (nginx adds back only `NET_BIND_SERVICE`). |
+| **Container hardening** | Both backend and frontend containers run as non-root users (`nyx` for backend, `nginx` for frontend). No `gosu` or setuid required — fully compatible with `no-new-privileges: true`. Both containers use `cap_drop: ALL` (nginx adds back only `NET_BIND_SERVICE`). |
 | **No Docker socket mount** | The `autoheal` sidecar — which required mounting `/var/run/docker.sock` and granting container escape capability — has been removed. Container self-healing uses Docker's native `restart: unless-stopped` policy instead. |
 | **Production startup checks** | In `ENVIRONMENT=production`, startup raises `RuntimeError` if: `NYX_API_KEY` is not set, `NYX_SECRET_KEY` is not set, `DEBUG=true`, or `DATABASE_URL` points to SQLite. The process will not start in an unsafe configuration. |
 | **API docs hidden in production** | `/docs` and `/redoc` are only served when `ENVIRONMENT != production`. This prevents CSP relaxation and Swagger UI CDN asset loading in production environments. |
@@ -1763,6 +1765,18 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **Dependency upper bounds** | All Python dependencies in `requirements.txt` now have both lower and upper version bounds (e.g., `fastapi>=0.115.0,<1.0.0`) to prevent silent major-version upgrades. For production, generate a pinned lockfile: `pip install pip-tools && pip-compile requirements.txt`. |
 | **GitHub Token** | Store in `.env` only — never commit. Rotate annually or on suspected exposure. Use GitHub Apps for production deployments at scale (higher rate limits, installation-scoped access). |
 | **JIRA Token** | Treat as a password — it has write access to your Jira projects. Rotate via Atlassian account settings if exposed. |
+
+---
+
+## Contributing
+
+Contributions are welcome! Please read **[CONTRIBUTING.md](CONTRIBUTING.md)** for development setup, coding standards, and the pull request process.
+
+---
+
+## Security Policy
+
+If you discover a security vulnerability, please report it responsibly. See **[SECURITY.md](SECURITY.md)** for our disclosure process and supported versions.
 
 ---
 

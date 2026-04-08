@@ -20,6 +20,7 @@ const SEV_COLORS: Record<string, string> = {
   MEDIUM: 'text-yellow-400', LOW: 'text-green-400', INFO: 'text-slate-400',
 }
 
+/** SLA policy configuration for severity-based remediation time limits. */
 export default function SlaPoliciesPage() {
   const queryClient = useQueryClient()
   const [showAdd, setShowAdd] = useState(false)

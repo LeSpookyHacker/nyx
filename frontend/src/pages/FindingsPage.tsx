@@ -11,7 +11,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { CheckCircle, ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, ShieldAlert, Wand2, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
-const SEVERITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO']
+import { SEVERITIES } from '../constants/theme'
 const SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV']
 
 const STATUS_TABS = [
@@ -24,6 +24,7 @@ const STATUS_TABS = [
   { label: 'All',           value: [] },
 ]
 
+/** Security findings list with filtering, sorting, bulk actions, and Claude prompt generation. */
 export default function FindingsPage() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
@@ -89,11 +90,15 @@ export default function FindingsPage() {
     },
   })
 
-  const copyPrompt = () => {
+  const copyPrompt = async () => {
     if (!claudePrompt) return
-    navigator.clipboard.writeText(claudePrompt)
-    setPromptCopied(true)
-    setTimeout(() => setPromptCopied(false), 2000)
+    try {
+      await navigator.clipboard.writeText(claudePrompt)
+      setPromptCopied(true)
+      setTimeout(() => setPromptCopied(false), 2000)
+    } catch (err) {
+      console.error('Failed to copy prompt to clipboard:', err)
+    }
   }
 
   const findings = data?.items || []

@@ -12,6 +12,7 @@ const COMPLIANCE_FRAMEWORKS = [
   { id: 'soc-2', name: 'SOC 2' },
 ]
 
+/** Report generation page for executive summaries and compliance exports. */
 export default function ReportsPage() {
   const [execDays, setExecDays] = useState(30)
   const [compFramework, setCompFramework] = useState('pci-dss')

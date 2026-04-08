@@ -1,19 +1,21 @@
+import { lazy } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/layout/AppShell'
-import DashboardPage from './pages/DashboardPage'
-import FindingsPage from './pages/FindingsPage'
-import FindingDetailPage from './pages/FindingDetailPage'
-import RemediationPage from './pages/RemediationPage'
-import RepositoriesPage from './pages/RepositoriesPage'
-import RepositoryDetailPage from './pages/RepositoryDetailPage'
-import ScansPage from './pages/ScansPage'
-import SettingsPage from './pages/SettingsPage'
-import AuditPage from './pages/AuditPage'
-import CompliancePage from './pages/CompliancePage'
-import SbomPage from './pages/SbomPage'
-import SchedulesPage from './pages/SchedulesPage'
-import SlaPoliciesPage from './pages/SlaPoliciesPage'
-import ReportsPage from './pages/ReportsPage'
+
+const DashboardPage = lazy(() => import('./pages/DashboardPage'))
+const FindingsPage = lazy(() => import('./pages/FindingsPage'))
+const FindingDetailPage = lazy(() => import('./pages/FindingDetailPage'))
+const RemediationPage = lazy(() => import('./pages/RemediationPage'))
+const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'))
+const RepositoryDetailPage = lazy(() => import('./pages/RepositoryDetailPage'))
+const ScansPage = lazy(() => import('./pages/ScansPage'))
+const SettingsPage = lazy(() => import('./pages/SettingsPage'))
+const AuditPage = lazy(() => import('./pages/AuditPage'))
+const CompliancePage = lazy(() => import('./pages/CompliancePage'))
+const SbomPage = lazy(() => import('./pages/SbomPage'))
+const SchedulesPage = lazy(() => import('./pages/SchedulesPage'))
+const SlaPoliciesPage = lazy(() => import('./pages/SlaPoliciesPage'))
+const ReportsPage = lazy(() => import('./pages/ReportsPage'))
 
 export default function App() {
   return (

@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { dashboardApi } from '../api/dashboard'
@@ -7,16 +8,8 @@ import {
 } from 'recharts'
 import { AlertOctagon, Clock, Shield, TrendingUp, Flame, RotateCcw, AlertTriangle } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
-
-const SEVERITY_COLORS = {
-  critical: '#ef4444',
-  high: '#f97316',
-  medium: '#eab308',
-  low: '#22c55e',
-  info: '#64748b',
-}
-
-const SCANNER_COLORS = ['#7c3aed', '#6366f1', '#8b5cf6', '#a78bfa', '#4f46e5', '#818cf8', '#c4b5fd']
+import { SEVERITY_COLORS, SCANNER_COLORS } from '../constants/theme'
+import LoadingSkeleton from '../components/ui/LoadingSkeleton'
 
 function KpiCard({ label, value, icon: Icon, color, onClick }: {
   label: string; value: string | number; icon: React.ElementType; color: string; onClick?: () => void
@@ -38,6 +31,7 @@ function KpiCard({ label, value, icon: Icon, color, onClick }: {
   )
 }
 
+/** Executive security dashboard with KPIs, severity breakdown, trends, and risk insights. */
 export default function DashboardPage() {
   const navigate = useNavigate()
   const { data: summary, isLoading: summaryLoading } = useQuery({
@@ -86,23 +80,23 @@ export default function DashboardPage() {
     queryFn: () => dashboardApi.getOrgRiskHistory(30),
   })
 
-  if (summaryLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-nyx-mist animate-pulse">Loading dashboard...</div>
-      </div>
-    )
-  }
-
-  const severityDonutData = summary
+  const severityDonutData = useMemo(() => summary
     ? Object.entries(summary.open_by_severity)
         .filter(([, v]) => v > 0)
         .map(([k, v]) => ({ name: k.toUpperCase(), value: v, color: SEVERITY_COLORS[k as keyof typeof SEVERITY_COLORS] }))
-    : []
+    : [], [summary])
 
-  const totalOpen = summary
+  const totalOpen = useMemo(() => summary
     ? Object.values(summary.open_by_severity).reduce((a, b) => a + b, 0)
-    : 0
+    : 0, [summary])
+
+  if (summaryLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <LoadingSkeleton lines={5} />
+      </div>
+    )
+  }
 
   const regressionCount = (regressions || []).length
 

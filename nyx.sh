@@ -12,8 +12,8 @@ set -euo pipefail
 # ── Config ──────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REFRESH_AFTER_HOURS=4
-API_BASE="http://localhost:8000/api/v1"
-FRONTEND_URL="http://localhost:3000"
+API_BASE="${NYX_API_BASE:-http://localhost:8000/api/v1}"
+FRONTEND_URL="${NYX_FRONTEND_URL:-http://localhost:3000}"
 FORCE_BUILD=false
 CHECK_ONLY=false
 
