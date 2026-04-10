@@ -1748,7 +1748,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **BREACH mitigation** | gzip compression is disabled on `/api/` proxy routes in nginx. Only static asset types (`text/css`, `application/javascript`, etc.) are gzip-compressed. This eliminates the BREACH attack surface on JSON API responses over HTTPS. |
 | **Container hardening** | Both backend and frontend containers run as non-root users (`nyx` for backend, `nginx` for frontend). No `gosu` or setuid required — fully compatible with `no-new-privileges: true`. Both containers use `cap_drop: ALL` (nginx adds back only `NET_BIND_SERVICE`). |
 | **No Docker socket mount** | The `autoheal` sidecar — which required mounting `/var/run/docker.sock` and granting container escape capability — has been removed. Container self-healing uses Docker's native `restart: unless-stopped` policy instead. |
-| **Production startup checks** | In `ENVIRONMENT=production`, startup raises `RuntimeError` if: `NYX_API_KEY` is not set, `NYX_SECRET_KEY` is not set, `DEBUG=true`, or `DATABASE_URL` points to SQLite. The process will not start in an unsafe configuration. |
+| **Production startup checks** | In `ENVIRONMENT=production`, startup raises `RuntimeError` if: `NYX_API_KEY` is not set, `NYX_SECRET_KEY` is not set, `NYX_WEBHOOK_SECRET` is not set, `DEBUG=true`, or `DATABASE_URL` points to SQLite. The process will not start in an unsafe configuration. |
 | **API docs hidden in production** | `/docs` and `/redoc` are only served when `ENVIRONMENT != production`. This prevents CSP relaxation and Swagger UI CDN asset loading in production environments. |
 
 ### Supply Chain
@@ -1756,7 +1756,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | Area | Detail |
 |---|---|
 | **CI tool checksums** | The generated `nyx-scan.yml` workflow verifies SHA-256 checksums for Gitleaks (against the published `checksums.txt`) and Hadolint (against the `.sha256` sidecar file) before executing either binary. A checksum mismatch fails the CI step with an explicit error. |
-| **Actions pinned to SHA** | Both `actions/checkout` and `aquasecurity/trivy-action` are pinned to specific commit SHAs in `nyx-scan.yml`, preventing supply chain attacks via compromised upstream branches or force-pushed tags. |
+| **Actions pinned to SHA** | `actions/checkout`, `aquasecurity/trivy-action`, and `zaproxy/action-baseline` are all pinned to specific commit SHAs in `nyx-scan.yml`, preventing supply chain attacks via compromised upstream branches or force-pushed tags. |
 | **Dynamic repo ID** | The `NYX_REPO_ID` used in `nyx-scan.yml` is read from a GitHub Actions variable (`vars.NYX_REPO_ID`) rather than hardcoded — set this in your repo's **Settings → Variables → Actions**. |
 | **Bundled GHA scanning workflows** | Two GitHub Actions workflow templates are included in `.github/workflows/`: `nyx-scan-gitleaks.yml` (secret scanning with full history checkout on push, PR, and weekly schedule) and `nyx-scan-container.yml` (Trivy container image + IaC scanning on Dockerfile changes and daily schedule, results submitted to Nyx). Both are pinned to action commit SHAs. |
 | **Preflight integration check** | Run `./nyx.sh --check` to probe all integrations (database, Anthropic, GitHub, JIRA, Slack) before starting Nyx. Reports per-integration status with colour-coded output — useful in CI/CD before deploying a new environment. |

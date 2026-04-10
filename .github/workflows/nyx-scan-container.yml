@@ -46,8 +46,14 @@ jobs:
 
       - name: Install Trivy
         run: |
-          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sh -s -- -b /usr/local/bin v0.58.2
+          TRIVY_VERSION="v0.58.2"
+          TRIVY_ARCHIVE="trivy_0.58.2_Linux-64bit.tar.gz"
+          BASE_URL="https://github.com/aquasecurity/trivy/releases/download/${TRIVY_VERSION}"
+          curl -sSfL "${BASE_URL}/${TRIVY_ARCHIVE}" -o trivy.tar.gz
+          curl -sSfL "${BASE_URL}/trivy_0.58.2_checksums.txt" -o trivy_checksums.txt
+          grep "$TRIVY_ARCHIVE" trivy_checksums.txt | sha256sum --check --status || \
+            { echo "::error::Trivy checksum verification FAILED"; exit 1; }
+          tar -xz -f trivy.tar.gz -C /usr/local/bin trivy
 
       - name: Scan image with Trivy
         env:

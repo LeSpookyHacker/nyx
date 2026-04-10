@@ -217,12 +217,14 @@ jobs:
       # Set vars.NYX_ZAP_TARGET to your deployed app URL to enable DAST scanning.
       - name: Fix workspace permissions for ZAP container
         if: vars.NYX_ZAP_TARGET != ''
-        run: chmod -R 777 .
+        run: |
+          mkdir -p zap-wrk
+          chmod -R 777 zap-wrk
 
       - name: Run ZAP Baseline Scan
         if: vars.NYX_ZAP_TARGET != ''
         continue-on-error: true  # ZAP failure must not abort Trivy/Gitleaks/Hadolint steps
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@7cea08522cd8bdb4dabfa35e7e3117a8e7adec07  # v0.14.0
         with:
           target: ${{{{ vars.NYX_ZAP_TARGET }}}}
           # -m 3  = spider for 3 minutes (SPAs need more than the 1m default; NOTE: use -m not -t)

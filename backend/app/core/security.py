@@ -414,13 +414,28 @@ def warn_insecure_config() -> None:
         issues.append(msg)
 
     if not settings.NYX_SECRET_KEY:
-        issues.append("NYX_SECRET_KEY is not set — webhook secrets are stored plaintext and audit HMAC chain uses a weak default key")
+        msg = (
+            "NYX_SECRET_KEY is not set — webhook secrets are stored plaintext and "
+            "audit HMAC chain uses a weak default key"
+        )
+        if settings.ENVIRONMENT == "production":
+            raise RuntimeError(
+                f"[SECURITY] {msg}. Cannot start in production mode without NYX_SECRET_KEY. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        issues.append(msg)
 
     if not settings.SNYK_WEBHOOK_SECRET:
         issues.append("SNYK_WEBHOOK_SECRET is not set — Snyk webhooks are accepted without signature verification")
 
     if not settings.NYX_WEBHOOK_SECRET:
-        issues.append("NYX_WEBHOOK_SECRET is not set — GitHub webhook repo enumeration is possible before HMAC check")
+        msg = "NYX_WEBHOOK_SECRET is not set — GitHub webhook repo enumeration is possible before HMAC check"
+        if settings.ENVIRONMENT == "production":
+            raise RuntimeError(
+                f"[SECURITY] {msg}. Cannot start in production mode without NYX_WEBHOOK_SECRET. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+        issues.append(msg)
 
     if settings.JIRA_MOCK_MODE and settings.ENVIRONMENT == "production":
         issues.append("JIRA_MOCK_MODE=true in production — JIRA tickets will not be created")
