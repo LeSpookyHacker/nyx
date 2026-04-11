@@ -209,73 +209,82 @@ Engineering and security teams face a common problem: dozens of scanners produce
 ## Quick Start
 
 > [!NOTE]
-> Nyx requires Docker with Compose v2. Get it running in under 5 minutes for local evaluation.
+> **Prerequisites:** Docker with Compose v2, Python 3, and curl.
 
-### Automated setup (recommended)
+### One-command setup
 
 ```bash
-git clone https://github.com/your-org/nyx.git
+git clone https://github.com/LeSpookyHacker/nyx.git
 cd nyx
 ./setup.sh
 ```
 
-`setup.sh` is an interactive first-run wizard that checks dependencies, generates secure secrets, prompts for your GitHub token and Anthropic API key, validates them via API, builds Docker images, and starts Nyx. It also supports `--non-interactive` for CI/CD pipelines and `--skip-start` if you want to review the generated `.env` before starting.
+That's it. The setup wizard will:
+1. Check that Docker, Python 3, and curl are installed
+2. Create `.env` and generate all required secrets automatically
+3. Ask for your GitHub token and Anthropic API key (press Enter to skip either)
+4. Validate your credentials
+5. Build and start the Docker containers
+6. Print your API key and the dashboard URL
+
+When it finishes, open **http://localhost:3000**, click **Settings**, and paste in the API key it printed.
+
+> [!TIP]
+> **Flags:** `./setup.sh --non-interactive` for headless/CI use, `./setup.sh --skip-start` to configure `.env` without starting containers.
 
 ### Manual setup
 
-```bash
-# 1. Clone the repository
-git clone https://github.com/your-org/nyx.git
-cd nyx
+If you prefer to do it yourself:
 
-# 2. Copy and configure the environment file
+```bash
+git clone https://github.com/LeSpookyHacker/nyx.git
+cd nyx
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum fill in these values:
+Edit `.env` and fill in at minimum:
 
 ```bash
-# Required — AI fix generation
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Required — GitHub integration (see GitHub Setup for required scopes)
-GITHUB_TOKEN=ghp_...
-GITHUB_WEBHOOK_ENDPOINT=https://your-public-url.example.com
-
-# Required in production — the API key every client must send in X-API-Key
-# On first startup Nyx seeds this value as the "bootstrap" DB key automatically.
-# You can then rotate or add new keys from the Settings page without restarting.
-NYX_API_KEY=your-secret-key-here
-
-# Strongly recommended — enables audit log HMAC chain + webhook secret encryption at rest
-# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
-NYX_SECRET_KEY=your-32-byte-hex-secret
+ANTHROPIC_API_KEY=sk-ant-...          # AI fix generation
+GITHUB_TOKEN=ghp_...                   # GitHub integration
+NYX_API_KEY=any-secret-string          # Your login key
+NYX_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+NYX_WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 ```
 
+Then start:
+
 ```bash
-# 3. Start all services
 docker compose up -d
-
-# 4. Verify containers are healthy and the bootstrap key was seeded
-docker compose ps
-docker compose logs backend | grep -i "seed\|startup complete"
 ```
 
-| Service | URL |
+### After setup
+
+| URL | What |
 |---|---|
-| **Dashboard** | http://localhost:3000 |
-| **Backend API** | http://localhost:8000 |
-| **Interactive API Docs** | http://localhost:8000/docs |
-| **Settings / API Keys** | http://localhost:3000 → Settings (gear icon) |
+| **http://localhost:3000** | Dashboard |
+| **http://localhost:8000/docs** | Interactive API docs |
+
+### Managing Nyx
+
+Use `./nyx.sh` as your day-to-day interface:
+
+```
+./nyx.sh              Start Nyx (or show status if already running)
+./nyx.sh status       Show services and open finding counts
+./nyx.sh stop         Stop all services
+./nyx.sh restart      Restart all services
+./nyx.sh build        Rebuild images after pulling updates
+./nyx.sh logs         Tail backend logs
+./nyx.sh check        Verify all integration credentials
+./nyx.sh refresh      Trigger all scan schedules now
+```
 
 > [!TIP]
-> After the first start, go to **Settings → API Keys** to create purpose-specific keys for CI/CD pipelines and rotate or deactivate the bootstrap key when you're ready. Create CI/CD keys with `scanner` scope — they can submit scans but cannot modify findings or manage keys.
-
-> [!NOTE]
-> After pulling updates that add new dependencies, rebuild the Docker image before starting: `./nyx.sh --build` (or `docker compose build backend && docker compose up -d`).
+> After the first start, go to **Settings > API Keys** to create purpose-specific keys for CI/CD pipelines. Create CI/CD keys with `scanner` scope — they can submit scans but cannot modify findings or manage keys.
 
 > [!WARNING]
-> If `NYX_API_KEY` is left blank, the API is unauthenticated — any request is accepted. This is fine for local evaluation but **must not be deployed publicly without a key set**.
+> If `NYX_API_KEY` is left blank, the API is unauthenticated. This is fine for local evaluation but **never deploy publicly without a key set**.
 
 ---
 
@@ -704,7 +713,7 @@ The generated workflow runs the full scanner suite:
 - **Snyk** — SCA dependency vulnerabilities (requires `SNYK_TOKEN`)
 - **Gitleaks** — Secrets detection across the full commit history; binary is SHA-256 verified against the publisher's checksums file before execution
 - **Hadolint** — Dockerfile best-practice linting (skipped if no Dockerfile present); binary is SHA-256 verified against the publisher's `.sha256` sidecar file before execution
-- Includes `chmod -R 777 .` before ZAP to avoid Docker permission errors
+- Creates a scoped `zap-wrk/` directory with write permissions for ZAP output (no workspace-wide chmod)
 - ZAP runs with `continue-on-error: true` so Trivy and SBOM always complete even if ZAP fails
 - Reads `NYX_REPO_ID` from a GitHub Actions variable (no hardcoded UUID) — set `vars.NYX_REPO_ID` in your repo settings
 
@@ -1759,7 +1768,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **Actions pinned to SHA** | `actions/checkout`, `aquasecurity/trivy-action`, and `zaproxy/action-baseline` are all pinned to specific commit SHAs in `nyx-scan.yml`, preventing supply chain attacks via compromised upstream branches or force-pushed tags. |
 | **Dynamic repo ID** | The `NYX_REPO_ID` used in `nyx-scan.yml` is read from a GitHub Actions variable (`vars.NYX_REPO_ID`) rather than hardcoded — set this in your repo's **Settings → Variables → Actions**. |
 | **Bundled GHA scanning workflows** | Two GitHub Actions workflow templates are included in `.github/workflows/`: `nyx-scan-gitleaks.yml` (secret scanning with full history checkout on push, PR, and weekly schedule) and `nyx-scan-container.yml` (Trivy container image + IaC scanning on Dockerfile changes and daily schedule, results submitted to Nyx). Both are pinned to action commit SHAs. |
-| **Preflight integration check** | Run `./nyx.sh --check` to probe all integrations (database, Anthropic, GitHub, JIRA, Slack) before starting Nyx. Reports per-integration status with colour-coded output — useful in CI/CD before deploying a new environment. |
+| **Preflight integration check** | Run `./nyx.sh check` to probe all integrations (database, Anthropic, GitHub, JIRA, Slack). Reports per-integration status with colour-coded output — useful in CI/CD before deploying a new environment. |
 | **Debug output gated** | The ZAP debug output step (which prints scan finding counts) is only active when `vars.NYX_DEBUG == 'true'`. Set this variable only when actively debugging. |
 | **Secrets detection** | A `.gitleaks.toml` configuration is included in the repo. Install gitleaks and add a pre-commit hook: `echo '#!/bin/sh\ngitleaks protect --staged' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit` |
 | **Dependency upper bounds** | All Python dependencies in `requirements.txt` now have both lower and upper version bounds (e.g., `fastapi>=0.115.0,<1.0.0`) to prevent silent major-version upgrades. For production, generate a pinned lockfile: `pip install pip-tools && pip-compile requirements.txt`. |
