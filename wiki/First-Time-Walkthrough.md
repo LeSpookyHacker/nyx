@@ -25,11 +25,6 @@ cd nyx
 
 Follow the prompts. At the end, `setup.sh` prints your dashboard URL and your API key. Save the API key somewhere — you will paste it in a moment.
 
-<!-- IMAGE: setup.sh final banner with API key and URLs.
-     File: wiki/images/walkthrough-setup-banner.png -->
-![Setup complete banner](images/walkthrough-setup-banner.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Step 2 — First login
