@@ -36,10 +36,6 @@ The wizard will:
 5. **Build and start.** Run `docker compose build && docker compose up -d`.
 6. **Print the dashboard URL and the bootstrap API key.**
 
-<!-- IMAGE: Terminal screenshot of setup.sh completion banner showing the API key and URLs.
-     File: wiki/images/setup-complete.png -->
-![setup.sh completed](images/setup-complete.png)
-<!-- /IMAGE -->
 
 ### Flags
 
