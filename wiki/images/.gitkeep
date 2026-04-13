@@ -1,0 +1,2 @@
+# Drop screenshots referenced by the wiki pages into this directory.
+# Each wiki page contains <!-- IMAGE: ... --> markers suggesting filenames.
