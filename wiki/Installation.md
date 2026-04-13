@@ -83,11 +83,6 @@ docker compose ps
 ./nyx.sh status
 ```
 
-<!-- IMAGE: Screenshot of `docker compose ps` showing backend, frontend, and autoheal healthy.
-     File: wiki/images/compose-ps.png -->
-![docker compose ps output](images/compose-ps.png)
-<!-- /IMAGE -->
-
 ---
 
 ## First login
@@ -103,10 +98,6 @@ docker compose ps
 3. Paste the API key that `setup.sh` printed (or whatever you set `NYX_API_KEY` to).
 4. The dashboard unlocks and is cookie-authenticated from this point on.
 
-<!-- IMAGE: First-run Settings page with the API key field highlighted.
-     File: wiki/images/first-login-settings.png -->
-![First-run Settings screen](images/first-login-settings.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -127,11 +118,6 @@ Day-to-day operations happen through `./nyx.sh`:
 
 Most of these are thin wrappers around `docker compose` with friendlier output.
 
-<!-- IMAGE: `./nyx.sh status` output showing services and counts.
-     File: wiki/images/nyx-sh-status.png -->
-![nyx.sh status example](images/nyx-sh-status.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Verifying the install
@@ -146,10 +132,6 @@ curl -s -H "X-API-Key: $NYX_API_KEY" http://localhost:8000/health/integrations |
 
 You should see per-integration status for `database`, `anthropic`, `github`, `jira`, and `webhook_notifier`. Each returns `ok` / `error` plus a short message.
 
-<!-- IMAGE: Dashboard Integration Health card showing all integrations green.
-     File: wiki/images/integration-health.png -->
-![Integration health card](images/integration-health.png)
-<!-- /IMAGE -->
 
 ---
 
