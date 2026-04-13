@@ -17,12 +17,6 @@ This page covers everything required to get a working Nyx instance running on a 
 | **Open ports** | `3000`, `8000` | Frontend and API on the host |
 
 > **Linux / macOS / WSL2 supported.** Native Windows is not supported — use WSL2.
-
-<!-- IMAGE: Screenshot of `docker --version && docker compose version` showing a healthy toolchain.
-     File: wiki/images/prereq-versions.png -->
-![Prerequisite check](images/prereq-versions.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Option A — One-command setup (recommended)
