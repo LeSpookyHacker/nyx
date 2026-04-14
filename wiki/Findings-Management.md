@@ -35,10 +35,6 @@ Typical path:
    - **Suppress** (with reason and expiry)
    - **Accept Risk** (with justification and expiry)
 
-<!-- IMAGE: Findings page with filters open and bulk selection active.
-     File: wiki/images/triage-workflow.png -->
-![Triage workflow](images/triage-workflow.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -71,11 +67,6 @@ For real risks you consciously choose to carry, file a **Risk Acceptance** with:
 - **Expiry** — when it must be revisited
 
 Accepted risks still appear on the dashboard with an **ACCEPTED_RISK** badge. Expired acceptances flip back to OPEN and fire a notification. Approvals and revocations are recorded in the audit log.
-
-<!-- IMAGE: Risk acceptance modal filled with example data.
-     File: wiki/images/risk-acceptance.png -->
-![Risk acceptance modal](images/risk-acceptance.png)
-<!-- /IMAGE -->
 
 ---
 
