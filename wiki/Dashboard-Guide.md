@@ -208,19 +208,6 @@ Each tab has its own unread counter; the badge on the bell is the sum.
 
 ---
 
-## Keyboard shortcuts
-
-| Shortcut | Action |
-|---|---|
-| `g d` | Go to Dashboard |
-| `g f` | Go to Findings |
-| `g r` | Go to Repositories |
-| `/` | Focus global search |
-| `?` | Show shortcut help |
-| `esc` | Close any modal |
-
----
-
 ## What next
 
 - **Configure what each page shows →** [Configuration Reference](Configuration.md)
