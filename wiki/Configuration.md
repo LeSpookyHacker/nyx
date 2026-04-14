@@ -20,11 +20,6 @@ These must be set before Nyx will start in production mode. `setup.sh` generates
 
 > **Dev tip:** leaving `NYX_API_KEY` blank disables auth for local evaluation. Never do this in anything reachable from the internet.
 
-<!-- IMAGE: A redacted .env showing only the required block with comments.
-     File: wiki/images/env-required.png -->
-![Required env variables](images/env-required.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Database
