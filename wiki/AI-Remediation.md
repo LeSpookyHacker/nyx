@@ -107,11 +107,6 @@ Before storage, every diff is scanned for dangerous patterns:
 
 Matches are stored as `diff_warnings` on the remediation record and surfaced in the UI. A fix with warnings can still be applied, but it cannot be merged silently — the engineer must acknowledge the warnings.
 
-<!-- IMAGE: Remediation detail with diff warnings banner.
-     File: wiki/images/diff-warnings.png -->
-![Diff security warnings](images/diff-warnings.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Confidence gating
@@ -141,11 +136,6 @@ Engineers pick whichever fits the codebase culture. Useful for non-obvious fixes
 ## Bulk fix requests
 
 Select up to 20 findings on the Findings page → **Request AI Fix (Bulk)**. Nyx queues each request with its own concurrency token and processes up to `AI_MAX_CONCURRENT` in parallel. Each finding gets its own remediation record; failures do not block the batch.
-
-<!-- IMAGE: Bulk remediation queue showing 20 in-flight requests.
-     File: wiki/images/bulk-remediation.png -->
-![Bulk AI fix queue](images/bulk-remediation.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -179,11 +169,6 @@ The **AI Cost dashboard** (`/reports#ai-costs`) aggregates these into:
 - Per-model breakdown
 
 Set `AI_COST_ALERT_DAILY_USD` to trigger a notification if daily spend exceeds a threshold.
-
-<!-- IMAGE: AI cost dashboard with trend line and top-10 table.
-     File: wiki/images/ai-cost-dashboard.png -->
-![AI cost dashboard](images/ai-cost-dashboard.png)
-<!-- /IMAGE -->
 
 ---
 
