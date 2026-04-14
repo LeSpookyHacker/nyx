@@ -4,7 +4,7 @@
 
 <!-- IMAGE: Hero screenshot of the Nyx dashboard landing view.
      Recommended: 1600x900, PNG, light-weight. Drop file into wiki/images/ and replace the path below. -->
-![Nyx Dashboard Hero](images/hero-dashboard.png)
+![Nyx Dashboard Hero](images/dashboard-full.PNG)
 <!-- /IMAGE -->
 
 Welcome to the **Nyx wiki** — the long-form companion to the project [README](../README.md). Where the README is a single reference document, this wiki splits every topic into a dedicated page so you can onboard, deploy, and extend Nyx without scrolling past anything you do not need.
