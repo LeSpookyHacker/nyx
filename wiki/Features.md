@@ -39,11 +39,6 @@ Each finding gets a composite score combining:
 
 The dashboard sorts by priority score by default; you can override ordering on the Findings page.
 
-<!-- IMAGE: Findings page sorted by priority score with the score column highlighted.
-     File: wiki/images/findings-priority-sort.png -->
-![Priority scoring](images/findings-priority-sort.png)
-<!-- /IMAGE -->
-
 ### Regression detection
 When a finding that was previously `FIXED` reappears, it is flagged `is_regression=True` and surfaced on both the dashboard regression banner and the regression-alerts bell tab. If the original finding had been `ACCEPTED_RISK` or `SUPPRESSED` with `auto_close_status`, the regression is **auto-sorted** back to that status — no engineer action required — and a batched alert is recorded with per-finding detail.
 
