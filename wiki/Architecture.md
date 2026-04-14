@@ -53,10 +53,6 @@ How Nyx is put together, why those choices were made, and how data moves through
    └──────────────┘    └───────────────────────┘    └───────────────┘
 ```
 
-<!-- IMAGE: Rendered architecture diagram — cleaner than the ASCII above.
-     File: wiki/images/architecture-diagram.png -->
-![Architecture diagram](images/architecture-diagram.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -155,10 +151,6 @@ The path a single finding takes from scanner output to "closed":
 13. GitHub webhook fires (PR merged) → Nyx closes finding and JIRA ticket
 ```
 
-<!-- IMAGE: End-to-end data flow diagram (vectorized).
-     File: wiki/images/data-flow.png -->
-![End-to-end data flow](images/data-flow.png)
-<!-- /IMAGE -->
 
 ---
 
