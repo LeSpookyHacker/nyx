@@ -34,10 +34,6 @@ DATABASE_URL=postgresql+asyncpg://nyx:nyx_password@postgres:5432/nyx
 
 Alembic migrations run automatically on backend startup.
 
-<!-- IMAGE: `docker compose ps` output with postgres, backend, frontend all Up.
-     File: wiki/images/compose-ps-postgres.png -->
-![Compose stack with Postgres](images/compose-ps-postgres.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -101,10 +97,7 @@ Get a cert:
 sudo certbot --nginx -d nyx.example.com
 ```
 
-<!-- IMAGE: Nginx running in front of Nyx, browser showing TLS padlock.
-     File: wiki/images/prod-tls.png -->
-![TLS-protected deployment](images/prod-tls.png)
-<!-- /IMAGE -->
+
 
 ---
 
