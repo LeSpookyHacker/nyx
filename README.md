@@ -689,16 +689,23 @@ Every 5 minutes, Nyx's schedule worker:
 
 The easiest way to integrate any repository with Nyx is to use the **Push Workflow** button on the Repositories page. Nyx generates and pushes a canonical `nyx-scan.yml` directly to the repository via the GitHub API — no manual file creation needed.
 
-**What it requires in GitHub:**
+**What it requires in GitHub — configure these after clicking Push Workflow:**
 
-| Setting | Value | Where |
+**Secrets** (Repository → Settings → Secrets and variables → Actions → Secrets):
+
+| Secret | Value | Required |
 |---|---|---|
-| `NYX_URL` | Your Nyx public URL (no trailing slash) | Repository → Settings → Variables → Actions |
-| `NYX_REPO_ID` | Repository UUID from Nyx (Repositories page → copy ID) | Repository → Settings → Variables → Actions |
-| `NYX_API_KEY` | Your Nyx API key | Repository → Settings → Secrets → Actions |
-| `NYX_ZAP_TARGET` | Full URL to scan for DAST (optional) | Repository → Settings → Variables → Actions |
-| `NYX_DEBUG` | Set to `true` only when debugging ZAP output — gates the debug log step | Repository → Settings → Variables → Actions |
-| `SNYK_TOKEN` | Snyk API token — get one at https://snyk.io | Repository → Settings → Secrets → Actions |
+| `NYX_API_KEY` | Your Nyx API key — use a `scanner`-scoped key from Nyx Settings → API Keys | Yes |
+| `SNYK_TOKEN` | Snyk API token from [app.snyk.io/account](https://app.snyk.io/account) — enables Snyk SCA step | Optional |
+
+**Variables** (Repository → Settings → Secrets and variables → Actions → Variables):
+
+| Variable | Value | Required |
+|---|---|---|
+| `NYX_URL` | Your Nyx public URL, no trailing slash — e.g. `https://nyx.example.com` | Yes |
+| `NYX_ZAP_TARGET` | Full URL of the app to DAST scan — e.g. `https://myapp.com`. Enables the `nyx-zap` job. | Optional |
+
+> **Note:** You do **not** need to set `NYX_REPO_ID` — the repository UUID is baked directly into the workflow YAML when Nyx pushes it. No environment variable is read at runtime for this value.
 
 > [!TIP]
 > Use a **`scanner`-scoped API key** for CI/CD (`NYX_API_KEY` secret in GitHub). Scanner keys can submit scans but cannot suppress findings, manage other keys, or access audit exports — limiting blast radius if a CI secret is compromised.
@@ -715,7 +722,7 @@ The generated workflow runs the full scanner suite:
 - **Hadolint** — Dockerfile best-practice linting (skipped if no Dockerfile present); binary is SHA-256 verified against the publisher's `.sha256` sidecar file before execution
 - Creates a scoped `zap-wrk/` directory with write permissions for ZAP output (no workspace-wide chmod)
 - ZAP runs with `continue-on-error: true` so Trivy and SBOM always complete even if ZAP fails
-- Reads `NYX_REPO_ID` from a GitHub Actions variable (no hardcoded UUID) — set `vars.NYX_REPO_ID` in your repo settings
+- Repository UUID is baked into the workflow YAML at push time — no `NYX_REPO_ID` variable needed in GitHub settings
 
 > [!NOTE]
 > If `SNYK_TOKEN` is not set, the Snyk step is skipped gracefully — all other scanners still run.

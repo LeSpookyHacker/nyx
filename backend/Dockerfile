@@ -2,6 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+ENV PYTHONPATH=/app
+
 # Install build dependencies (no gosu — container runs as nyx from the start)
 RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /var/lib/apt/lists/*
 
@@ -11,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 
 # Create data/logs directories, create non-root user, set ownership
 RUN mkdir -p /app/data /app/logs && \

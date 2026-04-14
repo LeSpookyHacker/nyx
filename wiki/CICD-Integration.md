@@ -25,17 +25,29 @@ That's the entire deployment. No local `git` operations required.
 
 ---
 
-## Required repository secrets
+## Required GitHub repository settings
 
-Set these as GitHub Actions secrets on every target repository (or org-wide):
+After clicking **Push Workflow**, configure these in the target repository under **Settings → Secrets and variables → Actions**:
 
-| Secret | Value |
-|---|---|
-| `NYX_URL` | Public URL of your Nyx instance, e.g. `https://nyx.example.com` |
-| `NYX_API_KEY` | A **scanner-scoped** API key (not admin!) |
-| `NYX_REPO_ID` | The Nyx UUID for this repository (from Repositories list) |
+### Secrets (Settings → Secrets and variables → Actions → Secrets)
 
-> **Never use an admin-scope key in CI.** Create a dedicated `scanner` scope key from Settings → API Keys. It can submit scans and nothing else.
+| Secret | Value | Required |
+|---|---|---|
+| `NYX_API_KEY` | A **scanner-scoped** Nyx API key — create one from Nyx **Settings → API Keys** with `scanner` scope | Yes |
+| `SNYK_TOKEN` | Snyk API token from [app.snyk.io/account](https://app.snyk.io/account) — enables the Snyk SCA step | Optional |
+
+> **Never use an admin-scope key in CI.** A `scanner`-scoped key can submit scans but cannot suppress findings, manage keys, or access audit exports — limiting blast radius if a CI secret is ever compromised.
+
+### Variables (Settings → Secrets and variables → Actions → Variables)
+
+| Variable | Value | Required |
+|---|---|---|
+| `NYX_URL` | Public URL of your Nyx instance, no trailing slash — e.g. `https://nyx.example.com` | Yes |
+| `NYX_ZAP_TARGET` | Full URL of the deployed application to DAST scan — e.g. `https://myapp.com`. Setting this enables the separate `nyx-zap` job. | Optional |
+
+> **Why variables instead of secrets for URLs?** GitHub Actions variables are not masked in logs — that's intentional here. URLs are not sensitive, and using a variable means they appear in workflow run logs which makes debugging easier. Only `NYX_API_KEY` and `SNYK_TOKEN` need to be secrets.
+
+> **Note on `NYX_REPO_ID`:** You do **not** need to set a `NYX_REPO_ID` secret or variable. Nyx bakes the repository UUID directly into the workflow file at push time — it is a hardcoded string in the YAML, not read from the environment at runtime.
 
 <!-- IMAGE: GitHub Actions secrets page with the three required secrets.
      File: wiki/images/github-secrets.png -->

@@ -200,6 +200,32 @@ Nyx ships a canonical `nyx-scan.yml` GitHub Actions workflow that runs five scan
 
 ---
 
+## Configure the pushed workflow to run correctly
+
+After Nyx pushes `nyx-scan.yml`, the workflow won't be able to report results back to Nyx until you set the required secrets and variables in GitHub. Go to your repository → **Settings → Secrets and variables → Actions** and configure the following:
+
+### Secrets
+
+| Secret | Value | Required |
+|---|---|---|
+| `NYX_API_KEY` | A Nyx API key — create a **`scanner`-scoped** key from Nyx **Settings → API Keys**. Scanner keys can submit results but cannot suppress findings, manage keys, or access audit exports. | Yes |
+| `SNYK_TOKEN` | Snyk API token from [app.snyk.io/account](https://app.snyk.io/account) — enables the Snyk SCA step. | Optional |
+
+### Variables
+
+| Variable | Value | Required |
+|---|---|---|
+| `NYX_URL` | The public URL of your Nyx instance — the same URL GitHub uses to reach your webhook endpoint. No trailing slash. Example: `https://nyx.example.com` | Yes |
+| `NYX_ZAP_TARGET` | Full URL of the deployed application to run a DAST baseline scan against — e.g. `https://myapp.example.com`. Setting this activates the separate `nyx-zap` job; leave it unset to skip DAST. | Optional |
+
+> **Why is there no `NYX_REPO_ID` to set?** Nyx embeds the repository UUID directly into the workflow YAML when it pushes the file. There is nothing for you to look up or configure — it is already there.
+
+> **Secrets vs variables:** `NYX_URL` and `NYX_ZAP_TARGET` are variables (not secrets) because they are not sensitive. GitHub will display them in workflow run logs, which makes debugging easier. `NYX_API_KEY` and `SNYK_TOKEN` are secrets and will be masked in logs.
+
+Once these are set, trigger a manual run via **Actions → Nyx Security Scan → Run workflow** to confirm everything is wired up correctly.
+
+---
+
 ## Check Runs and PR annotations
 
 Once a repo is registered and scans run on a PR, Nyx creates a **GitHub Check Run** named `Nyx Security` on the PR. Findings are posted as **inline annotations** so engineers see them directly in the GitHub diff view — no need to switch apps.

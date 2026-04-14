@@ -31,6 +31,142 @@ from app.core.security import generate_webhook_secret
 
 settings = get_settings()
 
+# ── Pinned versions ───────────────────────────────────────────────────────────
+# Single source of truth for everything pinned in the generated workflow.
+# The background loop in main.py refreshes these weekly and re-pushes the
+# workflow to all onboarded repos when a newer release is found.
+
+# GitHub Actions pins — referenced by commit SHA for supply-chain safety.
+PINNED_ACTIONS: dict[str, dict[str, str]] = {
+    "zaproxy/action-baseline": {
+        "sha": "de8ad967d3548d44ef623df22cf95c3b0baf8b25",
+        "tag": "v0.15.0",
+    },
+    "aquasecurity/trivy-action": {
+        "sha": "57a97c7e7821a5776cebc9bb87c984fa69cba8f1",
+        "tag": "v0.35.0",
+    },
+}
+
+# Binary tool pins — downloaded directly in shell steps by version tag.
+PINNED_TOOLS: dict[str, str] = {
+    "gitleaks/gitleaks": "v8.30.1",
+    "hadolint/hadolint": "v2.14.0",
+}
+
+
+async def _resolve_tag_sha(client: httpx.AsyncClient, repo: str, tag: str) -> str | None:
+    """Return the commit SHA for a tag, dereferencing annotated tag objects."""
+    headers = {
+        "Authorization": f"Bearer {settings.GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    ref_resp = await client.get(
+        f"https://api.github.com/repos/{repo}/git/ref/tags/{tag}",
+        headers=headers, timeout=10,
+    )
+    if ref_resp.status_code != 200:
+        return None
+    obj = ref_resp.json()["object"]
+    if obj["type"] == "commit":
+        return obj["sha"]
+    # Annotated tag — dereference to the commit
+    tag_resp = await client.get(
+        f"https://api.github.com/repos/{repo}/git/tags/{obj['sha']}",
+        headers=headers, timeout=10,
+    )
+    if tag_resp.status_code != 200:
+        return None
+    return tag_resp.json()["object"]["sha"]
+
+
+async def refresh_pinned_actions() -> list[str]:
+    """
+    Check GitHub for newer releases of every pinned action and binary tool.
+    Updates PINNED_ACTIONS and PINNED_TOOLS in place.
+    Returns the names of everything that changed so the caller can re-push workflows.
+    """
+    if not settings.GITHUB_TOKEN:
+        return []
+
+    updated: list[str] = []
+    log = __import__("logging").getLogger("nyx.github")
+    headers = {
+        "Authorization": f"Bearer {settings.GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+    async with httpx.AsyncClient() as client:
+        # ── GitHub Actions (SHA-pinned) ───────────────────────────────────────
+        for action, pin in PINNED_ACTIONS.items():
+            try:
+                rel_resp = await client.get(
+                    f"https://api.github.com/repos/{action}/releases/latest",
+                    headers=headers, timeout=10,
+                )
+                if rel_resp.status_code != 200:
+                    continue
+                latest_tag = rel_resp.json().get("tag_name", "")
+                if not latest_tag or latest_tag == pin["tag"]:
+                    continue
+                sha = await _resolve_tag_sha(client, action, latest_tag)
+                if not sha:
+                    continue
+                log.info("Pinned action update: %s %s → %s (%s)", action, pin["tag"], latest_tag, sha[:12])
+                PINNED_ACTIONS[action]["sha"] = sha
+                PINNED_ACTIONS[action]["tag"] = latest_tag
+                updated.append(action)
+            except Exception:
+                log.debug("Failed to check latest release for %s", action, exc_info=True)
+
+        # ── Binary tools (version-pinned) ─────────────────────────────────────
+        for repo, current_tag in PINNED_TOOLS.items():
+            try:
+                rel_resp = await client.get(
+                    f"https://api.github.com/repos/{repo}/releases/latest",
+                    headers=headers, timeout=10,
+                )
+                if rel_resp.status_code != 200:
+                    continue
+                latest_tag = rel_resp.json().get("tag_name", "")
+                if not latest_tag or latest_tag == current_tag:
+                    continue
+                log.info("Pinned tool update: %s %s → %s", repo, current_tag, latest_tag)
+                PINNED_TOOLS[repo] = latest_tag
+                updated.append(repo)
+            except Exception:
+                log.debug("Failed to check latest release for %s", repo, exc_info=True)
+
+    return updated
+
+
+async def push_workflow_to_all_repos(db) -> int:
+    """
+    Re-push the generated nyx-scan.yml to every active repo.
+    Called after pinned actions are updated. Returns the count of repos updated.
+    """
+    from sqlalchemy import select
+    from app.models.repository import Repository
+
+    result = await db.execute(
+        select(Repository).where(Repository.webhook_active.is_(True))
+    )
+    repos = result.scalars().all()
+
+    count = 0
+    for repo in repos:
+        try:
+            await push_nyx_workflow(repo.github_full_name, str(repo.id), repo.default_branch)
+            count += 1
+        except Exception:
+            import logging
+            logging.getLogger("nyx.github").warning(
+                "Failed to update workflow for %s", repo.github_full_name, exc_info=True,
+            )
+    return count
+
 
 def _get_client() -> Github:
     """Return a synchronous PyGithub client. Callers must use asyncio.to_thread()."""
@@ -106,14 +242,14 @@ jobs:
       # ── Gitleaks (Secrets) — always runs ─────────────────────────────────────
       - name: Run Gitleaks
         run: |
-          GITLEAKS_VERSION="v8.21.2"
-          GITLEAKS_ARCHIVE="gitleaks_8.21.2_linux_x64.tar.gz"
+          GITLEAKS_VERSION="{PINNED_TOOLS["gitleaks/gitleaks"]}"
+          GITLEAKS_ARCHIVE="gitleaks_${{GITLEAKS_VERSION#v}}_linux_x64.tar.gz"
           BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/$GITLEAKS_VERSION"
-          curl -sSfL "$BASE_URL/$GITLEAKS_ARCHIVE" -o gitleaks.tar.gz
-          curl -sSfL "$BASE_URL/gitleaks_8.21.2_checksums.txt" -o gitleaks_checksums.txt
+          curl -sSfL "$BASE_URL/$GITLEAKS_ARCHIVE" -o "$GITLEAKS_ARCHIVE"
+          curl -sSfL "$BASE_URL/gitleaks_${{GITLEAKS_VERSION#v}}_checksums.txt" -o gitleaks_checksums.txt
           grep "$GITLEAKS_ARCHIVE" gitleaks_checksums.txt | sha256sum --check --status || \\
             {{ echo "::error::Gitleaks checksum verification FAILED"; exit 1; }}
-          tar -xz -f gitleaks.tar.gz gitleaks
+          tar -xz -f "$GITLEAKS_ARCHIVE" gitleaks
           ./gitleaks detect --source . --report-format json \\
             --report-path gitleaks.json --exit-code 0 || true
 
@@ -143,7 +279,7 @@ jobs:
       - name: Run Hadolint
         if: hashFiles('**/Dockerfile', '**/Dockerfile.*') != ''
         run: |
-          HADOLINT_VERSION="v2.12.0"
+          HADOLINT_VERSION="{PINNED_TOOLS["hadolint/hadolint"]}"
           HADOLINT_BIN="hadolint-Linux-x86_64"
           BASE_URL="https://github.com/hadolint/hadolint/releases/download/$HADOLINT_VERSION"
           wget -qO /usr/local/bin/hadolint "$BASE_URL/$HADOLINT_BIN"
@@ -213,67 +349,10 @@ jobs:
               -d @-
           echo "✓ Snyk results sent to Nyx"
 
-      # ── ZAP (DAST — optional) ─────────────────────────────────────────────────
-      # Set vars.NYX_ZAP_TARGET to your deployed app URL to enable DAST scanning.
-      - name: Fix workspace permissions for ZAP container
-        if: vars.NYX_ZAP_TARGET != ''
-        run: |
-          mkdir -p zap-wrk
-          chmod -R 777 zap-wrk
-
-      - name: Run ZAP Baseline Scan
-        if: vars.NYX_ZAP_TARGET != ''
-        continue-on-error: true  # ZAP failure must not abort Trivy/Gitleaks/Hadolint steps
-        uses: zaproxy/action-baseline@7cea08522cd8bdb4dabfa35e7e3117a8e7adec07  # v0.14.0
-        with:
-          target: ${{{{ vars.NYX_ZAP_TARGET }}}}
-          # -m 3  = spider for 3 minutes (SPAs need more than the 1m default; NOTE: use -m not -t)
-          # -a    = include alpha passive rules for better header/cookie coverage
-          # -J    = write traditional JSON report to this file (distinct from the action's -J)
-          cmd_options: '-m 3 -a -J zap.json'
-          allow_issue_writing: false
-          fail_action: false
-
-      - name: Debug — show ZAP output
-        if: always() && vars.NYX_ZAP_TARGET != ''
-        run: |
-          if [ -f zap.json ]; then
-            echo "zap.json exists, size=$(wc -c < zap.json) bytes"
-            echo "site count=$(jq '.site | length' zap.json 2>/dev/null || echo 'parse error')"
-            jq '.site[] | {{host: .["@host"], alerts: (.alerts | length)}}' zap.json 2>/dev/null || true
-          else
-            echo "WARNING: zap.json was NOT created — ZAP may have failed to start or write output"
-          fi
-
-      - name: Report ZAP → Nyx
-        if: hashFiles('zap.json') != ''
-        env:
-          NYX_URL: ${{{{ vars.NYX_URL }}}}
-          NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
-        run: |
-          NYX_URL="${{NYX_URL// /}}"
-          SITE_COUNT=$(jq '.site | length' zap.json 2>/dev/null || echo 0)
-          if [ "$SITE_COUNT" -eq 0 ]; then
-            echo "⚠ ZAP returned no site data — skipping submission (check Debug step above)"
-            exit 0
-          fi
-          jq -n \\
-            --arg repo    "{repo_id}" \\
-            --arg scanner "ZAP" \\
-            --arg ref     "$GITHUB_REF_NAME" \\
-            --slurpfile d zap.json \\
-            '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
-          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
-              -H "Content-Type: application/json" \\
-              -H "X-API-Key: $NYX_API_KEY" \\
-              -H "ngrok-skip-browser-warning: true" \\
-              -d @-
-          echo "✓ ZAP results sent to Nyx ($SITE_COUNT site(s) scanned)"
-
       # ── Trivy (SCA + IaC + Container) ────────────────────────────────────────
       - name: Run Trivy
         if: always()  # Run even if ZAP failed
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@{PINNED_ACTIONS["aquasecurity/trivy-action"]["sha"]}  # {PINNED_ACTIONS["aquasecurity/trivy-action"]["tag"]}
         with:
           scan-type: "fs"
           format: "json"
@@ -322,6 +401,61 @@ jobs:
               -H "ngrok-skip-browser-warning: true" \\
               -d @-
           echo "✓ SBOM submitted to Nyx"
+
+  # ── ZAP (DAST — optional, isolated job) ────────────────────────────────────
+  # Runs in its own job so a ZAP action version problem or scan failure can
+  # never prevent Semgrep, Gitleaks, Trivy, or SBOM from reporting to Nyx.
+  # Enable by setting vars.NYX_ZAP_TARGET to your deployed app URL.
+  nyx-zap:
+    name: Nyx ZAP DAST Scan
+    runs-on: ubuntu-latest
+    if: vars.NYX_ZAP_TARGET != ''
+    permissions:
+      contents: read
+    continue-on-error: true  # job-level: ZAP never marks the overall workflow as failed
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fix workspace permissions for ZAP container
+        run: |
+          mkdir -p zap-wrk
+          chmod -R 777 zap-wrk
+
+      - name: Run ZAP Baseline Scan
+        continue-on-error: true
+        uses: zaproxy/action-baseline@{PINNED_ACTIONS["zaproxy/action-baseline"]["sha"]}  # {PINNED_ACTIONS["zaproxy/action-baseline"]["tag"]}
+        with:
+          target: ${{{{ vars.NYX_ZAP_TARGET }}}}
+          cmd_options: '-m 3 -a -J zap.json'
+          allow_issue_writing: false
+          fail_action: false
+
+      - name: Report ZAP → Nyx
+        if: always() && hashFiles('zap.json') != ''
+        env:
+          NYX_URL: ${{{{ vars.NYX_URL }}}}
+          NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
+        run: |
+          NYX_URL="${{NYX_URL// /}}"
+          SITE_COUNT=$(jq '.site | length' zap.json 2>/dev/null || echo 0)
+          if [ "$SITE_COUNT" -eq 0 ]; then
+            echo "⚠ ZAP returned no site data — skipping submission"
+            exit 0
+          fi
+          jq -n \\
+            --arg repo    "{repo_id}" \\
+            --arg scanner "ZAP" \\
+            --arg ref     "$GITHUB_REF_NAME" \\
+            --slurpfile d zap.json \\
+            '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
+          | curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
+              -H "Content-Type: application/json" \\
+              -H "X-API-Key: $NYX_API_KEY" \\
+              -H "ngrok-skip-browser-warning: true" \\
+              -d @-
+          echo "✓ ZAP results sent to Nyx ($SITE_COUNT site(s) scanned)"
 """
 
 

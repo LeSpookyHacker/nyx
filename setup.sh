@@ -253,6 +253,49 @@ for i in $(seq 1 40); do
   fi
 done
 
+printf "  Waiting for frontend health check"
+for i in $(seq 1 20); do
+  if curl -sf --max-time 3 http://localhost:3000 >/dev/null 2>&1; then
+    printf '\n'
+    green "  Frontend is healthy."
+    break
+  fi
+  # Check early if the container has already exited/restarting — fail fast
+  fe_status=$(docker compose ps --format '{{.Status}}' frontend 2>/dev/null || true)
+  if [[ "$fe_status" == *"Restarting"* || "$fe_status" == *"Exit"* ]]; then
+    printf '\n'
+    red "  Frontend container is not starting (status: $fe_status)."
+    red "  Check logs: docker compose logs frontend"
+    exit 1
+  fi
+  printf '.'
+  sleep 3
+  if [[ $i -eq 20 ]]; then
+    printf '\n'
+    red "  Frontend didn't start within 60s."
+    red "  Check logs: docker compose logs frontend"
+    exit 1
+  fi
+done
+
+# ── Auth smoke test ──────────────────────────────────────────────────────────
+# Verifies the frontend nginx proxy correctly forwards /auth/session to the
+# backend, which is the path the Settings page uses to save your API key.
+NYX_API_KEY_VAL=$(_env_get "NYX_API_KEY")
+if [[ -n "$NYX_API_KEY_VAL" ]]; then
+  auth_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 \
+    -X POST http://localhost:3000/auth/session \
+    -H "Content-Type: application/json" \
+    -d "{\"api_key\":\"${NYX_API_KEY_VAL}\"}" 2>/dev/null || echo "0")
+  if [[ "$auth_code" == "200" ]]; then
+    green "  Auth proxy is working (Settings page can save your API key)."
+  else
+    yellow "  Auth proxy check returned HTTP $auth_code — the Settings page may not work."
+    yellow "  Check: docker compose logs frontend"
+  fi
+fi
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Done — print summary
 # ═════════════════════════════════════════════════════════════════════════════

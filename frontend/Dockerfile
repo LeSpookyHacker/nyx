@@ -42,6 +42,15 @@ server {
         gzip off;
     }
 
+    # Proxy auth endpoints — /auth/session and /auth/logout live at the root, not under /api/
+    location /auth/ {
+        proxy_pass http://backend:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        gzip off;
+    }
+
     # Gzip for static assets only (not JSON API responses)
     gzip on;
     gzip_types text/plain text/css application/javascript text/xml;
@@ -52,7 +61,8 @@ EOF
 
 # Run as non-root for security hardening
 RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /var/log/nginx && \
-    chmod -R 755 /usr/share/nginx/html
+    chmod -R 755 /usr/share/nginx/html && \
+    touch /run/nginx.pid && chown nginx:nginx /run/nginx.pid
 USER nginx
 
 EXPOSE 80

@@ -43,6 +43,7 @@ logger = logging.getLogger("nyx")
 # ── Background loop intervals (seconds) ─────────────────────────────────────
 STARTUP_DELAY_SECONDS = 15
 DAILY_INTERVAL_SECONDS = 86_400       # 24 hours
+WEEKLY_INTERVAL_SECONDS = 86_400 * 7  # 7 days
 HOURLY_INTERVAL_SECONDS = 3_600       # 1 hour
 SCAN_CHECK_INTERVAL_SECONDS = 300     # 5 minutes
 API_KEY_STARTUP_DELAY_SECONDS = 60    # brief startup delay for key expiry loop
@@ -378,6 +379,35 @@ async def _api_key_expiry_warning_loop() -> None:
         await asyncio.sleep(DAILY_INTERVAL_SECONDS)
 
 
+async def _pinned_action_refresh_loop() -> None:
+    """
+    Weekly: check GitHub for newer releases of pinned GitHub Actions used in the
+    generated nyx-scan.yml. When a newer version is found, update the in-memory
+    pins and re-push the workflow to all active repos so they stay current without
+    any manual intervention.
+    """
+    from app.services.github_service import refresh_pinned_actions, push_workflow_to_all_repos
+
+    # Run once shortly after startup to catch any pins that went stale while Nyx was offline
+    await asyncio.sleep(STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            updated = await refresh_pinned_actions()
+            if updated:
+                logger.info(
+                    "Pinned action refresh: %d action(s) updated (%s) — pushing workflow to all repos",
+                    len(updated), ", ".join(updated),
+                )
+                async with AsyncSessionLocal() as db:
+                    count = await push_workflow_to_all_repos(db)
+                logger.info("Pinned action refresh: updated workflow in %d repo(s)", count)
+            else:
+                logger.debug("Pinned action refresh: all pins are current")
+        except Exception:
+            logger.exception("Error in pinned action refresh loop")
+        await asyncio.sleep(WEEKLY_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("🌑 Nyx starting up...")
@@ -418,6 +448,9 @@ async def lifespan(app: FastAPI):
 
     # API key expiry warnings — daily check for keys expiring within 7 days
     tasks.append(asyncio.create_task(_api_key_expiry_warning_loop()))
+
+    # Pinned action refresh — weekly check for newer releases; re-pushes workflow to all repos
+    tasks.append(asyncio.create_task(_pinned_action_refresh_loop()))
 
     if settings.CODE_SCANNING_SYNC_ENABLED:
         from app.services.code_scanning_service import run_poll_loop

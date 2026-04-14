@@ -70,7 +70,36 @@ Nyx installs a GitHub webhook on the repository automatically. If you don't have
 
 ---
 
-## Step 5 — Grab the repository ID
+## Step 5 — Push the scan workflow and configure GitHub secrets
+
+### Push the workflow
+
+On the repository detail page, click **Push Workflow**. Nyx commits `.github/workflows/nyx-scan.yml` to your repository via the GitHub API. This is the file that runs all the scanners on every push.
+
+### Set the required secrets and variables
+
+The pushed workflow needs to know where to send results. Go to your GitHub repository → **Settings → Secrets and variables → Actions** and add:
+
+**Secrets:**
+
+| Secret | Value |
+|---|---|
+| `NYX_API_KEY` | Create a `scanner`-scoped key in Nyx **Settings → API Keys** and paste it here |
+
+**Variables:**
+
+| Variable | Value |
+|---|---|
+| `NYX_URL` | The public URL of your Nyx instance — e.g. `https://abc123.ngrok.io` or `https://nyx.example.com` |
+| `NYX_ZAP_TARGET` | *(Optional)* URL of your deployed app — e.g. `https://myapp.com`. Enables DAST scanning. |
+
+> You do **not** need to set `NYX_REPO_ID` — the repository UUID is already embedded in the workflow file when Nyx pushes it.
+
+Once set, go to your repo → **Actions → Nyx Security Scan → Run workflow** to trigger a manual test run and confirm results flow into Nyx.
+
+---
+
+## Step 6 — Grab the repository ID
 
 You'll need it for the curl command in the next step:
 
@@ -83,7 +112,7 @@ Copy the `id` for your newly added repo.
 
 ---
 
-## Step 6 — Push a scan
+## Step 7 — Push a scan
 
 Run Semgrep on the repo and push the results:
 
@@ -115,7 +144,7 @@ Expect `202 Accepted`. Open the **Findings** page — results should appear with
 
 ---
 
-## Step 7 — Request your first AI fix
+## Step 8 — Request your first AI fix
 
 Click any CRITICAL or HIGH finding → **Request AI Fix**. Watch the fix stream in via SSE — the diff appears token by token. When it completes:
 
@@ -131,7 +160,7 @@ Click **Open PR**. Nyx pushes a branch, commits the fix, opens a PR on GitHub, a
 
 ---
 
-## Step 8 — Merge the PR
+## Step 9 — Merge the PR
 
 Review the PR on GitHub, merge it. Within seconds:
 
