@@ -24,10 +24,7 @@ Nyx accepts raw JSON output from eight first-class scanners and converts each in
 
 Each scanner has a dedicated **normalizer** under `backend/app/services/normalization/` that maps its schema onto Nyx's `Finding` shape. Adding a new scanner is a matter of implementing one class — see **[Adding a Scanner](Adding-a-Scanner.md)**.
 
-<!-- IMAGE: Side-by-side mock showing raw Semgrep JSON → normalized Finding record.
-     File: wiki/images/normalization-diagram.png -->
-![Scanner normalization](images/normalization-diagram.png)
-<!-- /IMAGE -->
+
 
 ### Cross-scanner deduplication
 Nyx fingerprints findings by `(repository, file, line, rule_id, cwe)` plus a content hash of the surrounding code. When Trivy and Grype both report the same `CVE-2024-XXXX` on the same package, Nyx stores **one** finding with both scanners listed as corroborating sources. Dedup runs on every ingest in `deduplication_service.py`.
@@ -64,11 +61,6 @@ From any finding detail page, click **Request AI Fix**. Nyx gathers:
 
 …then prompts Claude for a targeted fix. The returned diff is stored, displayed inline, and optionally pushed as a pull request.
 
-<!-- IMAGE: Finding detail page showing the "Request AI Fix" button and the streaming fix panel.
-     File: wiki/images/ai-fix-request.png -->
-![AI fix in progress](images/ai-fix-request.png)
-<!-- /IMAGE -->
-
 ### SSE fix streaming
 `GET /remediation/{id}/stream` streams progress as Server-Sent Events — the UI shows tokens appearing as Claude works, so engineers do not have to poll or wait blindly.
 
@@ -93,11 +85,6 @@ Select up to 20 findings on the Findings page and click **Bulk AI Fix**. Each fi
 ### Claude Code prompt generator
 For fixes you want to hand-edit, Nyx can produce a structured, copy-ready prompt for **Claude Code** (the CLI). Select findings → **Generate Claude Code Prompt** → copy → paste into your terminal. The prompt is grouped by scanner category and includes code context, CVE data, and a completion-report template.
 
-<!-- IMAGE: The Claude Code prompt modal with a populated prompt.
-     File: wiki/images/claude-code-prompt.png -->
-![Claude Code prompt generator](images/claude-code-prompt.png)
-<!-- /IMAGE -->
-
 ---
 
 ## 3. Workflow and integrations
@@ -117,11 +104,6 @@ For fixes you want to hand-edit, Nyx can produce a structured, copy-ready prompt
 
 ### Notifications
 Slack, Microsoft Teams, or any webhook URL. Events include new critical findings, SLA breaches imminent, regressions detected, SBOM drift, and AI-cost thresholds exceeded.
-
-<!-- IMAGE: Sample Slack notification for a new critical finding.
-     File: wiki/images/slack-notification.png -->
-![Slack notification](images/slack-notification.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -156,11 +138,6 @@ Suppressing a finding stores a pattern (`rule_id`, `file_glob`, `reason`). Futur
 ### Audit log with HMAC hash chain
 Every state-changing action is logged with `entry_hash` and `prev_hash` — walk the chain via `GET /audit/verify` to detect any modification, insertion, or deletion. This is a cryptographic guarantee, not a reputation score.
 
-<!-- IMAGE: Audit page with the hash-chain verification result card.
-     File: wiki/images/audit-verify.png -->
-![Audit chain verification](images/audit-verify.png)
-<!-- /IMAGE -->
-
 ---
 
 ## 5. Compliance and reporting
@@ -178,11 +155,6 @@ Custom frameworks can be defined in the DB — see **[Compliance](Compliance.md)
 
 ### Executive PDF report
 A print-ready report covers KPIs, trends, scanner breakdown by severity, SLA status (overdue / due soon / on track), per-repository breakdown, and compliance summary. Generate from the Reports page or `GET /reports/executive`.
-
-<!-- IMAGE: First page of the executive PDF report.
-     File: wiki/images/exec-report-cover.png -->
-![Executive PDF report](images/exec-report-cover.png)
-<!-- /IMAGE -->
 
 ### Velocity analytics
 - Net-new vs fixed per day
@@ -227,11 +199,6 @@ Backend logs survive `docker compose down` via a named volume, with a rotating h
 
 ### Unified alert bell
 Top-bar notification bell with two tabs — **SBOM component changes** and **Regression Auto-Sort batches**. Unread counts aggregate into the bell badge.
-
-<!-- IMAGE: Alert bell dropdown showing both tabs with unread items.
-     File: wiki/images/alert-bell.png -->
-![Unified alert bell](images/alert-bell.png)
-<!-- /IMAGE -->
 
 ### Hot repos
 "Which repos got worse this week?" — lists repositories with the most new findings in the last 7 days.
