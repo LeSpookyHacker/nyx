@@ -33,10 +33,7 @@ npm run dev
 
 Vite runs on `http://localhost:5173` by default (not `3000` — that is the Docker-served production build). The dev server proxies `/api/*` to `http://localhost:8000`.
 
-<!-- IMAGE: Two terminals side by side with backend and frontend dev servers running.
-     File: wiki/images/dev-servers.png -->
-![Dev servers](images/dev-servers.png)
-<!-- /IMAGE -->
+
 
 ---
 
