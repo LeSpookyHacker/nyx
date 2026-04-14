@@ -18,10 +18,6 @@ That's the entire deployment. No local `git` operations required.
 
 > Requires the **Workflows** permission on your GitHub token — see [GitHub Integration](GitHub-Integration.md).
 
-<!-- IMAGE: Push Workflow modal with branch selector.
-     File: wiki/images/push-workflow.png -->
-![Push Workflow modal](images/push-workflow.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -48,11 +44,6 @@ After clicking **Push Workflow**, configure these in the target repository under
 > **Why variables instead of secrets for URLs?** GitHub Actions variables are not masked in logs — that's intentional here. URLs are not sensitive, and using a variable means they appear in workflow run logs which makes debugging easier. Only `NYX_API_KEY` and `SNYK_TOKEN` need to be secrets.
 
 > **Note on `NYX_REPO_ID`:** You do **not** need to set a `NYX_REPO_ID` secret or variable. Nyx bakes the repository UUID directly into the workflow file at push time — it is a hardcoded string in the YAML, not read from the environment at runtime.
-
-<!-- IMAGE: GitHub Actions secrets page with the three required secrets.
-     File: wiki/images/github-secrets.png -->
-![GitHub Actions secrets](images/github-secrets.png)
-<!-- /IMAGE -->
 
 ---
 
@@ -111,11 +102,6 @@ CI covers push-time scans. For scheduled scans (nightly, weekly, ad-hoc), use th
 3. The schedule worker triggers scans automatically
 
 Scheduled scans don't require a PR to exist — useful for dependency scans that catch newly disclosed CVEs on code that hasn't changed.
-
-<!-- IMAGE: Scan schedules page with several active schedules.
-     File: wiki/images/scan-schedules.png -->
-![Scan schedules](images/scan-schedules.png)
-<!-- /IMAGE -->
 
 ---
 
