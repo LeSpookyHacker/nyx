@@ -42,8 +42,17 @@ server {
         gzip off;
     }
 
-    # Proxy auth endpoints — /auth/session and /auth/logout live at the root, not under /api/
+    # Proxy auth endpoints — /auth/session, /auth/logout, /auth/whoami live at the root, not under /api/
     location /auth/ {
+        proxy_pass http://backend:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        gzip off;
+    }
+
+    # Proxy health endpoints — /health and /health/integrations live at the root
+    location /health {
         proxy_pass http://backend:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

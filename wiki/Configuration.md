@@ -130,7 +130,6 @@ These must be set before Nyx will start in production mode. `setup.sh` generates
 |---|---|---|
 | `ENABLE_SBOM` | `true` | Generate and diff SBOMs per repo |
 | `ENABLE_AUDIT_CHAIN` | `true` | HMAC hash chain on the audit log |
-| `ENABLE_AUTOHEAL` | `true` | Healthcheck-triggered restart container |
 | `ENABLE_AI_COST_DASHBOARD` | `true` | Track token spend |
 | `ENABLE_CUSTOM_COMPLIANCE` | `true` | Allow user-defined compliance frameworks |
 

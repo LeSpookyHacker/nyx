@@ -279,18 +279,33 @@ for i in $(seq 1 20); do
 done
 
 # ── Auth smoke test ──────────────────────────────────────────────────────────
-# Verifies the frontend nginx proxy correctly forwards /auth/session to the
-# backend, which is the path the Settings page uses to save your API key.
+# End-to-end check that the /login flow will work: POST /auth/session to mint
+# a session cookie, then GET /auth/whoami with that cookie to prove the
+# opaque-token → user_sessions lookup resolves correctly. Anything less would
+# just prove nginx forwards POST requests, which is the easy half.
 NYX_API_KEY_VAL=$(_env_get "NYX_API_KEY")
 if [[ -n "$NYX_API_KEY_VAL" ]]; then
+  COOKIE_JAR=$(mktemp)
+  trap 'rm -f "$COOKIE_JAR"' EXIT
+
   auth_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 \
+    -c "$COOKIE_JAR" \
     -X POST http://localhost:3000/auth/session \
     -H "Content-Type: application/json" \
     -d "{\"api_key\":\"${NYX_API_KEY_VAL}\"}" 2>/dev/null || echo "0")
+
   if [[ "$auth_code" == "200" ]]; then
-    green "  Auth proxy is working (Settings page can save your API key)."
+    whoami_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 \
+      -b "$COOKIE_JAR" \
+      http://localhost:3000/auth/whoami 2>/dev/null || echo "0")
+    if [[ "$whoami_code" == "200" ]]; then
+      green "  Auth flow is working (login → session cookie → whoami)."
+    else
+      yellow "  /auth/whoami returned HTTP $whoami_code with a freshly-minted cookie."
+      yellow "  The sign-in page may not resolve sessions. Check: docker compose logs backend"
+    fi
   else
-    yellow "  Auth proxy check returned HTTP $auth_code — the Settings page may not work."
+    yellow "  /auth/session returned HTTP $auth_code — the Sign in page may not work."
     yellow "  Check: docker compose logs frontend"
   fi
 fi
@@ -312,8 +327,8 @@ echo ""
 bold  "  Your API key:"
 echo  "  $API_KEY"
 echo ""
-dim   "  Copy the key above, open http://localhost:3000, click Settings,"
-dim   "  and paste it in to authenticate."
+dim   "  Copy the key above, open http://localhost:3000, and paste it into"
+dim   "  the Sign in page. Mint additional scoped keys from Settings > API Keys."
 echo ""
 bold  "  What next?"
 dim   "  1. Add a GitHub repo:  Repositories > Add Repository"

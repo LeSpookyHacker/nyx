@@ -19,7 +19,7 @@ The most common things that break, and what to do about them. If your issue is n
 **Fix:** Check browser DevTools console. Usually a CORS error or 502 from the API. `./nyx.sh logs` will show the real error. Rebuild with `./nyx.sh build`.
 
 ### Backend restarts every 30 seconds
-**Cause:** Healthcheck failing, autoheal restarting the container.
+**Cause:** Healthcheck failing, Docker's `restart: unless-stopped` policy respawning the container.
 **Fix:** `docker compose logs backend --tail=200` — look for tracebacks. Common culprits: invalid `DATABASE_URL`, missing `NYX_SECRET_KEY`, bad Anthropic key.
 
 <!-- IMAGE: `docker compose logs backend` output showing a traceback.

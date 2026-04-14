@@ -16,7 +16,7 @@ This page is a **grouped overview** of what each router exposes, so you know whe
 Two supported mechanisms:
 
 ### Cookie session
-Used by the dashboard. Set automatically on successful `X-API-Key` validation at `/auth/session`. Cookies are `HttpOnly`, `Secure` (in prod), `SameSite=Lax`.
+Used by the dashboard. `POST /auth/session` with `{"api_key": "..."}` validates the key, mints an opaque random session token (`secrets.token_urlsafe(32)`), stores its SHA-256 hash in the `user_sessions` table, and sets the raw token as an `HttpOnly`, `Secure` (in prod), `SameSite=Strict` cookie. The raw API key never lives in the cookie. `GET /auth/whoami` resolves the cookie to `{identity, scopes}` and is what `ProtectedRoute` calls on page load. `POST /auth/logout` deletes the session row.
 
 ### API key header
 Used by CI and programmatic clients:

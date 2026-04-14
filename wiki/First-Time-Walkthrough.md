@@ -29,7 +29,7 @@ Follow the prompts. At the end, `setup.sh` prints your dashboard URL and your AP
 
 ## Step 2 — First login
 
-Open **http://localhost:3000** → **Settings** → paste the API key → **Save**.
+Open **http://localhost:3000**. Nyx redirects to the **Sign in** page — paste the API key and click **Sign in**. You land on the dashboard with a `SameSite=Strict` HTTP-only session cookie. To mint additional scoped keys for CI or teammates, open **Settings → API Keys**.
 
 The dashboard now shows empty KPI cards — that is expected. You have not registered any repos yet.
 
@@ -122,17 +122,16 @@ pip install semgrep
 semgrep --config=auto --json --output=/tmp/semgrep.json .
 
 # Push to Nyx
-curl -s -X POST "http://localhost:8000/api/v1/scans/import" \
+jq -n \
+  --arg repo "$NYX_REPO_ID" \
+  --arg sha "$(git rev-parse HEAD)" \
+  --arg ref "$(git branch --show-current)" \
+  --slurpfile data /tmp/semgrep.json \
+  '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, git_sha: $sha, trigger: "manual", data: $data[0]}' | \
+curl -sf -X POST "http://localhost:8000/api/v1/scans/import-json" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $NYX_API_KEY" \
-  -d "$(jq -n --arg repo "$NYX_REPO_ID" --arg sha "$(git rev-parse HEAD)" --arg ref "$(git branch --show-current)" --slurpfile results /tmp/semgrep.json '{
-    repository_id: $repo,
-    scanner: "SEMGREP",
-    git_ref: $ref,
-    git_sha: $sha,
-    trigger: "manual",
-    results: $results[0]
-  }')"
+  -d @-
 ```
 
 Expect `202 Accepted`. Open the **Findings** page — results should appear within a second.

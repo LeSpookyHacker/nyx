@@ -6,7 +6,7 @@ Wire Nyx into your continuous integration so every push triggers the right scans
 
 ## The canonical workflow
 
-Nyx ships a ready-to-use GitHub Actions workflow at `.github/workflows/nyx-scan.yml`. It runs five scanners in parallel (Semgrep, Bandit, Trivy, Grype, Checkov), pushes each result to Nyx via `POST /scans/import`, and fails the build if critical findings regress.
+Nyx ships a ready-to-use GitHub Actions workflow at `.github/workflows/nyx-scan.yml`. It runs five scanners in parallel (Semgrep, Bandit, Trivy, Grype, Checkov), pushes each result to Nyx via `POST /scans/import-json`, and fails the build if critical findings regress.
 
 ### Push it with one click
 
@@ -56,19 +56,16 @@ The endpoint is the same regardless of CI system. Here's a generic shell templat
 
 semgrep --config=auto --json --output=semgrep.json .
 
-curl -sf -X POST "$NYX_URL/api/v1/scans/import" \
+jq -n \
+  --arg repo "$NYX_REPO_ID" \
+  --arg ref "$(git rev-parse --abbrev-ref HEAD)" \
+  --arg sha "$(git rev-parse HEAD)" \
+  --slurpfile data semgrep.json \
+  '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, git_sha: $sha, trigger: "push", data: $data[0]}' | \
+curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $NYX_API_KEY" \
-  --data-binary @- <<JSON
-{
-  "repository_id": "$NYX_REPO_ID",
-  "scanner": "SEMGREP",
-  "git_ref": "$(git rev-parse --abbrev-ref HEAD)",
-  "git_sha": "$(git rev-parse HEAD)",
-  "trigger": "push",
-  "results": $(cat semgrep.json)
-}
-JSON
+  -d @-
 ```
 
 Adapt for GitLab CI, CircleCI, Jenkins, Bitbucket Pipelines, or whatever you run.

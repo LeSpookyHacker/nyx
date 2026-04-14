@@ -8,7 +8,7 @@ This page covers everything required to get a working Nyx instance running on a 
 
 | Requirement | Minimum version | Why |
 |---|---|---|
-| **Docker Engine** | 24.x | Runs backend, frontend, and the optional `autoheal` container |
+| **Docker Engine** | 24.x | Runs backend and frontend containers |
 | **Docker Compose** | v2 (`docker compose`, not `docker-compose`) | Orchestration |
 | **Python** | 3 (any 3.x — 3.11+ if running backend without Docker) | `setup.sh` uses it to generate secrets |
 | **curl** | Any | Used by `setup.sh` for credential validation |
@@ -94,9 +94,10 @@ docker compose ps
 | **http://localhost:8000/redoc** | ReDoc API reference |
 
 1. Open **http://localhost:3000**.
-2. Click **Settings** in the sidebar.
-3. Paste the API key that `setup.sh` printed (or whatever you set `NYX_API_KEY` to).
-4. The dashboard unlocks and is cookie-authenticated from this point on.
+2. Nyx redirects you to **Sign in**.
+3. Paste the API key that `setup.sh` printed (or whatever you set `NYX_API_KEY` to) and click **Sign in**.
+4. The server mints a random opaque session token and stores it in an HTTP-only `SameSite=Strict` cookie. The raw API key never lives in the cookie — revoking the session is a single DB row delete.
+5. To mint additional scoped keys (for CI pipelines or other users), open **Settings → API Keys**.
 
 
 ---

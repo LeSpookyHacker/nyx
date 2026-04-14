@@ -9,6 +9,7 @@ from app.models.jira_link import JiraLink  # noqa: F401
 from app.models.sbom import Sbom, SbomAlert  # noqa: F401
 from app.models.regression_auto_alert import RegressionAutoAlert  # noqa: F401
 from app.models.api_key import ApiKey  # noqa: F401
+from app.models.user_session import UserSession  # noqa: F401
 from app.models.auth_lockout import AuthLockout  # noqa: F401
 from app.models.custom_compliance import CustomFramework, CustomControl  # noqa: F401
 from app.models.risk_acceptance import RiskAcceptance  # noqa: F401

@@ -88,7 +88,7 @@ Per-repo view: findings restricted to this repo, SBOM, scan history, SLA policy,
 
 ## Scans (`/scans`)
 
-Ingest history — every `POST /scans/import` call, the trigger, the commit, and the number of findings produced. Use it to debug CI wiring ("did the scan actually land?").
+Ingest history — every `POST /scans/import-json` call, the trigger, the commit, and the number of findings produced. Use it to debug CI wiring ("did the scan actually land?").
 
 ---
 

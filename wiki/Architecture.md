@@ -115,9 +115,9 @@ Not separate processes — they are asyncio tasks spawned from the FastAPI app a
 | Code Scanning sync | configurable | Poll GitHub for code scanning results |
 | SBOM drift | per-scan | Diff against previous SBOM and alert |
 
-### Autoheal
+### Container restart policy
 
-A separate container (`willfarrell/autoheal`) watches the backend's Docker healthcheck. If the backend goes unhealthy for the configured interval, autoheal restarts it.
+The backend and frontend containers run under Docker's native `restart: unless-stopped` policy. An earlier `willfarrell/autoheal` sidecar was removed because it required mounting `/var/run/docker.sock`, which grants host-level Docker access and enables container escape if the sidecar is compromised.
 
 ---
 

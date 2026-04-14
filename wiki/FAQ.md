@@ -10,7 +10,7 @@ It ingests scanner output (Semgrep, Bandit, Trivy, Snyk, Grype, Checkov, ZAP, Gi
 
 ### Does Nyx run scanners for me?
 
-No. Nyx is scanner-agnostic and receives results via `POST /scans/import`. This keeps it flexible and avoids reinventing CI orchestration. The `nyx-scan.yml` workflow it ships runs the scanners inside your GitHub Actions.
+No. Nyx is scanner-agnostic and receives results via `POST /scans/import-json`. This keeps it flexible and avoids reinventing CI orchestration. The `nyx-scan.yml` workflow it ships runs the scanners inside your GitHub Actions.
 
 ---
 

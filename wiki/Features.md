@@ -182,8 +182,8 @@ Keys carry a name, optional expiry, last-used timestamp, and scope. The bootstra
 ### Integration health check
 `GET /health/integrations` probes database, Anthropic, GitHub, JIRA, and the notification webhook — used by uptime monitoring and Grafana.
 
-### Autoheal
-A companion container watches the backend's Docker healthcheck and restarts it if unhealthy. No more Monday-morning "why is the dashboard white."
+### Container restart policy
+Backend and frontend run under Docker's native `restart: unless-stopped` policy. A prior `willfarrell/autoheal` sidecar was removed because it required mounting the Docker socket (container-escape risk).
 
 ### Log persistence
 Backend logs survive `docker compose down` via a named volume, with a rotating handler capped at 50 MB × 5 files.

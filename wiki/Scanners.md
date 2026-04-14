@@ -3,7 +3,7 @@
 Nyx does **not** run scanners for you — it accepts their JSON output and consolidates it. This keeps Nyx scanner-agnostic and plays nicely with whatever CI/CD you already have. Every scanner pushes to the same endpoint:
 
 ```
-POST /api/v1/scans/import
+POST /api/v1/scans/import-json
 X-API-Key: <your-nyx-key>
 Content-Type: application/json
 
@@ -11,11 +11,11 @@ Content-Type: application/json
   "repository_id": "<nyx-repo-uuid>",
   "scanner": "SEMGREP",
   "git_ref": "main",
-  "git_sha": "<commit-sha>",
-  "trigger": "push",
-  "results": { ...raw scanner JSON... }
+  "data": { ...raw scanner JSON... }
 }
 ```
+
+> Nyx also exposes a multipart `POST /api/v1/scans/import` endpoint for direct file uploads (`curl -F file=@results.json`). For CI/CD the JSON endpoint above is easier — that's what the Nyx-shipped workflow uses.
 
 > **Scanner-scoped API keys:** create a key with scope `scanner` from **Settings → API Keys** and use it in CI. It can submit scans but cannot read findings, manage keys, or touch the AI endpoints.
 
@@ -31,17 +31,16 @@ semgrep --config=auto --json --output=semgrep-results.json .
 **Recommended rulesets:** `p/owasp-top-ten`, `p/secrets`, `p/python`, `p/javascript`, `p/supply-chain`.
 
 ```bash
-curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+jq -n \
+  --arg repo "$NYX_REPO_ID" \
+  --arg ref "$(git branch --show-current)" \
+  --arg sha "$(git rev-parse HEAD)" \
+  --slurpfile data semgrep-results.json \
+  '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, git_sha: $sha, trigger: "push", data: $data[0]}' | \
+curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $NYX_API_KEY" \
-  -d "{
-    \"repository_id\": \"$NYX_REPO_ID\",
-    \"scanner\": \"SEMGREP\",
-    \"git_ref\": \"$(git branch --show-current)\",
-    \"git_sha\": \"$(git rev-parse HEAD)\",
-    \"trigger\": \"push\",
-    \"results\": $(cat semgrep-results.json)
-  }"
+  -d @-
 ```
 
 <!-- IMAGE: Terminal output of a successful Semgrep push returning 202 Accepted.

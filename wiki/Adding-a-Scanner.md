@@ -106,7 +106,7 @@ cd backend
 pytest tests/services/normalization/test_gitleaks.py -xvs
 ```
 
-Done. The scanner is now a first-class citizen — `POST /scans/import` with `scanner: "GITLEAKS"` will route to your normalizer, dedup, score, and surface the findings like any other.
+Done. The scanner is now a first-class citizen — `POST /scans/import-json` with `scanner: "GITLEAKS"` will route to your normalizer, dedup, score, and surface the findings like any other.
 
 ---
 

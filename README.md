@@ -35,6 +35,16 @@ Engineering and security teams face a common problem: dozens of scanners produce
 
 ---
 
+## What's new
+
+- **Proper sign-in flow.** The dashboard now has a dedicated `/login` page and a `ProtectedRoute` guard — paste your `NYX_API_KEY` once, the backend mints an opaque session token (random, not the key itself) stored in an HTTP-only `SameSite=Strict` cookie, and the server resolves it against a new `user_sessions` table. Deleting the row revokes the session immediately. The raw key never lives in the cookie jar.
+- **API Keys management UI.** Settings now has a panel to list, create, and revoke scoped API keys (`scanner`, `readonly`, `analyst`, `admin`). The plaintext key is shown once at creation with a copy-to-clipboard action and an explicit "store it now" warning.
+- **Integration health on the Settings page.** The dashboard polls `/health/integrations` every 30s and shows green/red dots for Database, Anthropic, GitHub, JIRA, and the notification webhook — the same data `./nyx.sh check` prints, now visible without leaving the UI.
+- **Hardened dev fallback.** The silent-admin fallback for local development now refuses to activate when the instance looks production-ish (`GITHUB_WEBHOOK_ENDPOINT` set, or `HTTPS_ONLY=true`) — you can't accidentally ship an internet-reachable Nyx that auto-grants admin because someone forgot to set `NYX_API_KEY`.
+- **First-class auth tests.** A new pytest suite covers missing/invalid/expired auth, session cookie lifecycle, session-id hashing, raw-key-as-cookie regression, the dev-fallback hardening, and webhook HMAC verification. 40 tests, running cleanly.
+
+---
+
 ## Table of Contents
 
 - [Features](#features)
@@ -84,7 +94,6 @@ Engineering and security teams face a common problem: dozens of scanners produce
 | ✅ | **GitHub Check Runs** | Inline PR annotations with security findings as GitHub status checks |
 | 📦 | **SBOM Generation** | CycloneDX SBOM per repository via Trivy in GitHub Actions; diff alerts on component changes |
 | 🚀 | **One-Click Workflow Push** | Push the canonical `nyx-scan.yml` to any registered repo via GitHub API — no manual workflow maintenance |
-| 🔁 | **Autoheal** | Docker healthcheck + autoheal container automatically restarts the backend if it becomes unhealthy |
 | 🧬 | **Auto Scanner Detection** | Nyx inspects repository contents and recommends the optimal scanner set — apply with one click or automatically |
 | 📜 | **Log Persistence** | Backend logs survive container restarts and `docker compose down` via a named Docker volume; rotating file handler caps at 50 MB × 5 files |
 
@@ -188,7 +197,7 @@ Engineering and security teams face a common problem: dozens of scanners produce
 1.  Developer pushes code to GitHub
 2.  GitHub webhook fires → Nyx webhook receiver
 3.  Nyx triggers configured scanner(s) against the new commit
-4.  Scanners push JSON results to POST /scans/import
+4.  Scanners push JSON results to POST /scans/import-json
 5.  scan_worker processes results:
       a. Normalise raw output → Finding schema
       b. Deduplicate against existing findings (fingerprint match)
@@ -227,7 +236,7 @@ That's it. The setup wizard will:
 5. Build and start the Docker containers
 6. Print your API key and the dashboard URL
 
-When it finishes, open **http://localhost:3000**, click **Settings**, and paste in the API key it printed.
+When it finishes, open **http://localhost:3000**, paste the printed API key into the **Sign in** page, and you land on the dashboard. You can mint additional scoped keys later from **Settings → API Keys**.
 
 > [!TIP]
 > **Flags:** `./setup.sh --non-interactive` for headless/CI use, `./setup.sh --skip-start` to configure `.env` without starting containers.
@@ -431,10 +440,17 @@ Nyx does not run scanners directly — it receives their JSON output via the RES
 
 #### Import Endpoint
 
-All scanners push to the same endpoint:
+Nyx exposes two scanner-import endpoints — pick the one that matches your CI:
+
+| Endpoint | Content-Type | Use when |
+|---|---|---|
+| `POST /api/v1/scans/import-json` | `application/json` | You have JSON on disk or in a variable. **Recommended for CI/CD.** |
+| `POST /api/v1/scans/import` | `multipart/form-data` | You want to upload a file directly via `curl -F`. |
+
+**JSON endpoint (recommended):**
 
 ```
-POST /api/v1/scans/import
+POST /api/v1/scans/import-json
 Content-Type: application/json
 X-API-Key: your-nyx-api-key
 
@@ -442,11 +458,11 @@ X-API-Key: your-nyx-api-key
   "repository_id": "<nyx-repo-uuid>",
   "scanner": "SEMGREP",
   "git_ref": "main",
-  "git_sha": "abc123...",
-  "trigger": "push",
-  "results": { ...raw scanner JSON output... }
+  "data": { ...raw scanner JSON output... }
 }
 ```
+
+The `data` field is the raw scanner JSON (what the scanner wrote to stdout or `-o results.json`). The Nyx-shipped `nyx-scan.yml` GitHub Actions workflow uses this endpoint.
 
 <details>
 <summary><strong>SEMGREP — SAST, all languages</strong></summary>
@@ -455,17 +471,15 @@ X-API-Key: your-nyx-api-key
 pip install semgrep
 semgrep --config=auto --json --output=semgrep-results.json .
 
-curl -s -X POST "https://your-nyx-url/api/v1/scans/import" \
+jq -n \
+  --arg repo "$NYX_REPO_ID" \
+  --arg ref "$(git branch --show-current)" \
+  --slurpfile data semgrep-results.json \
+  '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, data: $data[0]}' | \
+curl -sf -X POST "https://your-nyx-url/api/v1/scans/import-json" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $NYX_API_KEY" \
-  -d "{
-    \"repository_id\": \"$NYX_REPO_ID\",
-    \"scanner\": \"SEMGREP\",
-    \"git_ref\": \"$(git branch --show-current)\",
-    \"git_sha\": \"$(git rev-parse HEAD)\",
-    \"trigger\": \"push\",
-    \"results\": $(cat semgrep-results.json)
-  }"
+  -d @-
 ```
 
 **Recommended rulesets:** `p/owasp-top-ten` · `p/secrets` · `p/python` · `p/javascript` · `p/supply-chain`
@@ -776,17 +790,15 @@ jobs:
       - name: Push Semgrep results to Nyx
         if: steps.nyx-repo.outputs.repo_id != ''
         run: |
-          curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+          jq -n \
+            --arg repo "${{ steps.nyx-repo.outputs.repo_id }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --slurpfile data semgrep-results.json \
+            '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, data: $data[0]}' | \
+          curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
             -H "Content-Type: application/json" \
             -H "X-API-Key: $NYX_API_KEY" \
-            -d "{
-              \"repository_id\": \"${{ steps.nyx-repo.outputs.repo_id }}\",
-              \"scanner\": \"SEMGREP\",
-              \"git_ref\": \"${{ github.ref_name }}\",
-              \"git_sha\": \"${{ github.sha }}\",
-              \"trigger\": \"push\",
-              \"results\": $(cat semgrep-results.json)
-            }"
+            -d @-
 
       - name: Run Trivy
         if: steps.nyx-repo.outputs.repo_id != ''
@@ -800,17 +812,15 @@ jobs:
       - name: Push Trivy results to Nyx
         if: steps.nyx-repo.outputs.repo_id != ''
         run: |
-          curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+          jq -n \
+            --arg repo "${{ steps.nyx-repo.outputs.repo_id }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --slurpfile data trivy-results.json \
+            '{repository_id: $repo, scanner: "TRIVY", git_ref: $ref, data: $data[0]}' | \
+          curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
             -H "Content-Type: application/json" \
             -H "X-API-Key: $NYX_API_KEY" \
-            -d "{
-              \"repository_id\": \"${{ steps.nyx-repo.outputs.repo_id }}\",
-              \"scanner\": \"TRIVY\",
-              \"git_ref\": \"${{ github.ref_name }}\",
-              \"git_sha\": \"${{ github.sha }}\",
-              \"trigger\": \"push\",
-              \"results\": $(cat trivy-results.json)
-            }"
+            -d @-
 
       - name: Run Grype
         if: steps.nyx-repo.outputs.repo_id != ''
@@ -821,17 +831,15 @@ jobs:
       - name: Push Grype results to Nyx
         if: steps.nyx-repo.outputs.repo_id != ''
         run: |
-          curl -s -X POST "$NYX_URL/api/v1/scans/import" \
+          jq -n \
+            --arg repo "${{ steps.nyx-repo.outputs.repo_id }}" \
+            --arg ref "${{ github.ref_name }}" \
+            --slurpfile data grype-results.json \
+            '{repository_id: $repo, scanner: "GRYPE", git_ref: $ref, data: $data[0]}' | \
+          curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
             -H "Content-Type: application/json" \
             -H "X-API-Key: $NYX_API_KEY" \
-            -d "{
-              \"repository_id\": \"${{ steps.nyx-repo.outputs.repo_id }}\",
-              \"scanner\": \"GRYPE\",
-              \"git_ref\": \"${{ github.ref_name }}\",
-              \"git_sha\": \"${{ github.sha }}\",
-              \"trigger\": \"push\",
-              \"results\": $(cat grype-results.json)
-            }"
+            -d @-
 ```
 
 Add `NYX_API_KEY` to **GitHub → Repository → Settings → Secrets → Actions**.
@@ -1133,7 +1141,7 @@ Nyx manages API keys in the database rather than relying solely on a single env-
 
 | Scope | Permitted operations |
 |---|---|
-| `scanner` | Submit scan results (`POST /scans/import`), read repositories |
+| `scanner` | Submit scan results (`POST /scans/import-json`), read repositories |
 | `readonly` | Read findings, repositories, audit log, dashboard, reports |
 | `analyst` | All of `readonly` + update finding status, suppress/unsuppress, add notes |
 | `admin` | Everything — manage API keys, push workflows, full audit access |
@@ -1219,7 +1227,8 @@ All endpoints are prefixed with `/api/v1`. Authentication via `X-API-Key` header
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/scans` | List scans (filter by repository, status, scanner) |
-| `POST` | `/scans/import` | Import scanner JSON results. Requires `scanner` or `analyst` scope. Optionally include `X-Nyx-Submission-HMAC: sha256=<hmac>` for provenance verification — verified scans are flagged `submission_verified=true` |
+| `POST` | `/scans/import-json` | Import scanner JSON results (JSON body with `data:` field). Requires `scanner` or `analyst` scope. Optionally include `X-Nyx-Submission-HMAC: sha256=<hmac>` for provenance verification — verified scans are flagged `submission_verified=true` |
+| `POST` | `/scans/import` | Import scanner results via `multipart/form-data` file upload. Use this only for direct file uploads; prefer `/scans/import-json` for CI/CD |
 
 </details>
 
@@ -1584,20 +1593,12 @@ GitHub requires the `workflow` scope on your PAT to write workflow files. Edit y
 <details>
 <summary><strong>Backend becomes unhealthy / restarts needed</strong></summary>
 
-The compose stack includes `willfarrell/autoheal` which monitors the backend's Docker healthcheck and automatically calls `docker restart` when it goes unhealthy. No manual intervention needed.
-
-To check autoheal activity:
-```bash
-docker logs nyx-autoheal-1 -f
-```
+Backend and frontend containers run under Docker's native `restart: unless-stopped` policy, so an unhealthy backend respawns automatically. A prior `willfarrell/autoheal` sidecar was removed because it required mounting `/var/run/docker.sock`, granting host-level Docker access and enabling container escape if the sidecar was compromised.
 
 To check why the backend became unhealthy:
 ```bash
 docker logs nyx-backend-1 --tail=50
 ```
-
-> [!NOTE]
-> The `autoheal` container mounts `/var/run/docker.sock`. This is standard for container management sidecars but means the autoheal container has host-level Docker access. On multi-tenant or production hardened hosts, consider restricting socket permissions or using a Docker socket proxy.
 
 </details>
 
@@ -1693,7 +1694,8 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | Area | Detail |
 |---|---|
 | **API keys** | Database-backed. When `NYX_SECRET_KEY` is set, each key is stored as `HMAC-SHA256(NYX_SECRET_KEY, raw_key)` — defeating rainbow table attacks even if the DB is leaked. Falls back to SHA-256 with a warning if `NYX_SECRET_KEY` is not configured. The plaintext key is never persisted. |
-| **HTTP-only session cookie** | The dashboard Settings page exchanges the API key for an HTTP-only, SameSite=Strict session cookie via `POST /auth/session`. The key is never stored in `localStorage` or any JS-accessible storage — XSS cannot steal it. CI/CD tooling continues to use the `X-API-Key` header. |
+| **HTTP-only session cookie** | The `/login` page exchanges the API key for an HTTP-only, SameSite=Strict session cookie via `POST /auth/session`. The cookie value is a random opaque token — **not** the API key itself — and the server-side mapping lives in the `user_sessions` table keyed by SHA-256 hash of the token. The raw key never leaves the login POST body; a stolen cookie is revoked by deleting its row. CI/CD tooling continues to use the `X-API-Key` header. |
+| **Dashboard sign-in** | All dashboard routes are wrapped in a `ProtectedRoute` that calls `GET /auth/whoami` on mount. Missing or expired session → redirect to `/login` preserving the attempted path so users land back where they started after signing in. |
 | **Brute-force lockout** | After 20 failed authentication attempts from a single IP within a 10-minute window, that IP is blocked for 15 minutes with HTTP 429. Lockout state is persisted in the database and rehydrated on startup — container restarts do not reset active lockouts. |
 | **Key scopes** | Every API key is assigned a scope: `scanner` (submit scans only), `readonly` (read-only access to findings and remediations), `analyst` (update/suppress findings, request/approve/reject remediations), or `admin` (full access including audit log and key management). Scope is enforced on every endpoint. **New keys default to `readonly` scope** — explicit escalation required. |
 | **Scope enforcement** | `GET /findings`, `GET /findings/{id}`, and `GET /findings/export` require at least `readonly` scope — scanner keys cannot read findings. All audit log endpoints (`GET /audit`) require `admin` scope. Remediation approval, rejection, regeneration, and bulk dispatch require `analyst` or `admin` scope. |
@@ -1701,7 +1703,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **Key rotation** | Create a new key via Settings → API Keys with the appropriate scope, distribute it, then deactivate the old key. Zero downtime; old key is rejected immediately after deactivation. |
 | **Key lifetime** | Set `API_KEY_MAX_LIFETIME_DAYS` to enforce a maximum key age. In production, leaving this at `0` (never expire) emits a startup warning. A daily background task emits `api_key.expiry_warning` audit events for keys expiring within 7 days. |
 | **Auth failures** | Every failed authentication attempt is logged with the client IP, endpoint path, and failure reason (`missing` / `invalid` / `expired`). Forward backend logs to your SIEM to alert on spraying attempts. |
-| **Dev mode** | If `NYX_API_KEY` is blank, the API is unauthenticated in development mode and logs a warning per request. In `ENVIRONMENT=production`, a missing `NYX_API_KEY` raises `RuntimeError` at startup. |
+| **Dev mode** | If `NYX_API_KEY` is blank, the API is unauthenticated in development mode and logs a warning per request. In `ENVIRONMENT=production`, a missing `NYX_API_KEY` raises `RuntimeError` at startup. The dev-mode fallback **also refuses to activate** when the instance looks production-ish — specifically when `GITHUB_WEBHOOK_ENDPOINT` is set or `HTTPS_ONLY=true` — so an internet-reachable Nyx can't silently grant admin because someone forgot to set the key. |
 
 ### Webhook Security
 

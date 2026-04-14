@@ -255,6 +255,27 @@ def _compute_key_hashes(api_key: str) -> list[str]:
     return hashes
 
 
+def _is_unsafe_dev_fallback() -> bool:
+    """
+    Refuse the silent-admin dev fallback when the instance looks production-ish.
+
+    The fallback is only safe when Nyx is running on a developer workstation with
+    no NYX_API_KEY configured. If GITHUB_WEBHOOK_ENDPOINT is set, the instance is
+    reachable from GitHub, which means granting unauthenticated admin to anyone
+    who finds the URL — never acceptable. Same for HTTPS_ONLY (implies real TLS).
+    """
+    if settings.GITHUB_WEBHOOK_ENDPOINT:
+        return True
+    if settings.HTTPS_ONLY:
+        return True
+    return False
+
+
+def _hash_session_id(session_id: str) -> str:
+    """SHA-256 of the random session token — only the hash lives in the DB."""
+    return hashlib.sha256(session_id.encode()).hexdigest()
+
+
 async def require_api_key(
     request: Request,
     api_key: str | None = Security(_api_key_header),
@@ -264,19 +285,18 @@ async def require_api_key(
     Sets request.state.key_scopes on success (used by require_scope).
 
     Auth order:
-      1. Read key from X-API-Key header OR nyx_session HTTP-only cookie (C1).
-      2. Check per-IP brute-force lockout (M8) — memory-fast-path, DB-persistent.
-      3. Hash and look up in the api_keys DB table using HMAC-SHA256 or SHA-256 (H6).
-         If found (active, not expired): accept and update last_used_at.
-      4. Fall back to comparing against NYX_API_KEY env var — bootstrap / dev.
+      1. Read key from X-API-Key header OR nyx_session HTTP-only cookie.
+         - Header path: look up in api_keys table, fall back to NYX_API_KEY env var.
+         - Cookie path: resolve the hashed session_id in user_sessions and use the
+           scopes stored there. The cookie is NOT an API key — it's an opaque token.
+      2. Check per-IP brute-force lockout — memory-fast-path, DB-persistent.
 
-    If NYX_API_KEY is not configured and no DB key matches:
-      - In 'production' ENVIRONMENT: raises 503.
-      - Otherwise: allows with a 'dev' identity and logs a warning.
+    If NYX_API_KEY is not configured, no DB key matches, and the instance is not
+    production-ish, allow with a 'dev' identity and log a warning. Production or
+    production-ish deployments refuse the request.
     """
-    # Also accept the HTTP-only session cookie as a key source (C1)
-    if not api_key:
-        api_key = request.cookies.get("nyx_session")
+    cookie_token = request.cookies.get("nyx_session")
+    from_cookie = api_key is None and cookie_token is not None
 
     ip = get_client_ip(request)
 
@@ -288,9 +308,55 @@ async def require_api_key(
             detail="Too many authentication failures. Try again later.",
         )
 
+    # ── Cookie path: resolve session_id → user_sessions row ──────────────────
+    if from_cookie:
+        try:
+            from sqlalchemy import select as sa_select
+            from app.database import AsyncSessionLocal
+            from app.models.user_session import UserSession
+
+            token_hash = _hash_session_id(cookie_token)
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    sa_select(UserSession).where(UserSession.session_id_hash == token_hash)
+                )
+                session_row = result.scalar_one_or_none()
+                if session_row is not None:
+                    now = datetime.now(timezone.utc)
+                    # SQLite loses tz info; assume stored values are UTC.
+                    session_exp = session_row.expires_at
+                    if session_exp is not None and session_exp.tzinfo is None:
+                        session_exp = session_exp.replace(tzinfo=timezone.utc)
+                    if session_exp and session_exp < now:
+                        await db.delete(session_row)
+                        await db.commit()
+                        _record_auth_failure(ip)
+                        raise HTTPException(
+                            status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="Session expired",
+                            headers={"WWW-Authenticate": "ApiKey"},
+                        )
+                    session_row.last_used_at = now
+                    await db.commit()
+                    _clear_auth_failure(ip)
+                    request.state.key_scopes = session_row.scopes or SCOPE_ADMIN
+                    return f"session:{session_row.identity}"
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Session cookie lookup failed")
+        # Unknown session id — reject. Do NOT fall back to treating the cookie as
+        # an API key: that path is what C1 was trying to close in the first place.
+        _record_auth_failure(ip)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired session",
+            headers={"WWW-Authenticate": "ApiKey"},
+        )
+
     if not api_key:
         if not settings.NYX_API_KEY:
-            if settings.ENVIRONMENT == "production":
+            if settings.ENVIRONMENT == "production" or _is_unsafe_dev_fallback():
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail="Server misconfiguration: authentication is not configured.",
@@ -349,7 +415,7 @@ async def require_api_key(
 
     # ── 2. Env-var fallback (backward compat / bootstrap) ─────────────────────
     if not settings.NYX_API_KEY:
-        if settings.ENVIRONMENT == "production":
+        if settings.ENVIRONMENT == "production" or _is_unsafe_dev_fallback():
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Server misconfiguration: authentication is not configured.",

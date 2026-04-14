@@ -569,8 +569,11 @@ app.include_router(ai_costs.router, prefix=API_PREFIX)
 @app.post("/auth/session", tags=["auth"])
 async def create_session(request: Request, response: Response):
     """
-    Exchange an API key for an HTTP-only session cookie (C1).
-    The cookie is SameSite=Strict and HttpOnly — not accessible to JavaScript.
+    Exchange an API key for an HTTP-only session cookie.
+
+    The cookie is a random opaque token (not the API key itself) — the server-side
+    mapping lives in the `user_sessions` table keyed by SHA-256 hash of the token.
+    Revoking a session means deleting the row; the stolen cookie is worthless.
     """
     try:
         body = await request.json()
@@ -583,15 +586,24 @@ async def create_session(request: Request, response: Response):
         from fastapi import HTTPException as _HTTPEx
         raise _HTTPEx(status_code=400, detail="api_key is required")
 
-    # Validate the key using the same logic as require_api_key
-    from app.core.security import _compute_key_hashes, _clear_auth_failure, _record_auth_failure
+    from app.core.security import (
+        _compute_key_hashes,
+        _clear_auth_failure,
+        _record_auth_failure,
+        _hash_session_id,
+        SCOPE_ADMIN,
+    )
     from sqlalchemy import select as _sa_select
     from app.database import AsyncSessionLocal as _ASL
     from app.models.api_key import ApiKey as _ApiKey
-    from datetime import datetime, timezone
+    from app.models.user_session import UserSession as _UserSession
+    from datetime import datetime, timedelta, timezone
     import secrets as _secrets
 
     ip = request.client.host if request.client else "unknown"
+    identity = "bootstrap"
+    scopes = SCOPE_ADMIN
+    api_key_id: str | None = None
     key_valid = False
 
     try:
@@ -610,10 +622,12 @@ async def create_session(request: Request, response: Response):
                     record.last_used_at = now
                     await db.commit()
                     key_valid = True
+                    identity = record.name
+                    scopes = record.scopes or SCOPE_ADMIN
+                    api_key_id = record.id
     except Exception as db_exc:
         logger.debug("Session DB key lookup failed, falling back to env var: %s", db_exc)
 
-    # Fallback: compare against NYX_API_KEY env var
     if not key_valid and settings.NYX_API_KEY:
         key_valid = _secrets.compare_digest(api_key, settings.NYX_API_KEY)
 
@@ -623,23 +637,66 @@ async def create_session(request: Request, response: Response):
         raise _HTTPEx(status_code=401, detail="Invalid API key")
 
     _clear_auth_failure(ip)
+
+    # Mint an opaque session token and persist the hash
+    session_token = _secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    try:
+        async with _ASL() as db:
+            db.add(_UserSession(
+                session_id_hash=_hash_session_id(session_token),
+                identity=identity,
+                scopes=scopes,
+                api_key_id=api_key_id,
+                expires_at=now + timedelta(seconds=SESSION_COOKIE_MAX_AGE),
+                last_used_at=now,
+            ))
+            await db.commit()
+    except Exception:
+        logger.exception("Failed to persist session row")
+        from fastapi import HTTPException as _HTTPEx
+        raise _HTTPEx(status_code=500, detail="Could not create session")
+
     response.set_cookie(
         key="nyx_session",
-        value=api_key,
+        value=session_token,
         httponly=True,
         samesite="strict",
         secure=settings.HTTPS_ONLY,
         max_age=SESSION_COOKIE_MAX_AGE,
         path="/",
     )
-    return {"status": "ok"}
+    return {"status": "ok", "identity": identity, "scopes": scopes}
 
 
 @app.post("/auth/logout", tags=["auth"])
-async def logout(response: Response):
-    """Clear the session cookie (C1)."""
+async def logout(request: Request, response: Response):
+    """Delete the session row and clear the cookie."""
+    cookie_token = request.cookies.get("nyx_session")
+    if cookie_token:
+        try:
+            from sqlalchemy import delete as _sa_delete
+            from app.database import AsyncSessionLocal as _ASL
+            from app.models.user_session import UserSession as _UserSession
+            from app.core.security import _hash_session_id
+            async with _ASL() as db:
+                await db.execute(
+                    _sa_delete(_UserSession).where(
+                        _UserSession.session_id_hash == _hash_session_id(cookie_token)
+                    )
+                )
+                await db.commit()
+        except Exception:
+            logger.exception("Session delete failed")
     response.delete_cookie(key="nyx_session", path="/", samesite="strict")
     return {"status": "ok"}
+
+
+@app.get("/auth/whoami", tags=["auth"])
+async def whoami(request: Request, _key: str = Depends(require_api_key)):
+    """Return the authenticated identity and scopes — used by the frontend ProtectedRoute."""
+    scopes = getattr(request.state, "key_scopes", "")
+    return {"identity": _key, "scopes": scopes}
 
 
 @app.get("/health", tags=["system"])

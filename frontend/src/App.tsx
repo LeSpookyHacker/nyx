@@ -1,7 +1,9 @@
 import { lazy } from 'react'
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import AppShell from './components/layout/AppShell'
+import ProtectedRoute from './components/ProtectedRoute'
 
+const LoginPage = lazy(() => import('./pages/LoginPage'))
 const DashboardPage = lazy(() => import('./pages/DashboardPage'))
 const FindingsPage = lazy(() => import('./pages/FindingsPage'))
 const FindingDetailPage = lazy(() => import('./pages/FindingDetailPage'))
@@ -21,7 +23,8 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route element={<AppShell />}>
+        <Route path="login" element={<LoginPage />} />
+        <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
           <Route index element={<DashboardPage />} />
           <Route path="findings" element={<FindingsPage />} />
           <Route path="findings/:id" element={<FindingDetailPage />} />
