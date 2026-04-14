@@ -34,11 +34,6 @@ NOTIFICATION_FORMAT=slack
 
 Nyx auto-formats payloads into Slack Block Kit. Findings come through as color-coded cards with severity, title, repo, and a link back to Nyx.
 
-<!-- IMAGE: A rich Slack card for a new critical finding.
-     File: wiki/images/slack-card.png -->
-![Slack notification card](images/slack-card.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Microsoft Teams
