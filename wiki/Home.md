@@ -87,8 +87,4 @@ Nyx sits between your scanners and your engineers. It ingests results from every
 - **Security policy:** [SECURITY.md](../SECURITY.md)
 - **License:** see repository root
 
----
 
-## A note on images
-
-This wiki includes `<!-- IMAGE: ... -->` markers throughout. Each one is a placeholder for a screenshot or diagram — drop the file into `wiki/images/` with the filename shown, and the image will render automatically on GitHub. Every image is optional; pages remain readable without them.
