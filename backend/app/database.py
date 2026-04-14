@@ -55,6 +55,53 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
         if _is_sqlite:
             await _migrate_add_columns(conn)
+        await _migrate_encrypt_raw_outputs(conn)
+
+
+async def _migrate_encrypt_raw_outputs(conn) -> None:
+    """
+    Blocking one-shot backfill: encrypt any plaintext scans.raw_output rows in place.
+
+    Detects ciphertext by the Fernet version prefix 'gAAAAA'. Idempotent — rows that
+    already look like ciphertext are skipped, so re-running on every startup is cheap.
+    Raises on encryption errors so we fail fast rather than silently leaving plaintext.
+    """
+    import logging
+    from app.core.crypto import encrypt_secret, _get_fernet
+
+    logger = logging.getLogger("nyx.migrate")
+    if _get_fernet() is None:
+        logger.warning(
+            "NYX_SECRET_KEY not set — raw_output encryption at rest is disabled. "
+            "Set NYX_SECRET_KEY and restart to encrypt existing rows."
+        )
+        return
+
+    try:
+        result = await conn.execute(
+            text("SELECT id, raw_output FROM scans WHERE raw_output IS NOT NULL")
+        )
+        rows = result.fetchall()
+    except Exception:
+        return  # scans table may not exist yet on a fresh schema create (no-op)
+
+    migrated = 0
+    for row_id, raw in rows:
+        if not raw or raw.startswith("gAAAAA"):
+            continue
+        encrypted = encrypt_secret(raw)
+        if not encrypted or encrypted == raw:
+            raise RuntimeError(
+                f"Failed to encrypt scans.raw_output for scan {row_id} — aborting startup"
+            )
+        await conn.execute(
+            text("UPDATE scans SET raw_output = :v WHERE id = :id"),
+            {"v": encrypted, "id": row_id},
+        )
+        migrated += 1
+
+    if migrated:
+        logger.info("Encrypted %d plaintext raw_output row(s) at rest", migrated)
 
 
 async def _migrate_add_columns(conn) -> None:

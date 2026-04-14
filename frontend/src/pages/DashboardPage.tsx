@@ -6,7 +6,7 @@ import {
   AreaChart, Area, BarChart, Bar, Cell, PieChart, Pie,
   ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid
 } from 'recharts'
-import { AlertOctagon, Clock, Shield, TrendingUp, Flame, RotateCcw, AlertTriangle } from 'lucide-react'
+import { AlertOctagon, Clock, Shield, TrendingUp, Flame, RotateCcw, AlertTriangle, GitBranch, Plus } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { SEVERITY_COLORS, SCANNER_COLORS } from '../constants/theme'
 import LoadingSkeleton from '../components/ui/LoadingSkeleton'
@@ -94,6 +94,41 @@ export default function DashboardPage() {
     return (
       <div className="flex items-center justify-center h-64">
         <LoadingSkeleton lines={5} />
+      </div>
+    )
+  }
+
+  // Empty state — no repositories registered yet (fresh install onboarding)
+  if (summary && (summary.total_repositories || 0) === 0) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="nyx-card p-10 max-w-xl text-center space-y-5">
+          <div className="mx-auto w-16 h-16 rounded-2xl bg-nyx-iris/20 flex items-center justify-center">
+            <GitBranch size={32} className="text-nyx-amethyst" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-semibold text-nyx-moonbeam">Welcome to Nyx</h2>
+            <p className="text-nyx-mist text-sm leading-relaxed">
+              You haven't registered any repositories yet. Add your first repo to start ingesting
+              scan results, prioritizing findings, and opening AI-generated remediation PRs.
+            </p>
+          </div>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => navigate('/repositories')}
+              className="nyx-btn-primary gap-2"
+            >
+              <Plus size={16} />
+              Add your first repository
+            </button>
+          </div>
+          <p className="text-nyx-mist/60 text-xs">
+            Or load demo data from the CLI:{' '}
+            <code className="text-nyx-lavender font-mono">
+              docker compose exec backend python scripts/seed_demo_data.py
+            </code>
+          </p>
+        </div>
       </div>
     )
   }

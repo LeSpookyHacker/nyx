@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Bell, RefreshCw, Plus, Minus, ArrowUpDown, CheckCheck, ExternalLink, RotateCcw } from 'lucide-react'
+import { Bell, RefreshCw, Plus, Minus, ArrowUpDown, CheckCheck, ExternalLink, RotateCcw, Sun, Moon } from 'lucide-react'
+import { useTheme } from '../../hooks/useTheme'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sbomApi, SbomAlert } from '../../api/sbom'
 import { regressionAlertsApi, RegressionAutoAlert } from '../../api/regressionAlerts'
@@ -144,6 +145,7 @@ export default function TopBar() {
   const [tab, setTab] = useState<'sbom' | 'regression'>('sbom')
   const panelRef = useRef<HTMLDivElement>(null)
   useOnClickOutside(panelRef, () => setOpen(false))
+  const { theme, toggle: toggleTheme } = useTheme()
 
   const title = PAGE_TITLES[location.pathname] || 'Nyx'
 
@@ -188,6 +190,14 @@ export default function TopBar() {
       <h1 className="text-nyx-moonbeam font-semibold text-base">{title}</h1>
 
       <div className="flex items-center gap-2">
+        <button
+          onClick={toggleTheme}
+          className="nyx-btn-ghost p-2 rounded-lg"
+          title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} theme`}
+          aria-label="Toggle theme"
+        >
+          {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+        </button>
         <button
           onClick={() => queryClient.invalidateQueries()}
           className="nyx-btn-ghost p-2 rounded-lg"

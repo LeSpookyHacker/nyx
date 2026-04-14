@@ -11,6 +11,7 @@
 #   ./nyx.sh build        Rebuild images and restart (after pulling updates)
 #   ./nyx.sh check        Verify all integration credentials
 #   ./nyx.sh refresh      Trigger all scan schedules now
+#   ./nyx.sh doctor       End-to-end canary check (auth -> repo -> scan -> finding)
 #   ./nyx.sh help         Show this help
 set -euo pipefail
 
@@ -273,6 +274,164 @@ cmd_refresh() {
   [[ $failed -gt 0 ]] && yellow "  $failed schedule(s) failed."
 }
 
+cmd_doctor() {
+  bold "Nyx Doctor — end-to-end canary check"
+  echo ""
+
+  if [[ -z "$NYX_API_KEY" ]]; then
+    fail "NYX_API_KEY not set (no .env?). Run ./setup.sh first."
+    exit 1
+  fi
+
+  # 1. Backend reachable
+  if curl -sf --max-time 5 http://localhost:8000/health >/dev/null 2>&1; then
+    ok "Backend reachable"
+  else
+    fail "Backend not reachable at http://localhost:8000 — run './nyx.sh start'"
+    exit 1
+  fi
+
+  # 2. Database ready
+  if curl -sf --max-time 5 http://localhost:8000/ready >/dev/null 2>&1; then
+    ok "Database ready"
+  else
+    fail "Database not ready — check 'docker compose logs backend'"
+    exit 1
+  fi
+
+  # 3. Auth round-trip via the cookie path used by the dashboard
+  local cookie_jar auth_code whoami_code
+  cookie_jar=$(mktemp)
+  trap 'rm -f "$cookie_jar"' RETURN
+  auth_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 \
+    -c "$cookie_jar" \
+    -X POST http://localhost:3000/auth/session \
+    -H "Content-Type: application/json" \
+    -d "{\"api_key\":\"${NYX_API_KEY}\"}" 2>/dev/null || echo "0")
+  if [[ "$auth_code" == "200" ]]; then
+    ok "Cookie session mint (/auth/session -> 200)"
+  else
+    fail "Cookie session mint failed (HTTP $auth_code). Check 'docker compose logs frontend backend'"
+    exit 1
+  fi
+  whoami_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 \
+    -b "$cookie_jar" http://localhost:3000/auth/whoami 2>/dev/null || echo "0")
+  if [[ "$whoami_code" == "200" ]]; then
+    ok "Session resolves (/auth/whoami -> 200)"
+  else
+    fail "/auth/whoami returned HTTP $whoami_code with a freshly-minted cookie"
+    exit 1
+  fi
+
+  # 4. API key header path
+  local repos_code
+  repos_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 5 \
+    -H "X-API-Key: $NYX_API_KEY" "$API_BASE/repositories" 2>/dev/null || echo "0")
+  if [[ "$repos_code" == "200" ]]; then
+    ok "Header auth (GET /repositories -> 200)"
+  else
+    fail "Header auth failed (HTTP $repos_code) — is the key revoked?"
+    exit 1
+  fi
+
+  # 5. Integration probe — overall status
+  local int_status overall
+  int_status=$(curl -sf --max-time 10 -H "X-API-Key: $NYX_API_KEY" \
+    http://localhost:8000/health/integrations 2>/dev/null || echo "")
+  if [[ -n "$int_status" ]]; then
+    overall=$(echo "$int_status" | python3 -c "import sys,json; print(json.load(sys.stdin).get('overall','?'))" 2>/dev/null || echo "?")
+    if [[ "$overall" == "ok" ]]; then
+      ok "Integration health: $overall"
+    else
+      warn "Integration health: $overall (run './nyx.sh check' for per-integration status)"
+    fi
+  else
+    warn "Could not probe /health/integrations"
+  fi
+
+  # 6. Canary finding flow — create ephemeral repo, ingest minimal scan, verify finding, cleanup
+  bold ""
+  bold "Canary finding flow"
+  local canary_name canary_body canary_id
+  canary_name="nyx-doctor-canary-$(date +%s)"
+  canary_body=$(python3 -c "
+import json
+print(json.dumps({
+  'github_full_name': 'nyx-doctor/$canary_name',
+  'enabled_scanners': ['SEMGREP'],
+}))
+")
+  canary_id=$(curl -sf --max-time 10 \
+    -H "X-API-Key: $NYX_API_KEY" -H "Content-Type: application/json" \
+    -X POST "$API_BASE/repositories" -d "$canary_body" 2>/dev/null | \
+    python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || echo "")
+  if [[ -z "$canary_id" ]]; then
+    warn "Could not create canary repo — skipping finding flow"
+  else
+    ok "Created canary repo ($canary_id)"
+
+    local import_body import_code
+    import_body=$(python3 -c "
+import json
+semgrep = {'results': [{
+  'check_id': 'nyx.doctor.canary',
+  'path': 'canary.py',
+  'start': {'line': 1, 'col': 1},
+  'end': {'line': 1, 'col': 10},
+  'extra': {
+    'message': 'Nyx doctor canary finding',
+    'severity': 'INFO',
+    'metadata': {'category': 'security'},
+    'lines': 'print(\"canary\")',
+  },
+}], 'errors': []}
+print(json.dumps({
+  'repository_id': '$canary_id',
+  'scanner': 'SEMGREP',
+  'git_ref': 'main',
+  'data': semgrep,
+}))
+")
+    import_code=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 10 \
+      -H "X-API-Key: $NYX_API_KEY" -H "Content-Type: application/json" \
+      -X POST "$API_BASE/scans/import-json" -d "$import_body" 2>/dev/null || echo "0")
+    if [[ "$import_code" == "202" ]]; then
+      ok "Imported canary scan (HTTP 202)"
+    else
+      fail "Canary scan import failed (HTTP $import_code)"
+    fi
+
+    # Brief poll for the finding to appear
+    local found=0
+    for _ in 1 2 3 4 5; do
+      sleep 1
+      local finding_count
+      finding_count=$(curl -sf --max-time 5 \
+        -H "X-API-Key: $NYX_API_KEY" \
+        "$API_BASE/findings?repository_id=$canary_id&page_size=1" 2>/dev/null | \
+        python3 -c "import sys,json; print(json.load(sys.stdin).get('total',0))" 2>/dev/null || echo 0)
+      if [[ "$finding_count" -gt 0 ]]; then
+        ok "Canary finding visible via API"
+        found=1
+        break
+      fi
+    done
+    [[ $found -eq 0 ]] && warn "Canary finding not visible after 5s (background worker may be slow)"
+
+    # Cleanup
+    if curl -sf --max-time 5 \
+      -H "X-API-Key: $NYX_API_KEY" \
+      -X DELETE "$API_BASE/repositories/$canary_id" >/dev/null 2>&1; then
+      ok "Cleaned up canary repo"
+    else
+      warn "Could not delete canary repo $canary_id — remove it manually"
+    fi
+  fi
+
+  echo ""
+  green "  Doctor finished."
+}
+
 # ── Default command (no args): start if stopped, status if running ──────────
 cmd_default() {
   if _is_running; then
@@ -302,6 +461,7 @@ case "$COMMAND" in
   build)   cmd_build ;;
   check)   cmd_check ;;
   refresh) cmd_refresh ;;
+  doctor)  cmd_doctor ;;
   help|--help|-h) cmd_help ;;
   "")      cmd_default ;;
   *)

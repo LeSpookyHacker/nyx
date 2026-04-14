@@ -27,6 +27,8 @@ The landing page after login. Shows the numbers that matter at a glance:
 - **Integration health chips** — green/red chips for each integration
 - **Daily AI cost** — today's token spend at a glance
 
+On a brand-new install with zero repositories, the dashboard replaces the above cards with an **"Add your first repository"** onboarding card that links directly to `/repositories/new`. The top bar also has a **sun/moon** theme toggle that flips between the dark and light palettes; the choice is persisted in `localStorage` and applied synchronously on next load to avoid flashes.
+
 <!-- IMAGE: Full dashboard page with all cards populated.
      File: wiki/images/dashboard-full.png -->
 ![Dashboard page](images/dashboard-full.PNG)

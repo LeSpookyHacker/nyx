@@ -13,3 +13,4 @@ from app.models.user_session import UserSession  # noqa: F401
 from app.models.auth_lockout import AuthLockout  # noqa: F401
 from app.models.custom_compliance import CustomFramework, CustomControl  # noqa: F401
 from app.models.risk_acceptance import RiskAcceptance  # noqa: F401
+from app.models.saved_filter import SavedFilter  # noqa: F401

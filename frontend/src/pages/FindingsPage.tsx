@@ -1,20 +1,21 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { findingsApi } from '../api/findings'
 import { repositoriesApi } from '../api/repositories'
+import { savedFiltersApi, type SavedFilter, type FindingFilterState } from '../api/savedFilters'
 import type { Finding, Repository } from '../types'
 import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow } from 'date-fns'
-import { CheckCircle, ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, ShieldAlert, Wand2, X } from 'lucide-react'
+import { Bookmark, CheckCircle, ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, Save, ShieldAlert, Trash2, Wand2, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 import { SEVERITIES } from '../constants/theme'
 const SCANNERS = ['SEMGREP', 'ZAP', 'SNYK', 'TRIVY', 'BANDIT', 'GRYPE', 'CHECKOV']
 
-const STATUS_TABS = [
+const STATUS_TABS: { label: string; value: string[]; key: string }[] = [
   { label: 'Active',        value: ['OPEN', 'IN_REMEDIATION'] },
   { label: 'Open',          value: ['OPEN'] },
   { label: 'In Remediation',value: ['IN_REMEDIATION'] },
@@ -22,7 +23,7 @@ const STATUS_TABS = [
   { label: 'Suppressed',    value: ['SUPPRESSED'] },
   { label: 'Accepted Risk', value: ['ACCEPTED_RISK'] },
   { label: 'All',           value: [] },
-]
+].map(t => ({ ...t, key: [...t.value].sort().join(',') }))
 
 /** Security findings list with filtering, sorting, bulk actions, and Claude prompt generation. */
 export default function FindingsPage() {
@@ -47,6 +48,71 @@ export default function FindingsPage() {
   const [isRegressionOnly, setIsRegressionOnly] = useState(searchParams.get('is_regression') === 'true')
   const [claudePrompt, setClaudePrompt] = useState<string | null>(null)
   const [promptCopied, setPromptCopied] = useState(false)
+  const [savedMenuOpen, setSavedMenuOpen] = useState(false)
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false)
+  const [newFilterName, setNewFilterName] = useState('')
+  const [newFilterDefault, setNewFilterDefault] = useState(false)
+
+  const statusKey = useMemo(() => [...status].sort().join(','), [status])
+
+  const { data: savedFilters = [] } = useQuery({
+    queryKey: ['saved-filters', 'findings'],
+    queryFn: () => savedFiltersApi.list('findings'),
+  })
+
+  // Auto-apply the default saved filter on first load — but only if the URL
+  // didn't deep-link filters (deep-link takes precedence).
+  const [hasAppliedDefault, setHasAppliedDefault] = useState(false)
+  useEffect(() => {
+    if (hasAppliedDefault || !savedFilters) return
+    const deepLinked =
+      searchParams.getAll('severity').length > 0 ||
+      !!searchParams.get('repository_id') ||
+      searchParams.get('is_regression') === 'true'
+    if (deepLinked) { setHasAppliedDefault(true); return }
+    const def = (savedFilters as SavedFilter[]).find(f => f.is_default)
+    if (def) applySavedFilter(def)
+    setHasAppliedDefault(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedFilters])
+
+  function applySavedFilter(f: SavedFilter) {
+    const state: FindingFilterState = f.filters || {}
+    setSeverity(state.severity ?? [])
+    setScanner(state.scanner ?? [])
+    setStatus(state.status ?? ['OPEN', 'IN_REMEDIATION'])
+    setSearch(state.search ?? '')
+    setRepositoryId(state.repository_id ?? '')
+    setIsRegressionOnly(!!state.is_regression)
+    if (state.sort_by) setSortBy(state.sort_by)
+    if (typeof state.sort_desc === 'boolean') setSortDesc(state.sort_desc)
+    setPage(1)
+    setSavedMenuOpen(false)
+  }
+
+  const createFilter = useMutation({
+    mutationFn: () => savedFiltersApi.create(
+      newFilterName.trim(),
+      {
+        severity, scanner, status, search,
+        repository_id: repositoryId || undefined,
+        is_regression: isRegressionOnly || undefined,
+        sort_by: sortBy, sort_desc: sortDesc,
+      },
+      { isDefault: newFilterDefault },
+    ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['saved-filters', 'findings'] })
+      setSaveDialogOpen(false)
+      setNewFilterName('')
+      setNewFilterDefault(false)
+    },
+  })
+
+  const deleteFilter = useMutation({
+    mutationFn: (id: string) => savedFiltersApi.remove(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['saved-filters', 'findings'] }),
+  })
 
   const { data: reposData = [] } = useQuery({
     queryKey: ['repositories'],
@@ -164,7 +230,7 @@ export default function FindingsPage() {
       {/* Status tab strip */}
       <div className="flex gap-1 flex-wrap border-b border-nyx-iris/10 pb-1">
         {STATUS_TABS.map(tab => {
-          const isActive = JSON.stringify([...status].sort()) === JSON.stringify([...tab.value].sort())
+          const isActive = statusKey === tab.key
           return (
             <button
               key={tab.label}
@@ -214,6 +280,60 @@ export default function FindingsPage() {
             </span>
           )}
         </button>
+        <div className="relative">
+          <button
+            onClick={() => setSavedMenuOpen(o => !o)}
+            className={clsx('nyx-btn-ghost gap-2', savedMenuOpen && 'bg-nyx-twilight text-nyx-moonbeam')}
+            title="Saved filter presets"
+          >
+            <Bookmark size={14} />
+            Views
+            {savedFilters.length > 0 && (
+              <span className="ml-1 bg-nyx-iris rounded-full px-1.5 py-0.5 text-[10px] text-white">
+                {savedFilters.length}
+              </span>
+            )}
+          </button>
+          {savedMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setSavedMenuOpen(false)} />
+              <div className="absolute z-20 left-0 mt-2 w-72 nyx-card p-2 shadow-xl border border-nyx-iris/20">
+                {savedFilters.length === 0 && (
+                  <p className="text-nyx-mist text-xs px-3 py-2">No saved views yet.</p>
+                )}
+                {(savedFilters as SavedFilter[]).map(f => (
+                  <div key={f.id} className="flex items-center gap-1 group">
+                    <button
+                      onClick={() => applySavedFilter(f)}
+                      className="flex-1 text-left px-3 py-2 text-sm rounded hover:bg-nyx-twilight transition-colors"
+                    >
+                      <span className="text-nyx-moonbeam">{f.name}</span>
+                      {f.is_default && (
+                        <span className="ml-2 text-[10px] text-nyx-amethyst">default</span>
+                      )}
+                    </button>
+                    <button
+                      onClick={() => deleteFilter.mutate(f.id)}
+                      className="p-1.5 rounded text-nyx-mist hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100"
+                      title="Delete this view"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+                <div className="border-t border-nyx-iris/10 mt-1 pt-1">
+                  <button
+                    onClick={() => { setSavedMenuOpen(false); setSaveDialogOpen(true) }}
+                    className="w-full text-left px-3 py-2 text-sm rounded hover:bg-nyx-twilight transition-colors flex items-center gap-2 text-nyx-amethyst"
+                  >
+                    <Save size={13} />
+                    Save current as view…
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
         <button
           onClick={() => { setIsRegressionOnly(r => !r); setPage(1) }}
           className={clsx('nyx-btn-ghost gap-2', isRegressionOnly && 'bg-orange-900/30 text-orange-300 border border-orange-500/30')}
@@ -492,6 +612,59 @@ export default function FindingsPage() {
                 className="nyx-btn-ghost"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Save Filter Dialog */}
+      {saveDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+          <div className="nyx-card w-full max-w-md">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-nyx-iris/20">
+              <h2 className="text-nyx-moonbeam font-semibold">Save filter as view</h2>
+              <button onClick={() => setSaveDialogOpen(false)} className="text-nyx-mist hover:text-nyx-moonbeam">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="block text-nyx-mist text-xs uppercase tracking-wide mb-1">Name</label>
+                <input
+                  type="text"
+                  value={newFilterName}
+                  onChange={e => setNewFilterName(e.target.value)}
+                  placeholder="e.g. Critical backlog"
+                  className="nyx-input w-full"
+                  maxLength={100}
+                  autoFocus
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm text-nyx-mist cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={newFilterDefault}
+                  onChange={e => setNewFilterDefault(e.target.checked)}
+                  className="rounded"
+                />
+                Make this the default view on load
+              </label>
+              {createFilter.isError && (
+                <p className="text-red-400 text-xs">Failed to save view. Please try again.</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2 px-5 py-4 border-t border-nyx-iris/20">
+              <button onClick={() => setSaveDialogOpen(false)} className="nyx-btn-ghost flex-1">
+                Cancel
+              </button>
+              <button
+                onClick={() => createFilter.mutate()}
+                disabled={!newFilterName.trim() || createFilter.isPending}
+                className="nyx-btn-primary flex-1 gap-2 disabled:opacity-40"
+              >
+                <Save size={14} />
+                {createFilter.isPending ? 'Saving…' : 'Save View'}
               </button>
             </div>
           </div>

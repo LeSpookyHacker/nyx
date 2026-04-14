@@ -138,7 +138,7 @@ _generate_if_missing() {
   fi
 }
 
-_generate_if_missing "NYX_SECRET_KEY"    "" "NYX_SECRET_KEY (encryption + audit HMAC)"  "import secrets; print(secrets.token_hex(32))"
+_generate_if_missing "NYX_SECRET_KEY"    "" "NYX_SECRET_KEY (audit HMAC, webhook + raw_output encryption)"  "import secrets; print(secrets.token_hex(32))"
 _generate_if_missing "NYX_API_KEY"       "nyx-your-secret-key-here" "NYX_API_KEY (your login key)"  "import secrets; print('nyx-' + secrets.token_urlsafe(24))"
 _generate_if_missing "NYX_WEBHOOK_SECRET" "" "NYX_WEBHOOK_SECRET (webhook auth)"         "import secrets; print(secrets.token_hex(32))"
 

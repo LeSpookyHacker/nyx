@@ -3,9 +3,44 @@
 @tailwind utilities;
 
 @layer base {
+  /* Dark palette — default. Values are space-separated RGB so Tailwind
+     utilities can apply alpha via the `rgb(var(--x) / <alpha-value>)` helper. */
+  :root {
+    --nyx-void:      8 8 15;
+    --nyx-midnight:  13 13 26;
+    --nyx-dusk:      20 20 40;
+    --nyx-twilight:  26 26 53;
+    --nyx-iris:      124 58 237;
+    --nyx-amethyst:  139 92 246;
+    --nyx-lavender:  167 139 250;
+    --nyx-moonbeam:  237 233 254;
+    --nyx-stardust:  99 102 241;
+    --nyx-nebula:    79 70 229;
+    --nyx-mist:      196 181 253;
+    --nyx-eclipse:   45 27 105;
+  }
+
+  /* Light palette — activated by adding `theme-light` on <html>. Keeps the
+     same purple accents so brand identity stays consistent; flips surfaces
+     and text to high-contrast neutrals. */
+  html.theme-light {
+    --nyx-void:      244 244 249;
+    --nyx-midnight:  255 255 255;
+    --nyx-dusk:      240 239 245;
+    --nyx-twilight:  230 228 238;
+    --nyx-iris:      124 58 237;
+    --nyx-amethyst:  139 92 246;
+    --nyx-lavender:  109 40 217;
+    --nyx-moonbeam:  30 27 46;
+    --nyx-stardust:  79 70 229;
+    --nyx-nebula:    67 56 202;
+    --nyx-mist:      75 72 89;
+    --nyx-eclipse:   221 214 249;
+  }
+
   * {
     scrollbar-width: thin;
-    scrollbar-color: #4f46e5 #0d0d1a;
+    scrollbar-color: rgb(var(--nyx-nebula)) rgb(var(--nyx-midnight));
   }
 
   *::-webkit-scrollbar {
@@ -14,11 +49,11 @@
   }
 
   *::-webkit-scrollbar-track {
-    background: #0d0d1a;
+    background: rgb(var(--nyx-midnight));
   }
 
   *::-webkit-scrollbar-thumb {
-    background-color: #4f46e5;
+    background-color: rgb(var(--nyx-nebula));
     border-radius: 3px;
   }
 }

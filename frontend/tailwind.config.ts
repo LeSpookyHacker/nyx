@@ -1,23 +1,26 @@
 import type { Config } from 'tailwindcss'
 
 const config: Config = {
+  darkMode: 'class',
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
       colors: {
+        // nyx-* palette is driven by CSS custom properties in index.css so the
+        // same utility classes flip between dark (default) and light themes.
         nyx: {
-          void:      '#08080f',   // Deepest background
-          midnight:  '#0d0d1a',   // Card backgrounds
-          dusk:      '#141428',   // Sidebar
-          twilight:  '#1a1a35',   // Hover states
-          iris:      '#7c3aed',   // Primary purple (violet-700)
-          amethyst:  '#8b5cf6',   // Interactive (violet-500)
-          lavender:  '#a78bfa',   // Muted accent (violet-400)
-          moonbeam:  '#ede9fe',   // Primary text (violet-50)
-          stardust:  '#6366f1',   // Info / links (indigo-500)
-          nebula:    '#4f46e5',   // Pressed state
-          mist:      '#c4b5fd',   // Subtext
-          eclipse:   '#2d1b69',   // Selected state bg
+          void:      'rgb(var(--nyx-void) / <alpha-value>)',
+          midnight:  'rgb(var(--nyx-midnight) / <alpha-value>)',
+          dusk:      'rgb(var(--nyx-dusk) / <alpha-value>)',
+          twilight:  'rgb(var(--nyx-twilight) / <alpha-value>)',
+          iris:      'rgb(var(--nyx-iris) / <alpha-value>)',
+          amethyst:  'rgb(var(--nyx-amethyst) / <alpha-value>)',
+          lavender:  'rgb(var(--nyx-lavender) / <alpha-value>)',
+          moonbeam:  'rgb(var(--nyx-moonbeam) / <alpha-value>)',
+          stardust:  'rgb(var(--nyx-stardust) / <alpha-value>)',
+          nebula:    'rgb(var(--nyx-nebula) / <alpha-value>)',
+          mist:      'rgb(var(--nyx-mist) / <alpha-value>)',
+          eclipse:   'rgb(var(--nyx-eclipse) / <alpha-value>)',
         },
         severity: {
           critical: '#ef4444',

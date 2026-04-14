@@ -21,8 +21,8 @@ from app.core.security import require_api_key, warn_insecure_config
 from app.database import init_db
 from app.routers import (
     audit, api_keys, compliance, dashboard, findings, jira, remediation,
-    repositories, reports, sbom, scans, schedules, sla_policies, webhooks,
-    regression_alerts,
+    repositories, reports, saved_filters, sbom, scans, schedules, sla_policies,
+    webhooks, regression_alerts,
 )
 from app.routers import velocity, ai_costs  # new analytics routers
 # Ensure new models are registered with SQLAlchemy metadata
@@ -562,6 +562,7 @@ app.include_router(sla_policies.router, prefix=API_PREFIX)
 app.include_router(reports.router, prefix=API_PREFIX)
 app.include_router(regression_alerts.router, prefix=API_PREFIX)
 app.include_router(api_keys.router, prefix=API_PREFIX)
+app.include_router(saved_filters.router, prefix=API_PREFIX)
 app.include_router(velocity.router, prefix=API_PREFIX)
 app.include_router(ai_costs.router, prefix=API_PREFIX)
 

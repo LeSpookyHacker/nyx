@@ -26,6 +26,7 @@ Typical path:
 
 1. **Sort** — Findings page → sort by priority score descending
 2. **Filter** — severity CRITICAL + status OPEN + scanner = all
+   - Click **Views** in the toolbar to apply, save, or manage reusable filter presets. Mark one preset as the default to have it auto-apply when the page loads. Views are global (shared across all users of this Nyx instance). Deep links from the dashboard (e.g. severity tiles) always take precedence over the default view.
 3. **Select** — up to 20 at once
 4. **Act** — one of:
    - **Request AI Fix** (single or bulk)

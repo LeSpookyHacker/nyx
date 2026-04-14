@@ -286,6 +286,7 @@ Use `./nyx.sh` as your day-to-day interface:
 ./nyx.sh build        Rebuild images after pulling updates
 ./nyx.sh logs         Tail backend logs
 ./nyx.sh check        Verify all integration credentials
+./nyx.sh doctor       End-to-end canary — health, auth, integrations, and a round-trip scan import
 ./nyx.sh refresh      Trigger all scan schedules now
 ```
 
@@ -887,7 +888,7 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 | Variable | Default | Description |
 |---|---|---|
 | `NYX_API_KEY` | _(blank)_ | Bootstrap API key. On first startup Nyx registers this value in the database as the `bootstrap` key with `admin` scope. All subsequent key management (create / rotate / revoke) is done through the Settings UI or `/api/v1/api-keys`. Leave blank to disable auth in development only — **never deploy without this set in production**. |
-| `NYX_SECRET_KEY` | _(blank)_ | Master secret key for two functions: (1) HMAC signing of each audit log entry — enables tamper detection via `/audit/verify`; (2) Fernet encryption of webhook secrets at rest in the database. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. Strongly recommended for any non-local deployment. |
+| `NYX_SECRET_KEY` | _(blank)_ | Master secret key for three functions: (1) HMAC signing of each audit log entry — enables tamper detection via `/audit/verify`; (2) Fernet encryption of webhook secrets at rest; (3) Fernet encryption of the `scans.raw_output` column. On first startup with this set, any pre-existing plaintext `raw_output` rows are transparently backfill-encrypted (startup blocks until the migration completes). Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. Strongly recommended for any non-local deployment. |
 | `API_KEY_MAX_LIFETIME_DAYS` | `0` | Maximum API key lifetime in days. `0` = no limit. When set, keys created without an explicit expiry are automatically capped at this limit. A daily background task warns (log + audit event) about keys expiring within 7 days. |
 | `CORS_ORIGINS_STR` | `http://localhost:3000,http://localhost:5173` | Comma-separated allowed CORS origins |
 | `HTTPS_ONLY` | `false` | Set `true` in production to enforce HTTPS + HSTS |

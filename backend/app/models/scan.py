@@ -8,6 +8,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.constants import ScanStatus, ScanTrigger, ScannerType
+from app.core.crypto import EncryptedString
 from app.database import Base
 from app.models.base import TimestampMixin, new_uuid
 
@@ -34,7 +35,9 @@ class Scan(Base, TimestampMixin):
     finding_count: Mapped[int] = mapped_column(Integer, default=0)
     new_finding_count: Mapped[int] = mapped_column(Integer, default=0)
     fixed_finding_count: Mapped[int] = mapped_column(Integer, default=0)
-    raw_output: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # JSON string
+    # Encrypted at rest via Fernet keyed on NYX_SECRET_KEY. Transparent decrypt on read.
+    # Pre-encryption rows are backfilled on first startup by _migrate_encrypt_raw_outputs.
+    raw_output: Mapped[Optional[str]] = mapped_column(EncryptedString, nullable=True)
 
     # Timing
     started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

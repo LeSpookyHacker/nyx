@@ -3,6 +3,10 @@ import ReactDOM from 'react-dom/client'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import './index.css'
+import { applyTheme, getInitialTheme } from './hooks/useTheme'
+
+// Apply stored theme synchronously before React mounts to avoid a flash.
+applyTheme(getInitialTheme())
 
 const queryClient = new QueryClient({
   defaultOptions: {
