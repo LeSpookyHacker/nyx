@@ -1,6 +1,6 @@
 # Features
 
-A full tour of what Nyx does, grouped by category. Each section has space for an annotated screenshot so you can drop in visuals that match your environment.
+A full tour of what Nyx does, grouped by category. 
 
 > For the terse feature matrix, see the project README. This page is the **long-form** walk-through — what each feature is, why it exists, how to use it, and where it lives in the UI.
 
