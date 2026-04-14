@@ -10,7 +10,7 @@ The left sidebar is the main navigation; the top bar holds the **alert bell**, t
 
 <!-- IMAGE: Full dashboard view with sidebar expanded and pages labelled.
      File: wiki/images/nav-overview.png -->
-![Dashboard navigation](images/nav-overview.png)
+![Dashboard navigation](images/nav-overview.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -29,7 +29,7 @@ The landing page after login. Shows the numbers that matter at a glance:
 
 <!-- IMAGE: Full dashboard page with all cards populated.
      File: wiki/images/dashboard-full.png -->
-![Dashboard page](images/dashboard-full.png)
+![Dashboard page](images/dashboard-full.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -50,7 +50,7 @@ Bulk actions (up to 20 at a time): **Request AI Fix**, **Generate Claude Code Pr
 
 <!-- IMAGE: Findings page with 20 rows selected and the bulk actions bar visible.
      File: wiki/images/findings-bulk.png -->
-![Findings page with bulk selection](images/findings-bulk.png)
+![Findings page with bulk selection](images/findings-bulk.PNG)
 <!-- /IMAGE -->
 
 ### Finding detail (`/findings/:id`)
@@ -59,7 +59,7 @@ Full context for a single finding: the vulnerable code block, CVE / CWE referenc
 
 <!-- IMAGE: Finding detail page with code snippet and AI fix panel.
      File: wiki/images/finding-detail.png -->
-![Finding detail page](images/finding-detail.png)
+![Finding detail page](images/finding-detail.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -81,7 +81,7 @@ Per-repo view: findings restricted to this repo, SBOM, scan history, SLA policy,
 
 <!-- IMAGE: Repository detail page with tabs for findings, SBOM, schedules.
      File: wiki/images/repo-detail.png -->
-![Repository detail](images/repo-detail.png)
+![Repository detail](images/repo-detail.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -98,7 +98,7 @@ Configure recurring scans per repository. Intervals from 6 hours to 1 week. The 
 
 <!-- IMAGE: Schedules page with several repos on different intervals.
      File: wiki/images/schedules.png -->
-![Scan schedules](images/schedules.png)
+![Scan schedules](images/schedules.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -109,7 +109,7 @@ Define per-repository, per-severity SLA windows, escalation channels, and defaul
 
 <!-- IMAGE: SLA policies page showing a policy with different deadlines per severity.
      File: wiki/images/sla-policies.png -->
-![SLA policies](images/sla-policies.png)
+![SLA policies](images/sla-policies.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -120,7 +120,7 @@ All AI fix requests — pending, streaming, completed, low-confidence, or flagge
 
 <!-- IMAGE: Remediation list with a low-confidence fix flagged in orange.
      File: wiki/images/remediation-list.png -->
-![Remediation page](images/remediation-list.png)
+![Remediation page](images/remediation-list.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -136,7 +136,7 @@ Control coverage by framework. Pick PCI DSS, SOC 2, NIST 800-53, CIS, OWASP Top 
 
 <!-- IMAGE: Compliance page with PCI DSS selected and controls colored by coverage.
      File: wiki/images/compliance-pci.png -->
-![Compliance mapping](images/compliance-pci.png)
+![Compliance mapping](images/compliance-pci.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -147,7 +147,7 @@ Per-repo software bill of materials, latest vs previous, with a diff view for ad
 
 <!-- IMAGE: SBOM diff view showing added and removed components.
      File: wiki/images/sbom-diff.png -->
-![SBOM diff](images/sbom-diff.png)
+![SBOM diff](images/sbom-diff.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -161,7 +161,7 @@ Per-repo software bill of materials, latest vs previous, with a diff view for ad
 
 <!-- IMAGE: Reports page with the executive PDF preview rendered.
      File: wiki/images/reports-exec.png -->
-![Reports page](images/reports-exec.png)
+![Reports page](images/reports-exec.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -172,7 +172,7 @@ Searchable, downloadable audit log with tamper-evident HMAC hash chain. Walk the
 
 <!-- IMAGE: Audit page with the verify-chain button and success banner.
      File: wiki/images/audit-page.png -->
-![Audit log](images/audit-page.png)
+![Audit log](images/audit-page.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -187,7 +187,7 @@ Searchable, downloadable audit log with tamper-evident HMAC hash chain. Walk the
 
 <!-- IMAGE: Settings page with the API Keys section expanded.
      File: wiki/images/settings-keys.png -->
-![Settings page](images/settings-keys.png)
+![Settings page](images/settings-keys.PNG)
 <!-- /IMAGE -->
 
 ---
@@ -203,7 +203,7 @@ Each tab has its own unread counter; the badge on the bell is the sum.
 
 <!-- IMAGE: Alert bell dropdown with both tabs visible.
      File: wiki/images/bell-dropdown.png -->
-![Alert bell](images/bell-dropdown.png)
+![Alert bell](images/bell-dropdown.PNG)
 <!-- /IMAGE -->
 
 ---
