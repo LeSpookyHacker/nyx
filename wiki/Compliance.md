@@ -41,11 +41,6 @@ Pick a framework from the selector and see:
 | **Drill-down** | Click a control to see all open findings mapped to it |
 | **Trend** | 30 / 60 / 90 day coverage line |
 
-<!-- IMAGE: Compliance page with PCI DSS selected, grid colored by state.
-     File: wiki/images/compliance-grid.png -->
-![Compliance page with PCI DSS](images/compliance-grid.png)
-<!-- /IMAGE -->
-
 ---
 
 ## Custom frameworks
