@@ -376,7 +376,13 @@ export default function RepositoriesPage() {
             <button onClick={() => setShowAdd(false)} className="nyx-btn-ghost">Cancel</button>
           </div>
           {addRepo.isError && (
-            <p className="text-red-400 text-sm">{(addRepo.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to add repository.'}</p>
+            <p className="text-red-400 text-sm">{(() => {
+              const detail = (addRepo.error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+              if (!detail) return 'Failed to add repository.'
+              if (typeof detail === 'string') return detail
+              if (Array.isArray(detail)) return detail.map((e: { msg?: string }) => e.msg).join('; ')
+              return 'Failed to add repository.'
+            })()}</p>
           )}
         </div>
       )}

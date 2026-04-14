@@ -17,7 +17,7 @@ _BRANCH_TRAVERSAL_RE = re.compile(r"\.\.")
 # Whitelist of scanner identifiers accepted by the scan worker (H-3)
 _VALID_SCANNERS = frozenset({
     "SEMGREP", "BANDIT", "TRIVY", "GRYPE", "CHECKOV", "SNYK",
-    "CODE_SCANNING", "GITLEAKS", "TRUFFLEHOG", "OSQUERY", "ZAP",
+    "CODE_SCANNING", "GITLEAKS", "TRUFFLEHOG", "OSQUERY", "ZAP", "HADOLINT",
 })
 
 
