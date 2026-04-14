@@ -37,11 +37,6 @@ Nyx uses GitHub for three things: **reading repository contents** (so AI fixes h
 
 7. Generate and copy the token.
 
-<!-- IMAGE: The GitHub fine-grained PAT permission screen with the above boxes checked.
-     File: wiki/images/github-pat-permissions.png -->
-![GitHub PAT permissions](images/github-pat-permissions.png)
-<!-- /IMAGE -->
-
 ### 2. Store it in Nyx
 
 Edit `.env` and set:
@@ -76,11 +71,6 @@ A GitHub App gives you higher rate limits, per-installation scoping, and cleaner
 7. **Subscribe to events:** `push`, `pull_request`, `check_suite`, `workflow_run`, `security_advisory`, `code_scanning_alert`.
 8. Install it on your org or specific repos.
 9. Generate a private key and download the `.pem` file.
-
-<!-- IMAGE: GitHub App creation page with filled fields.
-     File: wiki/images/github-app-create.png -->
-![GitHub App creation](images/github-app-create.png)
-<!-- /IMAGE -->
 
 ### 2. Wire it into Nyx
 
@@ -145,11 +135,6 @@ Point a DNS record at the tunnel and set `GITHUB_WEBHOOK_ENDPOINT=https://nyx.yo
 ### C — Reverse proxy with TLS (production)
 
 Any Nginx/Caddy/Traefik reverse proxy with a real TLS cert works. See **[Production Deployment](Deployment.md)** for a working Nginx config.
-
-<!-- IMAGE: Architecture diagram showing GitHub → public URL → Nyx backend.
-     File: wiki/images/webhook-topology.png -->
-![Webhook topology](images/webhook-topology.png)
-<!-- /IMAGE -->
 
 ---
 
