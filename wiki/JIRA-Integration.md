@@ -33,11 +33,6 @@ Nyx can keep a JIRA ticket in lockstep with every finding — created when work 
 2. Click **Create API token**, name it `nyx-security-platform`
 3. Copy the token — this is the only time it is shown
 
-<!-- IMAGE: Atlassian API token page after creating the token.
-     File: wiki/images/jira-api-token.png -->
-![JIRA API token page](images/jira-api-token.png)
-<!-- /IMAGE -->
-
 ---
 
 ## 2. Configure `.env`
@@ -89,11 +84,6 @@ curl -X PATCH "https://your-nyx-url/api/v1/repositories/$REPO_ID" \
 ```
 
 You can also route by **severity** via SLA policies — see **[SLA Policies](SLA-Policies.md)**.
-
-<!-- IMAGE: Repository settings page with the JIRA project key field highlighted.
-     File: wiki/images/jira-project-mapping.png -->
-![JIRA project mapping](images/jira-project-mapping.png)
-<!-- /IMAGE -->
 
 ---
 
