@@ -184,6 +184,16 @@ The [**Nyx Wiki**](wiki/Home.md) is the long-form companion to this README. Ever
 
 ---
 
+## Disclaimer
+
+Nyx is a passion project. It was born out of a real frustration: while reviewing Semgrep findings surfacing in my own CI/CD pipelines, I kept running into the same gap — good scanners, no coherent place to manage what they found. So I built one.
+
+I am a hacker by trade. I break things for a living — I do not build them. This was a deliberate step outside my comfort zone, a portfolio project and a learning experience rolled into one. The code works, the features are real, and I use it myself, but **expect rough edges**. There are almost certainly bugs I have not found yet, patterns I could have implemented more idiomatically, and corners that were cut in the name of shipping something tangible.
+
+If you hit a bug, please [open an issue](https://github.com/LeSpookyHacker/nyx/issues). Contributions and honest feedback are genuinely welcome.
+
+---
+
 ## Contributing
 
 Pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and the [Contributing wiki page](wiki/Contributing.md) for branching, PR, and review expectations.
@@ -194,7 +204,7 @@ Found a vulnerability? Please see [SECURITY.md](SECURITY.md) for coordinated dis
 
 ## License
 
-See the repository root for license details.
+This project is licensed under the [MIT License](LICENSE).
 
 <br/>
 
