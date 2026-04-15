@@ -27,7 +27,7 @@
 
 <div align="center">
 
-![Nyx Dashboard](wiki/images/dashboard-full.PNG)
+![Nyx Dashboard](wiki/images/walkthrough-demo-data.png)
 
 </div>
 
@@ -208,10 +208,11 @@ See the repository root for license details.
 
 <br/>
 
-**Nyx** — *goddess of night, illuminating what others cannot see*
+Built by Le Spooky Hacker (wanderersgrimoire@gmail.com)
 
 <br/>
 
-Built by Le Spooky Hacker (wanderersgrimoire@gmail.com)
+**Nyx** — *goddess of night, illuminating what others cannot see*
+
 
 </div>
