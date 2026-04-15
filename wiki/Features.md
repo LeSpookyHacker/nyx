@@ -128,7 +128,7 @@ When a finding is a known, accepted risk, engineers can file a formal **risk acc
 Acceptances are auditable, revocable, and expire automatically.
 
 ### Suppression with governance
-Suppressing a finding stores a pattern (`rule_id`, `file_glob`, `reason`). Future identical findings inherit the suppression automatically but are still tracked — nothing is silently dropped. Suppressions expire after `SUPPRESSION_MAX_AGE_DAYS` unless renewed.
+Suppressing a finding stores a pattern (`rule_id`, `file_glob`, `reason`). Future identical findings inherit the suppression automatically but are still tracked — nothing is silently dropped. Suppressions carry an expiry date chosen at creation (default 180 days) and must be explicitly renewed to stay in effect.
 
 ### Audit log with HMAC hash chain
 Every state-changing action is logged with `entry_hash` and `prev_hash` — walk the chain via `GET /audit/verify` to detect any modification, insertion, or deletion. This is a cryptographic guarantee, not a reputation score.

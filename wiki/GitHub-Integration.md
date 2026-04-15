@@ -215,7 +215,7 @@ Once these are set, trigger a manual run via **Actions → Nyx Security Scan →
 
 Once a repo is registered and scans run on a PR, Nyx creates a **GitHub Check Run** named `Nyx Security` on the PR. Findings are posted as **inline annotations** so engineers see them directly in the GitHub diff view — no need to switch apps.
 
-Check Runs can be in states `in_progress`, `success`, `failure`, or `neutral`. Configure `BLOCK_MERGE_ON_CRITICAL` in `.env` to make critical findings a failing check that blocks merges.
+Check Runs can be in states `in_progress`, `success`, `failure`, or `neutral`. Critical findings cause Nyx to post a `failure` conclusion on the Check Run; if you mark the `Nyx Security` check as **Required** in your GitHub branch protection rules, that failure becomes a hard merge block. Toggle the whole feature with `GITHUB_CHECK_RUNS_ENABLED=false` if you need to silence it temporarily.
 
 <!-- IMAGE: A PR on GitHub showing Nyx Security check run and inline annotations.
      File: wiki/images/check-run-annotations.png -->

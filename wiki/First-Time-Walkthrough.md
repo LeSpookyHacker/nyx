@@ -31,7 +31,7 @@ Follow the prompts. At the end, `setup.sh` prints your dashboard URL and your AP
 
 Open **http://localhost:3000**. Nyx redirects to the **Sign in** page — paste the API key and click **Sign in**. You land on the dashboard with a `SameSite=Strict` HTTP-only session cookie. To mint additional scoped keys for CI or teammates, open **Settings → API Keys**.
 
-The dashboard now shows empty KPI cards — that is expected. You have not registered any repos yet.
+Because you have not registered any repositories yet, the dashboard shows an onboarding card titled **"Add your first repository"** instead of the KPI tiles — that is expected. Click it when you are ready to wire up a real repo in Step 4, or load the demo data below first to see what a populated dashboard looks like.
 
 ---
 
@@ -101,14 +101,24 @@ Once set, go to your repo → **Actions → Nyx Security Scan → Run workflow**
 
 ## Step 6 — Grab the repository ID
 
-You'll need it for the curl command in the next step:
+Export your API key and your new repo's UUID so the curl command in Step 7 can find them. Replace `your/repo` with whatever you just added:
+
+```bash
+export NYX_API_KEY='paste-the-key-setup.sh-printed'
+
+export NYX_REPO_ID=$(curl -s -H "X-API-Key: $NYX_API_KEY" \
+  http://localhost:8000/api/v1/repositories \
+  | jq -r '.items[] | select(.github_full_name == "your/repo") | .id')
+
+echo "$NYX_REPO_ID"   # sanity check — should print a UUID
+```
+
+If you'd rather eyeball the list first:
 
 ```bash
 curl -s -H "X-API-Key: $NYX_API_KEY" \
   http://localhost:8000/api/v1/repositories | jq '.items[] | {id, github_full_name}'
 ```
-
-Copy the `id` for your newly added repo.
 
 ---
 

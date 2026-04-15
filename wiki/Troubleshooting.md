@@ -1,6 +1,6 @@
 # Troubleshooting
 
-The most common things that break, and what to do about them. If your issue is not here, check `./nyx.sh logs`, then `./nyx.sh check`, then open an issue with the output of both.
+The most common things that break, and what to do about them. If your issue is not here, start with `./nyx.sh doctor` — it runs an end-to-end canary (health → auth → integrations → round-trip scan import) and tells you exactly which step fails. Then `./nyx.sh logs` for the traceback, and finally open an issue with the output of both.
 
 ---
 
@@ -15,8 +15,8 @@ The most common things that break, and what to do about them. If your issue is n
 **Fix:** Run with `--non-interactive --skip-start` then validate manually: `curl -H "Authorization: token $GITHUB_TOKEN" https://api.github.com/user`.
 
 ### Containers come up but the dashboard is a white page
-**Cause:** Frontend built with an incorrect `VITE_API_BASE_URL`.
-**Fix:** Check browser DevTools console. Usually a CORS error or 502 from the API. `./nyx.sh logs` will show the real error. Rebuild with `./nyx.sh build`.
+**Cause:** The frontend container is up but the backend behind the Nginx proxy is not, so every API call fails.
+**Fix:** Check browser DevTools console — usually a 502 from `/api/*` or `/auth/*`. Run `./nyx.sh doctor` to see exactly which step fails, and `./nyx.sh logs` for the backend traceback. Rebuild with `./nyx.sh build` if a stale image is suspected.
 
 ### Backend restarts every 30 seconds
 **Cause:** Healthcheck failing, Docker's `restart: unless-stopped` policy respawning the container.
@@ -37,8 +37,8 @@ The most common things that break, and what to do about them. If your issue is n
 - **Key revoked or expired:** check Settings → API Keys.
 
 ### Cookie session won't persist
-- **Not using HTTPS in prod:** cookies with `Secure` flag won't stick on HTTP. Either enable TLS or set `NYX_DEV_MODE=true` for local.
-- **SameSite mismatch:** serving frontend and backend on different top-level domains. Host them on the same domain with a path prefix.
+- **Not using HTTPS in prod:** cookies with the `Secure` flag won't stick on HTTP. Either enable TLS, or leave `ENVIRONMENT=development` / `HTTPS_ONLY=false` for local use.
+- **SameSite mismatch:** the session cookie is `SameSite=Strict`, which means the dashboard and API must share a parent origin. Serve both under the same host (the shipped compose stack already does — the frontend proxies `/api` and `/auth` to the backend).
 
 ---
 
@@ -64,16 +64,15 @@ Your PAT is missing the **Workflows** permission. Edit the token, add the scope,
 ### Every fix returns `REVIEW_LOW_CONFIDENCE`
 - You are scanning obscure languages Claude has weak priors on.
 - Your findings lack file/line context — Claude can't see the code.
-- Lower `AI_MIN_CONFIDENCE_THRESHOLD` temporarily or switch to `claude-opus-4-6` for higher quality.
+- Lower `AI_MIN_CONFIDENCE_THRESHOLD` temporarily, or switch `ANTHROPIC_MODEL` to `claude-opus-4-6` for higher quality.
 
 ### Fix is marked `PARSE_ERROR`
-Claude returned an unstructured response twice. The `/remediation/{id}` detail page has the raw text — usually obvious (it wrote prose instead of a diff). Retry the request; if it persists, the finding's prompt may be truncated by `AI_MAX_TOKENS` — raise it.
+Claude returned an unstructured response twice. The `/remediation/{id}` detail page has the raw text — usually obvious (it wrote prose instead of a diff). Retry the request; if it persists, the response may be getting truncated — raise `AI_MAX_OUTPUT_TOKENS` (default `8192`).
 
 ### AI spend spike
-- Someone kicked a big bulk fix. Check the remediation queue.
+- Someone kicked a big bulk fix. Check the remediation queue and the AI Cost dashboard.
 - A finding is looping (rare — check logs for retry storms).
-- The model changed upstream. Set `AI_MODEL` explicitly.
-- Add `AI_COST_ALERT_DAILY_USD` if you have not already.
+- The model changed upstream. Pin `ANTHROPIC_MODEL` explicitly in `.env`.
 
 ---
 
@@ -86,8 +85,8 @@ Scanner `results` field isn't raw scanner JSON. Some tools wrap output — pass 
 Grype's empty-state response still validates. Confirm the command actually found something: `grype dir:. -o json | jq '.matches | length'`.
 
 ### Trivy SBOM not diffed
-- `ENABLE_SBOM` not set or set to `false`.
 - Trivy was run without `--format cyclonedx`.
+- The SBOM payload was uploaded to the scan record but the component hash matches the previous snapshot — diffing only emits alerts on deltas.
 
 ---
 
@@ -118,7 +117,10 @@ You copied a trailing space or a newline. Re-copy.
 ## Health check commands
 
 ```bash
-# One-shot self-check
+# End-to-end canary (recommended first step)
+./nyx.sh doctor
+
+# One-shot credentials self-check
 ./nyx.sh check
 
 # Backend liveness

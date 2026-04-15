@@ -74,13 +74,12 @@ Adapt for GitLab CI, CircleCI, Jenkins, Bitbucket Pipelines, or whatever you run
 
 ## Block merges on critical findings
 
-Set on the Nyx side:
+There is no Nyx-side env var for this — it's pure GitHub branch protection. Two things make it work:
 
-```bash
-BLOCK_MERGE_ON_CRITICAL=true
-```
+1. Nyx already posts the `Nyx Security` Check Run with conclusion `failure` whenever a scan on a PR introduces a CRITICAL finding (assuming `GITHUB_CHECK_RUNS_ENABLED` is left at its default of `true`).
+2. In your GitHub repo → **Settings → Branches → Branch protection rules**, add `Nyx Security` to **Require status checks to pass before merging**.
 
-When a scan on a PR introduces a CRITICAL finding, the `Nyx Security` Check Run transitions to `failure`. Combined with a GitHub branch protection rule requiring that check to pass, the PR becomes unmergeable until the finding is fixed, suppressed, or accepted.
+That combination makes the PR unmergeable until the finding is fixed, suppressed, or accepted as risk in Nyx — at which point the Check Run flips back to `success` on the next push or webhook delivery.
 
 ---
 

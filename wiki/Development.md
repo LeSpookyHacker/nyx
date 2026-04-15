@@ -173,10 +173,10 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for the full policy.
 | Symptom | Try |
 |---|---|
 | Migrations out of sync | `alembic current`, `alembic history`, reset with `alembic stamp head` |
-| CORS errors in the browser | Make sure `CORS_ALLOWED_ORIGINS` includes your dev origin |
+| CORS errors in the browser | Make sure `CORS_ORIGINS_STR` in `.env` includes your dev origin (default already covers `localhost:3000` and `localhost:5173`) |
 | Frontend can't reach backend | Check the Vite proxy in `vite.config.ts` |
 | SQLAlchemy warnings about sessions | You are mixing sync and async sessions — use `async with SessionLocal()` |
-| Claude returns nothing | Check `ANTHROPIC_API_KEY`, check `/health/integrations`, check `AI_MAX_TOKENS` |
+| Claude returns nothing | Check `ANTHROPIC_API_KEY`, check `/health/integrations`, raise `AI_MAX_OUTPUT_TOKENS` if responses look truncated |
 | Webhooks return 401 | Signature mismatch — re-install the webhook from the repo page |
 
 ---

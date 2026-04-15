@@ -1,139 +1,86 @@
 # Notifications
 
-Nyx can send outbound notifications for the events that matter. This page covers what you can subscribe to, how the payloads look, and how to wire Slack, Teams, or a generic webhook.
+Nyx sends outbound webhook notifications for a fixed set of high-signal events. This page covers what fires, what the payloads look like, and how to wire a Slack, Teams, or generic webhook endpoint.
+
+> **Current scope:** notifications are best-effort and delivered via a single outbound webhook. There is no built-in email/SMTP sender, no digest scheduler, and no per-event subscription model — if you need any of those, proxy through your own router (Slack workflow, Opsgenie, n8n, etc.).
 
 ---
 
-## Events you can subscribe to
+## Events that fire
 
 | Event | Fires when |
 |---|---|
-| `finding.critical.new` | A new CRITICAL finding is ingested |
-| `finding.regression` | A previously FIXED finding reappears |
-| `finding.sla_breach` | An SLA deadline is missed |
-| `finding.sla_due_soon` | Finding within 25% of its SLA window |
-| `remediation.low_confidence` | AI fix comes back with confidence < threshold |
-| `remediation.diff_warning` | AI fix flagged by the diff scanner |
-| `sbom.drift` | SBOM shows new or upgraded components |
-| `ai_cost.daily_threshold` | Daily Claude spend exceeds `AI_COST_ALERT_DAILY_USD` |
-| `audit.chain_invalid` | `audit/verify` detects a break |
-| `integration.health.degraded` | Any integration health probe returns `error` |
+| **Regression** | A previously `FIXED` or `SUPPRESSED` finding reappears in a new scan |
+| **SLA breach** | A finding's per-severity SLA window elapses without a state transition |
+| **PR merged** | A remediation PR created by Nyx is merged on GitHub |
+| **Critical suppression** | A CRITICAL or HIGH finding is suppressed (surfaces an audit-worthy event for security review) |
 
-Subscribe via `NOTIFICATION_CHANNELS` (comma-separated event names) in `.env`. Default is `critical,sla_breach,regression`.
+Each event is dispatched by `backend/app/services/notification_service.py` as a best-effort POST — failures are logged at `debug` level and never raise to the caller.
 
 ---
 
-## Slack
+## Configuration
 
-Create an **Incoming Webhook** in Slack and paste its URL:
+Only two variables govern notifications:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NOTIFICATION_WEBHOOK_URL` | _(blank)_ | The outbound webhook destination. Leave blank to disable all notifications. |
+| `NOTIFY_ON_CRITICAL` | `true` | When `true`, also fire a notification for every new CRITICAL finding (on top of the events above). |
+
+SSRF protection is on by default: the URL is resolved and any IP belonging to a private, loopback, link-local, or reserved range is rejected before the POST is issued.
+
+---
+
+## Wiring Slack
+
+Create an **Incoming Webhook** in your Slack workspace (Apps → Incoming Webhooks → Add to Slack → pick a channel). Copy the generated URL and drop it in `.env`:
 
 ```bash
 NOTIFICATION_WEBHOOK_URL=https://hooks.slack.com/services/T00.../B00.../xxxxxxxx
-NOTIFICATION_FORMAT=slack
 ```
 
-Nyx auto-formats payloads into Slack Block Kit. Findings come through as color-coded cards with severity, title, repo, and a link back to Nyx.
+Nyx POSTs a simple JSON body that Slack's Incoming Webhook endpoint renders as a plain message. For richer formatting (Block Kit cards, colour-coded attachments), route through a Slack Workflow or a small adapter Lambda.
 
 ---
 
-## Microsoft Teams
+## Wiring Microsoft Teams
 
-Create an **Incoming Webhook** on a Teams channel:
+Create an **Incoming Webhook** connector on a Teams channel and paste its URL:
 
 ```bash
 NOTIFICATION_WEBHOOK_URL=https://your-tenant.webhook.office.com/webhookb2/...
-NOTIFICATION_FORMAT=teams
 ```
 
-Nyx emits MessageCards compatible with the Teams connector.
+Teams accepts simple JSON bodies — the text field is rendered as the message. As with Slack, route through a flow if you want MessageCards.
 
 ---
 
-## Generic webhook
+## Wiring a generic webhook
 
-For PagerDuty, Opsgenie, your own bot, or a custom Slack formatter:
+Point the URL at any HTTPS endpoint you control — PagerDuty events API, Opsgenie, n8n, your own bot:
 
 ```bash
 NOTIFICATION_WEBHOOK_URL=https://your-endpoint.example.com/nyx-hook
-NOTIFICATION_FORMAT=generic
 ```
 
-Payload:
+Payload shape (exact fields depend on the event, but always JSON):
 
 ```json
 {
-  "event": "finding.critical.new",
-  "timestamp": "2026-04-12T15:03:21Z",
-  "data": {
-    "finding_id": "f_01HXYZ...",
-    "repository": "acme-corp/backend-api",
-    "severity": "CRITICAL",
-    "title": "SQL injection in get_user()",
-    "priority_score": 94,
-    "url": "https://nyx.example.com/findings/f_01HXYZ..."
-  },
-  "signature": "sha256=..."
+  "event": "regression",
+  "finding_id": "f_01HXYZ...",
+  "title": "SQL injection in get_user()",
+  "severity": "CRITICAL",
+  "repository": "acme-corp/backend-api"
 }
 ```
 
-The payload is signed with `NYX_WEBHOOK_SECRET`. Verify on your side:
-
-```python
-expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
-assert hmac.compare_digest(f"sha256={expected}", signature)
-```
-
----
-
-## Daily digest
-
-An optional once-a-day summary email/webhook covering:
-
-- New findings in the last 24h by severity
-- SLA breaches introduced
-- Fixed findings
-- AI spend for the day
-
-Enable:
-
-```bash
-NOTIFICATION_DAILY_DIGEST_ENABLED=true
-NOTIFICATION_DIGEST_TIME=09:00
-```
-
----
-
-## Email
-
-If you set `SMTP_*` variables, Nyx can also email specific events. Useful for low-frequency critical alerts when Slack is saturated:
-
-```bash
-SMTP_HOST=smtp.mailgun.org
-SMTP_PORT=587
-SMTP_USERNAME=postmaster@your-org.com
-SMTP_PASSWORD=...
-SMTP_FROM=nyx@your-org.com
-NOTIFICATION_EMAIL_RECIPIENTS=security@your-org.com,on-call@your-org.com
-```
-
----
-
-## Per-event routing
-
-Different events can go to different channels. Override `NOTIFICATION_WEBHOOK_URL` with a mapping:
-
-```bash
-NOTIFICATION_ROUTES='{"finding.critical.new": "https://hooks.slack.com/...", "audit.chain_invalid": "https://pagerduty.example.com/..."}'
-```
-
----
-
-## Testing
-
-Trigger a test notification from Settings → Notifications → **Send Test**. It posts a fake `finding.critical.new` to your configured channel.
+Verify you're receiving from Nyx by pinning the source IP to your deployment, or put the endpoint behind a shared secret in the path (e.g. `…/nyx-hook/<random>`).
 
 ---
 
 ## What next
 
-- **Define SLA policies that trigger notifications →** [SLA Policies](SLA-Policies.md)
+- **Full breach-response playbook →** [Security Hardening](Security.md#what-a-breach-looks-like-and-how-to-respond)
+- **Configure SLA windows that drive the breach event →** [SLA Policies](SLA-Policies.md)

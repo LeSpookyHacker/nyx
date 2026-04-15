@@ -54,7 +54,7 @@ Tracks Claude API spend:
 - **Top-10 most expensive remediations**
 - **Per-model breakdown** if you use multiple models
 
-Set `AI_COST_ALERT_DAILY_USD` to trigger a notification if daily spend exceeds a threshold.
+Watch the dashboard daily during onboarding. If spend looks runaway, cap each fix with `AI_MAX_OUTPUT_TOKENS` in `.env` and revoke any CI scanner key that's batching aggressively from Settings → API Keys.
 
 <!-- IMAGE: AI cost dashboard with daily series and top 10 table.
      File: wiki/images/ai-cost.png -->

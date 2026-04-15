@@ -51,7 +51,7 @@ For confirmed false positives, click **Suppress** and supply:
 
 - **Reason** (required, free text)
 - **Pattern scope** — this finding only, same rule in same file, same rule repo-wide, same rule globally
-- **Expiry** — default 180 days, configurable via `SUPPRESSION_MAX_AGE_DAYS`
+- **Expiry** — chosen at creation time, default 180 days. Must be explicitly renewed to stay in effect.
 
 Matching future findings inherit the suppression automatically but are still stored. Nothing is silently dropped — you can always list suppressed findings to audit them.
 

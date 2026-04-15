@@ -35,7 +35,7 @@ Not out of the box. The AI service is hard-coded against the Anthropic SDK today
 
 ### How much does Claude cost to run?
 
-Depends on fix volume. As a rough order: a Sonnet fix request consumes ~5–15k input tokens and ~1–3k output tokens. Check the **AI Cost dashboard** for real numbers on your usage. Set `AI_COST_ALERT_DAILY_USD` to get notified before a runaway batch costs real money.
+Depends on fix volume. As a rough order: a Sonnet fix request consumes ~5–15k input tokens and ~1–3k output tokens. Check the **AI Cost dashboard** (Reports → AI Cost) for real numbers on your usage. Cap the per-fix output budget via `AI_MAX_OUTPUT_TOKENS` in `.env` and set `AI_MIN_CONFIDENCE_THRESHOLD` higher if you want fewer speculative fixes.
 
 ---
 
@@ -47,7 +47,7 @@ Yes, when you request an AI fix. Only the specific code context needed for the f
 
 ### Does Nyx store my scanner raw output?
 
-Yes, the raw JSON is stored on the `Scan` record so you can replay normalization if you upgrade the normalizer or diagnose a bug. If storage is a concern, add a lifecycle job that prunes raw payloads older than N days.
+Yes, the raw JSON is stored on the `Scan` record so you can replay normalization if you upgrade the normalizer or diagnose a bug. **The column is Fernet-encrypted at rest** using a key derived from `NYX_SECRET_KEY`, so a stolen DB dump doesn't hand over plaintext scanner output. Encryption is transparent to the application — first startup runs a blocking backfill migration for any pre-existing plaintext rows. If storage is a concern, add a lifecycle job that prunes raw payloads older than N days.
 
 ---
 

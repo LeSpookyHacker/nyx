@@ -103,7 +103,7 @@ Schema is managed by **Alembic** (`backend/alembic/`). Migrations run automatica
 
 ### Background workers
 
-Not separate processes — they are asyncio tasks spawned from the FastAPI app at startup. Each runs on its own interval loop. If you scale to multiple backend replicas, gate workers to a single instance via the `NYX_WORKER_LEADER` env flag or run them in a dedicated single-replica deployment.
+Not separate processes — they are asyncio tasks spawned from the FastAPI app's lifespan hook. Each runs on its own interval loop. Nyx is currently designed around a **single-leader backend**: there is no inter-instance coordination for these loops, so deploy one backend container per environment. Scale the dashboard with a CDN or a caching proxy, not with horizontally-replicated backends.
 
 | Worker | Interval | Purpose |
 |---|---|---|
@@ -203,9 +203,9 @@ See **[Security Hardening](Security.md)** for the full threat model.
 
 | Dimension | Guidance |
 |---|---|
-| **Request volume** | Scale backend replicas horizontally behind a load balancer. Workers must run on a single leader instance or be guarded by the `NYX_WORKER_LEADER` flag. |
+| **Request volume** | Single backend container per deployment. Nyx's workers are in-process asyncio loops and are not coordinated across replicas, so horizontal scaling of the backend is not supported today. Put the reverse proxy in front for TLS and static caching, not load balancing. |
 | **Database** | SQLite is fine up to a few thousand findings. Move to PostgreSQL as soon as you have more than one engineer using the dashboard or more than 10 registered repositories. |
-| **AI cost** | Bulk fix requests serialize per-finding Claude calls. Set `AI_MAX_CONCURRENT` to throttle. Monitor spend via the AI Cost dashboard. |
+| **AI cost** | Bulk fix requests serialize per-finding Claude calls in the remediation worker. Cap each fix with `AI_MAX_OUTPUT_TOKENS` and raise `AI_MIN_CONFIDENCE_THRESHOLD` if speculative fixes are eating your budget. Monitor spend via the AI Cost dashboard. |
 | **Log volume** | Rotating file handler caps at 50 MB × 5 files per container. For long retention, ship logs to an external sink (Loki, Datadog, CloudWatch). |
 | **Webhook bursts** | GitHub will retry failed webhook deliveries. The `/webhooks/github` handler is idempotent on `delivery_id`. |
 

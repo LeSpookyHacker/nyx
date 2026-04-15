@@ -64,13 +64,13 @@ For each fix request, Nyx builds a prompt that includes:
 Default model is `claude-sonnet-4-6`. Change with:
 
 ```bash
-AI_MODEL=claude-opus-4-6   # higher quality, higher cost
-AI_MODEL=claude-haiku-4-5  # cheaper, good for bulk summarization
+ANTHROPIC_MODEL=claude-opus-4-6   # higher quality, higher cost
+ANTHROPIC_MODEL=claude-haiku-4-5  # cheaper, good for bulk summarization
 ```
 
 Requests are sent with:
 
-- `max_tokens`: `AI_MAX_TOKENS` (default 8000)
+- `max_tokens`: `AI_MAX_OUTPUT_TOKENS` (default 8192)
 - `stream=True` — the SSE endpoint (`GET /remediation/{id}/stream`) relays tokens to the UI
 - A system prompt that enforces the response schema (diff, explanation, confidence, test plan)
 
@@ -135,7 +135,7 @@ Engineers pick whichever fits the codebase culture. Useful for non-obvious fixes
 
 ## Bulk fix requests
 
-Select up to 20 findings on the Findings page → **Request AI Fix (Bulk)**. Nyx queues each request with its own concurrency token and processes up to `AI_MAX_CONCURRENT` in parallel. Each finding gets its own remediation record; failures do not block the batch.
+Select up to 20 findings on the Findings page → **Request AI Fix (Bulk)**. Nyx queues each request and processes them with bounded concurrency inside the remediation worker. Each finding gets its own remediation record; failures do not block the batch.
 
 ---
 
@@ -168,7 +168,7 @@ The **AI Cost dashboard** (`/reports#ai-costs`) aggregates these into:
 - Top-10 most expensive remediations
 - Per-model breakdown
 
-Set `AI_COST_ALERT_DAILY_USD` to trigger a notification if daily spend exceeds a threshold.
+Cap the per-fix output budget via `AI_MAX_OUTPUT_TOKENS` in `.env` and raise `AI_MIN_CONFIDENCE_THRESHOLD` if you want fewer speculative fixes. Monitor the dashboard and revoke any runaway CI scanner keys via Settings → API Keys if spend spikes.
 
 ---
 

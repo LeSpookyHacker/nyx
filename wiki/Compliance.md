@@ -14,7 +14,7 @@ Out of the box:
 - **CIS Controls** v8
 - **OWASP Top 10** 2021
 
-Plus any **custom framework** you define in the DB (`ENABLE_CUSTOM_COMPLIANCE=true`).
+Plus any **custom framework** you define from the Compliance page in the dashboard — controls and mappings are stored in the `custom_frameworks` / `custom_controls` tables and are always available, no feature flag required.
 
 ---
 

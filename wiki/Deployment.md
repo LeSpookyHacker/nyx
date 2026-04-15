@@ -112,12 +112,17 @@ DATABASE_URL=postgresql+asyncpg://nyx:...@postgres:5432/nyx
 GITHUB_WEBHOOK_ENDPOINT=https://nyx.example.com
 
 # --- Hardening ---
-NYX_DEV_MODE=false
-CORS_ALLOWED_ORIGINS=https://nyx.example.com
+ENVIRONMENT=production
+HTTPS_ONLY=true
+CORS_ORIGINS_STR=https://nyx.example.com
+TRUSTED_PROXY_CIDRS=10.0.0.0/8,172.16.0.0/12
+REQUIRE_SUBMISSION_HMAC=true
+GITHUB_WEBHOOK_IP_ALLOWLIST_ENABLED=true
+API_KEY_MAX_LIFETIME_DAYS=90
 LOG_LEVEL=INFO
-BLOCK_MERGE_ON_CRITICAL=true
-AI_COST_ALERT_DAILY_USD=50
 ```
+
+> Setting `NYX_SECRET_KEY` in production also turns on Fernet encryption at rest for `scans.raw_output` and the webhook secret column — the first boot blocks on a backfill migration that re-encrypts any pre-existing plaintext rows.
 
 ---
 
@@ -185,7 +190,7 @@ For Grafana, scrape the health endpoints and chart `status == ok` per integratio
 When you outgrow a single box:
 
 1. **Move Postgres to a managed service** (RDS, Cloud SQL, Supabase) and update `DATABASE_URL`.
-2. **Run multiple backend replicas** behind the reverse proxy. Set `NYX_WORKER_LEADER=false` on all but one instance — only the leader runs background workers.
+2. **Backend scaling** — Nyx is designed around a single-leader backend. The lifespan hook spawns in-process worker loops (SLA escalation, schedule tick, Code Scanning sync, JIRA sync, risk snapshots) on startup, and those loops are not coordinated across replicas. For now, run a single backend container per deployment; put the reverse proxy in front of it for TLS and static-asset caching, not for horizontal scaling.
 3. **Shared file storage** is not required — Nyx stores everything in the DB.
 4. **Frontend is static** — build once, serve from a CDN if you like.
 
@@ -208,15 +213,18 @@ Migrations run automatically. For breaking-change releases, read the changelog f
 
 Before pointing the outside world at Nyx, confirm all of:
 
-- [ ] `NYX_API_KEY` set and rotated off the bootstrap value
+- [ ] `NYX_API_KEY` set, and the bootstrap key has been rotated or revoked via Settings → API Keys
 - [ ] `NYX_SECRET_KEY` and `NYX_WEBHOOK_SECRET` are random, not `change-me`
-- [ ] `CORS_ALLOWED_ORIGINS` restricted to your dashboard hostname
+- [ ] `ENVIRONMENT=production` and `HTTPS_ONLY=true`
+- [ ] `CORS_ORIGINS_STR` restricted to your dashboard hostname (no wildcard)
+- [ ] `TRUSTED_PROXY_CIDRS` lists only your reverse proxy's private CIDRs
+- [ ] `REQUIRE_SUBMISSION_HMAC=true` if CI submits scans
+- [ ] `GITHUB_WEBHOOK_IP_ALLOWLIST_ENABLED=true` if webhooks come from github.com
 - [ ] TLS certificate valid and renewing automatically
-- [ ] `BLOCK_MERGE_ON_CRITICAL=true` (unless deliberately disabled)
 - [ ] Database backups running and a restore has been tested
 - [ ] Separate API keys for CI — `scanner` scope only, never `admin`
 - [ ] GitHub App installed (not a long-lived PAT) for prod org
-- [ ] Audit chain verification scheduled (cron or Grafana alert)
+- [ ] `./nyx.sh doctor` returns clean end-to-end before handing out the URL
 - [ ] Log shipping in place if you need retention beyond the rotating file handler
 
 ---

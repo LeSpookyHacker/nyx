@@ -114,6 +114,7 @@ Day-to-day operations happen through `./nyx.sh`:
 ./nyx.sh build        # Rebuild images after pulling updates
 ./nyx.sh logs         # Tail backend logs (Ctrl+C to exit)
 ./nyx.sh check        # Verify every integration credential
+./nyx.sh doctor       # End-to-end canary — health, auth, integrations, and a round-trip scan import
 ./nyx.sh refresh      # Trigger all scan schedules immediately
 ```
 
@@ -123,7 +124,15 @@ Most of these are thin wrappers around `docker compose` with friendlier output.
 
 ## Verifying the install
 
-After first login, run the self-check from the dashboard or the CLI:
+After first login, run the end-to-end canary:
+
+```bash
+./nyx.sh doctor
+```
+
+`doctor` checks `/health` and `/ready`, proves the cookie auth flow works end-to-end (`POST /auth/session` → `GET /auth/whoami`), verifies API-key header auth, probes every integration, and — if the platform is live — creates a canary repo, imports a dummy scan, polls for ingestion, and cleans itself up. Any red line tells you exactly what is broken before you invite teammates.
+
+For a lighter check (credentials only, no round-trip) run:
 
 ```bash
 ./nyx.sh check

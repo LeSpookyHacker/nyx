@@ -97,17 +97,16 @@ You will lose all findings, audit history, and API keys. Only do this if you hav
 
 ---
 
-## CI/CD and rolling upgrades
+## Rolling upgrades
 
-For production with multiple backend replicas:
+Nyx runs a single-leader backend (the in-process worker loops are not coordinated across replicas), so upgrades are a brief maintenance window rather than a blue/green rotation:
 
-1. Drain traffic from one replica.
-2. Upgrade and let migrations run on it. `NYX_WORKER_LEADER=true` on this instance so migrations gate worker activity.
-3. Confirm `./nyx.sh check` is green.
-4. Bring back traffic.
-5. Upgrade remaining replicas one at a time.
+1. Announce the window and quiesce CI scan submissions.
+2. `git pull && ./nyx.sh build && ./nyx.sh restart` — Alembic migrations run automatically on container start.
+3. Run `./nyx.sh doctor` — the end-to-end canary catches broken migrations, auth regressions, and integration failures in one shot.
+4. Unblock CI and announce completion.
 
-Migrations are written to be **forward-compatible** within a single minor version — older replicas can run against a DB that has been migrated forward for at least one hop. For multi-hop upgrades, take a brief maintenance window.
+For multi-hop version upgrades (skipping a minor), always back up first (see [Deployment → Backups](Deployment.md#5-backups)) and skim the changelog for migrations that rewrite existing rows.
 
 ---
 
