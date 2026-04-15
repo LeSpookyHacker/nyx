@@ -63,54 +63,54 @@ Dozens of scanners, thousands of findings, hundreds of repositories — and no c
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                          Developer Workflow                             │
-│   git push → GitHub Webhook → Nyx → Run Scanners → Ingest Findings    │
+│                          Developer Workflow                            │
+│   git push → GitHub Webhook → Nyx → Run Scanners → Ingest Findings     │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
                    ┌────────────────▼────────────────┐
-                   │          Nyx Backend             │
-                   │         (FastAPI + Python)        │
-                   │                                  │
+                   │          Nyx Backend            │
+                   │         (FastAPI + Python)      │
+                   │                                 │
                    │  ┌──────────┐  ┌─────────────┐  │
                    │  │ Webhooks │  │   Routers   │  │
                    │  │ Receiver │  │  (REST API) │  │
                    │  └────┬─────┘  └──────┬──────┘  │
-                   │       │               │          │
+                   │       │               │         │
                    │  ┌────▼───────────────▼──────┐  │
-                   │  │       Core Services        │  │
-                   │  │  Deduplication  │ Priority  │  │
-                   │  │  AI Service     │ JIRA      │  │
-                   │  │  GitHub         │ Notify    │  │
-                   │  │  Compliance     │ SBOM      │  │
-                   │  └────────────────┬───────────┘  │
-                   │                  │               │
-                   │  ┌───────────────▼─────────────┐ │
-                   │  │   Background Workers         │ │
-                   │  │  SLA Checker    (hourly)     │ │
-                   │  │  Risk Snapshots (daily)      │ │
-                   │  │  Scan Schedules (5 min)      │ │
-                   │  │  Suppression Expiry (hourly) │ │
-                   │  │  Key Expiry Warnings (daily) │ │
-                   │  └───────────────┬─────────────┘ │
-                   │                  │               │
-                   │  ┌───────────────▼─────────────┐ │
-                   │  │  Database (SQLite/Postgres)  │ │
-                   │  │  Findings · Repos · Scans    │ │
-                   │  │  Remediations · JiraLinks    │ │
-                   │  │  SLAPolicies · Schedules     │ │
-                   │  │  SuppressionPatterns · SBOM  │ │
-                   │  │  RegressionAutoAlerts        │ │
-                   │  │  ApiKeys                     │ │
-                   │  └─────────────────────────────┘ │
+                   │  │       Core Services       │  │
+                   │  │  Deduplication  │ Priority│  │
+                   │  │  AI Service     │ JIRA    │  │
+                   │  │  GitHub         │ Notify  │  │
+                   │  │  Compliance     │ SBOM    │  │
+                   │  └────────────────┬──────────┘  │
+                   │                  │              │
+                   │  ┌───────────────▼────────────┐ │
+                   │  │   Background Workers       │ │
+                   │  │  SLA Checker    (hourly)   │ │
+                   │  │  Risk Snapshots (daily)    │ │
+                   │  │  Scan Schedules (5 min)    │ │
+                   │  │ Suppression Expiry(hourly) │ │
+                   │  │ Key Expiry Warnings(daily) │ │
+                   │  └───────────────┬────────────┘ │
+                   │                  │              │
+                   │  ┌───────────────▼────────────┐ │
+                   │  │  Database (SQLite/Postgres)│ │
+                   │  │  Findings · Repos · Scans  │ │
+                   │  │  Remediations · JiraLinks  │ │
+                   │  │  SLAPolicies · Schedules   │ │
+                   │  │  SuppressionPatterns ·SBOM │ │
+                   │  │  RegressionAutoAlerts      │ │
+                   │  │  ApiKeys                   │ │
+                   │  └────────────────────────────┘ │
                    └───────────────┬─────────────────┘
                                    │
            ┌───────────────────────┼───────────────────────┐
            │                       │                       │
    ┌───────▼──────┐    ┌──────────▼──────────┐    ┌───────▼──────┐
-   │   Nyx UI     │    │     GitHub API       │    │  Jira API    │
-   │ (React SPA)  │    │  Webhooks · PRs      │    │  Tickets     │
-   │  Dashboard   │    │  Check Runs · Code   │    │  Status sync │
-   │  Reports     │    │  Scanning            │    │              │
+   │   Nyx UI     │    │     GitHub API      │    │  Jira API    │
+   │ (React SPA)  │    │  Webhooks · PRs     │    │  Tickets     │
+   │  Dashboard   │    │  Check Runs · Code  │    │  Status sync │
+   │  Reports     │    │  Scanning           │    │              │
    └──────────────┘    └─────────────────────┘    └──────────────┘
 ```
 
