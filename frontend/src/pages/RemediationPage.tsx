@@ -4,9 +4,8 @@ import { remediationApi } from '../api/remediation'
 import type { Remediation } from '../types'
 import { formatDistanceToNow } from 'date-fns'
 import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2, ShieldAlert, ShieldCheck } from 'lucide-react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { clsx } from 'clsx'
+import MarkdownContent from '../components/common/MarkdownContent'
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ElementType }> = {
   PENDING:     { label: 'Pending',       color: 'text-slate-400',   icon: RefreshCw },
@@ -119,29 +118,55 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
         {/* Explanation */}
         {rem.ai_explanation && (
           <div className="nyx-card p-4">
-            <h3 className="text-nyx-moonbeam font-semibold mb-2 text-sm">Explanation</h3>
-            <p className="text-nyx-mist text-sm leading-relaxed whitespace-pre-wrap">{rem.ai_explanation}</p>
+            <h3 className="text-nyx-moonbeam font-semibold mb-3 text-sm">Explanation</h3>
+            <MarkdownContent>{rem.ai_explanation}</MarkdownContent>
           </div>
         )}
 
         {/* Diff */}
-        {rem.ai_fix_diff && (
+        {rem.ai_fix_diff && !isNoCodeFix && (
           <div className="nyx-card overflow-hidden">
             <div className="px-4 py-3 border-b border-nyx-iris/10 flex items-center justify-between">
-              <h3 className="text-nyx-moonbeam font-semibold text-sm">Proposed Fix (Diff)</h3>
+              <h3 className="text-nyx-moonbeam font-semibold text-sm">Proposed Fix</h3>
               {rem.ai_confidence !== undefined && rem.ai_confidence !== null && (
                 <span className="text-nyx-mist text-xs">
                   Confidence: <span className="text-nyx-amethyst font-semibold">{(rem.ai_confidence * 100).toFixed(0)}%</span>
                 </span>
               )}
             </div>
-            <SyntaxHighlighter
-              language="diff"
-              style={vscDarkPlus}
-              customStyle={{ margin: 0, borderRadius: 0, background: '#0d0d1a', fontSize: '12px', maxHeight: '400px', overflow: 'auto' }}
-            >
-              {rem.ai_fix_diff}
-            </SyntaxHighlighter>
+            <div className="overflow-auto max-h-[420px] bg-[#0d0d1a]">
+              {rem.ai_fix_diff.split('\n').map((line, i) => {
+                const isAdd = line.startsWith('+') && !line.startsWith('+++')
+                const isDel = line.startsWith('-') && !line.startsWith('---')
+                const isHunk = line.startsWith('@@')
+                const isHeader = line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ')
+                return (
+                  <div
+                    key={i}
+                    className={clsx(
+                      'px-4 py-px font-mono text-[11px] leading-5 whitespace-pre select-text',
+                      isAdd && 'bg-green-900/25 text-green-300',
+                      isDel && 'bg-red-900/25 text-red-300',
+                      isHunk && 'bg-nyx-iris/10 text-nyx-lavender',
+                      isHeader && 'text-nyx-mist/50',
+                      !isAdd && !isDel && !isHunk && !isHeader && 'text-nyx-mist/70',
+                    )}
+                  >
+                    {line || ' '}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* No-code-fix notice */}
+        {isNoCodeFix && rem.ai_explanation && (
+          <div className="nyx-card p-4 border border-yellow-800/30">
+            <h3 className="text-yellow-400 font-semibold mb-2 text-sm flex items-center gap-2">
+              <AlertCircle size={14} /> Manual Remediation Required
+            </h3>
+            <MarkdownContent>{rem.ai_explanation}</MarkdownContent>
           </div>
         )}
 

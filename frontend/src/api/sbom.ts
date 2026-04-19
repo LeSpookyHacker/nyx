@@ -61,4 +61,22 @@ export const sbomApi = {
 
   generateSbom: (repoId: string): Promise<{ triggered: boolean; repository: string }> =>
     client.post(`/sbom/repositories/${repoId}/generate`).then((r: { data: { triggered: boolean; repository: string } }) => r.data),
+
+  exportSbom: async (repoId: string, format: 'cyclonedx' | 'csv', sbomId?: string): Promise<void> => {
+    const params: Record<string, string> = { format }
+    if (sbomId) params.sbom_id = sbomId
+    const response = await client.get(`/sbom/repositories/${repoId}/export`, {
+      params,
+      responseType: 'blob',
+    })
+    const disposition: string = response.headers['content-disposition'] ?? ''
+    const match = disposition.match(/filename="([^"]+)"/)
+    const filename = match ? match[1] : `sbom.${format === 'cyclonedx' ? 'cdx.json' : 'csv'}`
+    const url = URL.createObjectURL(response.data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(url)
+  },
 }

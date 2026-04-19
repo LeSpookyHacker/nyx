@@ -1,8 +1,13 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { complianceApi, ControlReport } from '../api/compliance'
-import { CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight, GitBranch } from 'lucide-react'
+import { complianceApi, ControlReport, FrameworkReport } from '../api/compliance'
+import { repositoriesApi } from '../api/repositories'
+import { Repository } from '../types'
+import {
+  CheckCircle2, XCircle, AlertCircle, ChevronDown, ChevronRight,
+  GitBranch, Download, Layers,
+} from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { clsx } from 'clsx'
 
@@ -51,16 +56,23 @@ const SEV_COLORS: Record<string, string> = {
   INFO: 'text-slate-400',
 }
 
-function ControlCard({ control, frameworkId }: { control: ControlReport; frameworkId: string }) {
+function ControlCard({
+  control,
+  frameworkId,
+  repoFilter,
+}: {
+  control: ControlReport
+  frameworkId: string
+  repoFilter: string | null
+}) {
   const [open, setOpen] = useState(false)
 
   const fixed = control.total_findings - control.open_findings
   const fixedPct = control.total_findings > 0 ? (fixed / control.total_findings) * 100 : 0
 
-  // Only fetch findings when expanded and there are open findings
   const { data: controlFindings, isLoading: findingsLoading } = useQuery({
-    queryKey: ['control-findings', frameworkId, control.id],
-    queryFn: () => complianceApi.getControlFindings(frameworkId, control.id),
+    queryKey: ['control-findings', frameworkId, control.id, repoFilter],
+    queryFn: () => complianceApi.getControlFindings(frameworkId, control.id, repoFilter ?? undefined),
     enabled: open && control.open_findings > 0,
     staleTime: 60_000,
   })
@@ -103,7 +115,6 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
         <div className="px-4 pb-4 pt-2 border-t border-nyx-iris/10 space-y-4">
           <p className="text-nyx-mist text-xs leading-relaxed">{control.description}</p>
 
-          {/* Finding breakdown bar */}
           {control.total_findings > 0 && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs">
@@ -125,7 +136,6 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
             </div>
           )}
 
-          {/* Open findings grouped by repository */}
           {control.open_findings > 0 && (
             <div className="space-y-3">
               <p className="text-nyx-moonbeam text-xs font-semibold uppercase tracking-wide">
@@ -136,7 +146,6 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
               )}
               {controlFindings?.repositories.map(repo => (
                 <div key={repo.repository_id} className="rounded-lg border border-nyx-iris/15 overflow-hidden">
-                  {/* Repo header */}
                   <div className="flex items-center gap-2 px-3 py-2 bg-nyx-dusk/60">
                     <GitBranch size={12} className="text-nyx-iris/60 shrink-0" />
                     <Link
@@ -150,7 +159,6 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
                       {repo.findings.length} finding{repo.findings.length !== 1 ? 's' : ''}
                     </span>
                   </div>
-                  {/* Finding rows */}
                   <div className="divide-y divide-nyx-iris/5">
                     {repo.findings.map(f => (
                       <Link
@@ -192,7 +200,6 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
             </div>
           )}
 
-          {/* Mapped CWEs and OWASP categories */}
           <div className="flex flex-wrap gap-2 pt-1">
             {control.cwe_ids.map(cwe => (
               <span key={cwe} className="text-[10px] px-1.5 py-0.5 rounded bg-nyx-eclipse text-nyx-amethyst border border-nyx-iris/20">
@@ -215,33 +222,231 @@ function ControlCard({ control, frameworkId }: { control: ControlReport; framewo
   )
 }
 
+// ── Export helpers ────────────────────────────────────────────────────────────
+
+function reportToCsv(report: FrameworkReport, repoLabel: string): string {
+  const rows = [
+    ['Framework', 'Repository Scope', 'Control ID', 'Title', 'Status', 'Open Findings', 'Total Findings', 'Coverage %'],
+  ]
+  for (const c of report.controls) {
+    rows.push([
+      report.framework.name,
+      repoLabel,
+      c.id,
+      c.title,
+      c.is_compliant ? 'Passing' : 'Failing',
+      String(c.open_findings),
+      String(c.total_findings),
+      String(c.coverage_pct),
+    ])
+  }
+  return rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n')
+}
+
+function triggerDownload(content: string, filename: string, mime: string) {
+  const blob = new Blob([content], { type: mime })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
 /** Compliance framework dashboard showing control pass/fail status per repository. */
 export default function CompliancePage() {
   const [selectedFramework, setSelectedFramework] = useState('pci-dss')
+  const [repoFilter, setRepoFilter] = useState<string | null>(null)
+  const [exportOpen, setExportOpen] = useState(false)
+  const exportRef = useRef<HTMLDivElement>(null)
+
+  const { data: repos = [] } = useQuery<Repository[]>({
+    queryKey: ['repositories'],
+    queryFn: () => repositoriesApi.list(),
+  })
+
+  const selectedRepo = repos.find(r => r.id === repoFilter) ?? null
 
   const { data: summary, isLoading: summaryLoading } = useQuery({
-    queryKey: ['compliance-summary'],
-    queryFn: () => complianceApi.getSummary(),
+    queryKey: ['compliance-summary', repoFilter],
+    queryFn: () => complianceApi.getSummary(repoFilter ?? undefined),
   })
 
   const { data: report, isLoading: reportLoading } = useQuery({
-    queryKey: ['compliance-report', selectedFramework],
-    queryFn: () => complianceApi.getReport(selectedFramework),
+    queryKey: ['compliance-report', selectedFramework, repoFilter],
+    queryFn: () => complianceApi.getReport(selectedFramework, repoFilter ?? undefined),
   })
 
   const failingControls = report?.controls.filter(c => !c.is_compliant) ?? []
   const passingControls = report?.controls.filter(c => c.is_compliant) ?? []
 
+  const handleExport = async (scope: 'current' | 'all', fmt: 'json' | 'csv') => {
+    setExportOpen(false)
+    let data: FrameworkReport
+    let repoLabel: string
+
+    if (scope === 'all' || !repoFilter) {
+      data = await complianceApi.getReport(selectedFramework)
+      repoLabel = 'All Repositories'
+    } else {
+      data = report!
+      repoLabel = selectedRepo?.github_full_name ?? repoFilter
+    }
+
+    const slug = selectedFramework
+    const scopeSlug = scope === 'all' ? 'all-repos' : (selectedRepo?.github_full_name.replace('/', '-') ?? 'current')
+    const date = new Date().toISOString().slice(0, 10)
+
+    if (fmt === 'json') {
+      triggerDownload(
+        JSON.stringify({ exported_at: new Date().toISOString(), repository_scope: repoLabel, ...data }, null, 2),
+        `compliance-${slug}-${scopeSlug}-${date}.json`,
+        'application/json',
+      )
+    } else {
+      triggerDownload(
+        reportToCsv(data, repoLabel),
+        `compliance-${slug}-${scopeSlug}-${date}.csv`,
+        'text/csv',
+      )
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-nyx-moonbeam text-xl font-bold">Compliance</h1>
-        <p className="text-nyx-mist text-sm mt-1">
-          Map security findings to regulatory and industry frameworks.
-        </p>
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-nyx-moonbeam text-xl font-bold">Compliance</h1>
+          <p className="text-nyx-mist text-sm mt-1">
+            Map security findings to regulatory and industry frameworks.
+          </p>
+        </div>
+
+        {/* Export dropdown */}
+        <div className="relative shrink-0" ref={exportRef}>
+          <button
+            onClick={() => setExportOpen(o => !o)}
+            className="nyx-btn-ghost flex items-center gap-2 text-sm"
+          >
+            <Download size={14} />
+            Export
+            <ChevronDown size={12} className={clsx('transition-transform', exportOpen && 'rotate-180')} />
+          </button>
+
+          {exportOpen && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 z-20 w-56 rounded-lg border border-nyx-iris/25 bg-nyx-eclipse shadow-xl overflow-hidden">
+                <div className="px-3 py-2 border-b border-nyx-iris/15">
+                  <p className="text-nyx-mist text-[10px] uppercase tracking-wide font-semibold">
+                    {selectedRepo ? selectedRepo.github_full_name.split('/')[1] : 'All Repositories'} · {selectedFramework.toUpperCase()}
+                  </p>
+                </div>
+                <div className="py-1">
+                  <button
+                    onClick={() => handleExport('current', 'json')}
+                    disabled={!report}
+                    className="w-full text-left px-3 py-2 text-xs text-nyx-moonbeam hover:bg-nyx-twilight/50 transition-colors flex items-center gap-2"
+                  >
+                    <Download size={11} className="text-nyx-amethyst" />
+                    {repoFilter ? 'This repo' : 'All repos'} — JSON
+                  </button>
+                  <button
+                    onClick={() => handleExport('current', 'csv')}
+                    disabled={!report}
+                    className="w-full text-left px-3 py-2 text-xs text-nyx-moonbeam hover:bg-nyx-twilight/50 transition-colors flex items-center gap-2"
+                  >
+                    <Download size={11} className="text-nyx-amethyst" />
+                    {repoFilter ? 'This repo' : 'All repos'} — CSV
+                  </button>
+
+                  {repoFilter && (
+                    <>
+                      <div className="mx-3 my-1 border-t border-nyx-iris/15" />
+                      <button
+                        onClick={() => handleExport('all', 'json')}
+                        className="w-full text-left px-3 py-2 text-xs text-nyx-moonbeam hover:bg-nyx-twilight/50 transition-colors flex items-center gap-2"
+                      >
+                        <Download size={11} className="text-nyx-mist" />
+                        All repositories — JSON
+                      </button>
+                      <button
+                        onClick={() => handleExport('all', 'csv')}
+                        className="w-full text-left px-3 py-2 text-xs text-nyx-moonbeam hover:bg-nyx-twilight/50 transition-colors flex items-center gap-2"
+                      >
+                        <Download size={11} className="text-nyx-mist" />
+                        All repositories — CSV
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Summary cards */}
+      {/* Repository filter tiles */}
+      {repos.length > 0 && (
+        <div>
+          <p className="text-nyx-mist text-xs uppercase tracking-wide font-semibold mb-2 flex items-center gap-1.5">
+            <Layers size={11} />
+            Filter by Repository
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {/* All repos tile */}
+            <button
+              onClick={() => setRepoFilter(null)}
+              className={clsx(
+                'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all',
+                repoFilter === null
+                  ? 'border-nyx-iris/60 bg-nyx-eclipse/60 text-nyx-moonbeam'
+                  : 'border-nyx-iris/20 text-nyx-mist hover:border-nyx-iris/40 hover:text-nyx-moonbeam'
+              )}
+            >
+              <Layers size={12} className={repoFilter === null ? 'text-nyx-amethyst' : 'text-nyx-iris/50'} />
+              All Repositories
+              {repoFilter === null && (
+                <span className="w-1.5 h-1.5 rounded-full bg-nyx-amethyst" />
+              )}
+            </button>
+
+            {/* Per-repo tiles */}
+            {repos.map(repo => {
+              const isSelected = repoFilter === repo.id
+              const shortName = repo.github_full_name.split('/')[1] ?? repo.github_full_name
+              return (
+                <button
+                  key={repo.id}
+                  onClick={() => setRepoFilter(isSelected ? null : repo.id)}
+                  title={repo.github_full_name}
+                  className={clsx(
+                    'flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium transition-all max-w-[200px]',
+                    isSelected
+                      ? 'border-nyx-iris/60 bg-nyx-eclipse/60 text-nyx-moonbeam'
+                      : 'border-nyx-iris/20 text-nyx-mist hover:border-nyx-iris/40 hover:text-nyx-moonbeam'
+                  )}
+                >
+                  <GitBranch size={12} className={isSelected ? 'text-nyx-amethyst shrink-0' : 'text-nyx-iris/50 shrink-0'} />
+                  <span className="truncate">{shortName}</span>
+                  {isSelected && <span className="w-1.5 h-1.5 rounded-full bg-nyx-amethyst shrink-0" />}
+                </button>
+              )
+            })}
+          </div>
+
+          {repoFilter && (
+            <p className="text-nyx-mist/50 text-[10px] mt-1.5">
+              Showing metrics for <span className="text-nyx-lavender">{selectedRepo?.github_full_name}</span> — click the tile again or select All Repositories to reset.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Framework summary tiles */}
       {summaryLoading ? (
         <div className="text-nyx-mist text-sm animate-pulse">Loading frameworks...</div>
       ) : (
@@ -281,7 +486,14 @@ export default function CompliancePage() {
         <div className="nyx-card p-5 space-y-5">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-nyx-moonbeam font-semibold">{report.framework.name}</h2>
+              <h2 className="text-nyx-moonbeam font-semibold flex items-center gap-2">
+                {report.framework.name}
+                {selectedRepo && (
+                  <span className="text-[10px] font-normal px-2 py-0.5 rounded-full border border-nyx-iris/30 text-nyx-lavender bg-nyx-eclipse/60">
+                    {selectedRepo.github_full_name}
+                  </span>
+                )}
+              </h2>
               <p className="text-nyx-mist text-xs mt-0.5">{report.framework.description}</p>
             </div>
             <div className="text-right">
@@ -299,7 +511,9 @@ export default function CompliancePage() {
                 Failing Controls ({failingControls.length})
               </h3>
               <div className="space-y-2">
-                {failingControls.map(c => <ControlCard key={c.id} control={c} frameworkId={selectedFramework} />)}
+                {failingControls.map(c => (
+                  <ControlCard key={c.id} control={c} frameworkId={selectedFramework} repoFilter={repoFilter} />
+                ))}
               </div>
             </div>
           )}
@@ -311,7 +525,9 @@ export default function CompliancePage() {
                 Passing Controls ({passingControls.length})
               </h3>
               <div className="space-y-2">
-                {passingControls.map(c => <ControlCard key={c.id} control={c} frameworkId={selectedFramework} />)}
+                {passingControls.map(c => (
+                  <ControlCard key={c.id} control={c} frameworkId={selectedFramework} repoFilter={repoFilter} />
+                ))}
               </div>
             </div>
           )}

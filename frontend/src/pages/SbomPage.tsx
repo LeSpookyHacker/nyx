@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { sbomApi, SbomAlert, SbomChange } from '../api/sbom'
 import { repositoriesApi } from '../api/repositories'
-import { Plus, Minus, ArrowUpDown, CheckCheck, Package, ChevronDown, ChevronRight, Play, Loader2 } from 'lucide-react'
+import { Plus, Minus, ArrowUpDown, CheckCheck, Package, ChevronDown, ChevronRight, Play, Loader2, Download } from 'lucide-react'
 import { format } from 'date-fns'
 import { clsx } from 'clsx'
 
@@ -127,6 +127,16 @@ export default function SbomPage() {
     },
   })
 
+  const [exportingRepo, setExportingRepo] = useState<string | null>(null)
+  const handleExport = async (repoId: string, format: 'cyclonedx' | 'csv') => {
+    setExportingRepo(`${repoId}-${format}`)
+    try {
+      await sbomApi.exportSbom(repoId, format)
+    } finally {
+      setExportingRepo(null)
+    }
+  }
+
   const unread = alerts.filter(a => !a.acknowledged).length
 
   const filtered = repoFilter === 'all'
@@ -191,22 +201,46 @@ export default function SbomPage() {
             return (
               <div key={r.id} className="flex items-center justify-between py-2 border-b border-nyx-iris/10 last:border-0">
                 <span className="text-nyx-moonbeam text-sm font-mono">{r.github_full_name}</span>
-                <button
-                  onClick={() => generate.mutate(r.id)}
-                  disabled={isPending || triggered}
-                  className={clsx(
-                    'nyx-btn-ghost text-xs flex items-center gap-1.5',
-                    triggered && 'text-green-400 border-green-800/30'
-                  )}
-                >
-                  {isPending ? (
-                    <><Loader2 size={12} className="animate-spin" /> Triggering...</>
-                  ) : triggered ? (
-                    <><Play size={12} /> Triggered</>
-                  ) : (
-                    <><Play size={12} /> Generate SBOM</>
-                  )}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleExport(r.id, 'cyclonedx')}
+                    disabled={exportingRepo === `${r.id}-cyclonedx`}
+                    title="Download CycloneDX JSON"
+                    className="nyx-btn-ghost text-xs flex items-center gap-1.5"
+                  >
+                    {exportingRepo === `${r.id}-cyclonedx`
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <Download size={12} />}
+                    CycloneDX
+                  </button>
+                  <button
+                    onClick={() => handleExport(r.id, 'csv')}
+                    disabled={exportingRepo === `${r.id}-csv`}
+                    title="Download CSV"
+                    className="nyx-btn-ghost text-xs flex items-center gap-1.5"
+                  >
+                    {exportingRepo === `${r.id}-csv`
+                      ? <Loader2 size={12} className="animate-spin" />
+                      : <Download size={12} />}
+                    CSV
+                  </button>
+                  <button
+                    onClick={() => generate.mutate(r.id)}
+                    disabled={isPending || triggered}
+                    className={clsx(
+                      'nyx-btn-ghost text-xs flex items-center gap-1.5',
+                      triggered && 'text-green-400 border-green-800/30'
+                    )}
+                  >
+                    {isPending ? (
+                      <><Loader2 size={12} className="animate-spin" /> Triggering...</>
+                    ) : triggered ? (
+                      <><Play size={12} /> Triggered</>
+                    ) : (
+                      <><Play size={12} /> Generate SBOM</>
+                    )}
+                  </button>
+                </div>
               </div>
             )
           })}

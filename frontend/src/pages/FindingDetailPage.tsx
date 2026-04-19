@@ -12,6 +12,7 @@ import { formatDistanceToNow, format } from 'date-fns'
 import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw, GitBranch, ClipboardCopy, Check, X } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import MarkdownContent from '../components/common/MarkdownContent'
 
 const JIRA_STATUS_COLORS: Record<string, string> = {
   'To Do': 'bg-nyx-eclipse text-nyx-mist',
@@ -296,8 +297,8 @@ export default function FindingDetailPage() {
         <div className="lg:col-span-2 space-y-4">
           {/* Title & Description */}
           <div className="nyx-card p-5">
-            <h1 className="text-nyx-moonbeam text-xl font-bold mb-2">{finding.title}</h1>
-            <p className="text-nyx-mist text-sm leading-relaxed">{finding.description}</p>
+            <h1 className="text-nyx-moonbeam text-xl font-bold mb-3">{finding.title}</h1>
+            <MarkdownContent>{finding.description}</MarkdownContent>
             {finding.owasp_category && (
               <span className="mt-2 inline-block nyx-badge bg-indigo-900/30 text-indigo-400 border border-indigo-800/30">
                 {finding.owasp_category}
@@ -347,11 +348,11 @@ export default function FindingDetailPage() {
           {/* Remediation Guidance */}
           {finding.remediation_guidance && (
             <div className="nyx-card p-5">
-              <h3 className="text-nyx-moonbeam font-semibold mb-2 flex items-center gap-2">
+              <h3 className="text-nyx-moonbeam font-semibold mb-3 flex items-center gap-2">
                 <AlertTriangle size={14} className="text-nyx-amethyst" />
                 Remediation Guidance
               </h3>
-              <p className="text-nyx-mist text-sm leading-relaxed">{finding.remediation_guidance}</p>
+              <MarkdownContent>{finding.remediation_guidance}</MarkdownContent>
             </div>
           )}
 

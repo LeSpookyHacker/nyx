@@ -35,6 +35,7 @@ The most common things that break, and what to do about them. If your issue is n
 - **Header typo:** it is `X-API-Key`, not `X-Api-Key` or `Authorization`.
 - **Key not seeded:** on first start, Nyx seeds a key from `NYX_API_KEY`. If that was unset, no key exists. Either set it and restart, or create one via the dashboard.
 - **Key revoked or expired:** check Settings → API Keys.
+- **Scanner-scoped key returns 401 from CI:** if your key was created with an expiry and the backend logs show `DB API key lookup failed … TypeError: can't compare offset-naive and offset-aware datetimes`, you are on a version prior to the timezone fix. Pull the latest and rebuild the backend image (`docker compose build backend && docker compose up -d backend`).
 
 ### Cookie session won't persist
 - **Not using HTTPS in prod:** cookies with the `Secure` flag won't stick on HTTP. Either enable TLS, or leave `ENVIRONMENT=development` / `HTTPS_ONLY=false` for local use.

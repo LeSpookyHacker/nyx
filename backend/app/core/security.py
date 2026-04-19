@@ -392,7 +392,10 @@ async def require_api_key(
             record = result.scalar_one_or_none()
             if record is not None:
                 now = datetime.now(timezone.utc)
-                if record.expires_at and record.expires_at < now:
+                expires = record.expires_at
+                if expires is not None and expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires and expires < now:
                     logger.warning(
                         "AUTH_FAILURE ip=%s endpoint=%s reason=expired key_id=%s",
                         ip, request.url.path, record.id,

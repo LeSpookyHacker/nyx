@@ -1,13 +1,17 @@
 """SBOM submission, history, and alert management."""
 from __future__ import annotations
 
+import csv
+import io
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -215,6 +219,104 @@ async def list_sbom_history(
         .limit(limit)
     )
     return [_sbom_response(s) for s in result.scalars().all()]
+
+
+# ── Export ────────────────────────────────────────────────────────────────────
+
+@router.get("/repositories/{repo_id}/export")
+async def export_sbom(
+    repo_id: str,
+    format: str = Query("cyclonedx", pattern="^(cyclonedx|csv)$"),
+    sbom_id: Optional[str] = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """
+    Export an SBOM snapshot as CycloneDX JSON or CSV.
+
+    Defaults to the latest snapshot. Pass sbom_id to export a specific historical snapshot.
+    """
+    repo_result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = repo_result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    if sbom_id:
+        result = await db.execute(
+            select(Sbom).where(Sbom.id == sbom_id, Sbom.repository_id == repo_id)
+        )
+    else:
+        result = await db.execute(
+            select(Sbom)
+            .where(Sbom.repository_id == repo_id)
+            .order_by(Sbom.created_at.desc())
+            .limit(1)
+        )
+    sbom = result.scalar_one_or_none()
+    if not sbom:
+        raise HTTPException(status_code=404, detail="No SBOM found for this repository")
+
+    components = sbom_service.components_from_json(sbom.components_json)
+    repo_slug = repo.github_full_name.replace("/", "-")
+    date_str = sbom.created_at.strftime("%Y%m%d") if sbom.created_at else "unknown"
+
+    if format == "cyclonedx":
+        payload = _build_cyclonedx(sbom, components, repo)
+        filename = f"sbom-{repo_slug}-{date_str}.cdx.json"
+        return StreamingResponse(
+            io.BytesIO(json.dumps(payload, indent=2).encode()),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    # CSV
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["name", "version", "purl", "license", "type"])
+    for c in components:
+        writer.writerow([c.name, c.version, c.purl or "", c.license or "", c.component_type])
+    filename = f"sbom-{repo_slug}-{date_str}.csv"
+    return StreamingResponse(
+        io.BytesIO(buf.getvalue().encode()),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _build_cyclonedx(sbom: "Sbom", components: list, repo: "Repository") -> dict:
+    """Reconstruct a CycloneDX 1.4 JSON document from stored normalized components."""
+    cdx_components = []
+    for c in components:
+        entry: Dict[str, Any] = {
+            "type": c.component_type or "library",
+            "name": c.name,
+            "version": c.version,
+        }
+        if c.purl:
+            entry["purl"] = c.purl
+        if c.license:
+            entry["licenses"] = [{"license": {"id": c.license}}]
+        cdx_components.append(entry)
+
+    tool_entry: Dict[str, Any] = {"vendor": "Nyx", "name": "Nyx Security Platform"}
+    if sbom.tool:
+        tool_entry["version"] = sbom.tool
+
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.4",
+        "version": 1,
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "metadata": {
+            "timestamp": sbom.created_at.isoformat() if sbom.created_at else datetime.now(timezone.utc).isoformat(),
+            "tools": [tool_entry],
+            "component": {
+                "type": "application",
+                "name": repo.github_full_name,
+            },
+        },
+        "components": cdx_components,
+    }
 
 
 # ── Alerts ────────────────────────────────────────────────────────────────────

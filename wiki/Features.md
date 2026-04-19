@@ -160,8 +160,15 @@ A print-ready report covers KPIs, trends, scanner breakdown by severity, SLA sta
 ### AI cost dashboard
 Token usage totals, estimated Claude API spend (using published pricing), daily time series, and top-10 most expensive remediations.
 
-### SBOM generation and drift
+### SBOM generation, drift, and export
 Trivy produces a CycloneDX SBOM per repository on every scan. Nyx stores the latest and the previous, diffs them, and alerts on new components, removed components, or version bumps to vulnerable versions.
+
+From the SBOM page, each registered repository has two download buttons alongside the **Generate SBOM** trigger:
+
+- **CycloneDX** — reconstructs a valid CycloneDX 1.4 JSON document from stored components, compatible with Dependency-Track, Grype, OSV-Scanner, and vendor tooling. Filename: `sbom-<repo>-<date>.cdx.json`
+- **CSV** — flat spreadsheet with columns `name, version, purl, license, type`. Filename: `sbom-<repo>-<date>.csv`
+
+Both export the most recent SBOM snapshot by default. The export endpoint (`GET /api/v1/sbom/repositories/{id}/export?format=cyclonedx|csv`) also accepts an optional `sbom_id` query parameter to export any historical snapshot.
 
 ---
 

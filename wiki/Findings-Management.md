@@ -108,6 +108,8 @@ Everything you need to know about one finding:
 - Full audit trail
 - Action buttons: Request AI Fix, Generate Prompt, Assign, Suppress, Accept Risk, Mark Fixed
 
+**Description and remediation guidance** are rendered as formatted content — markdown from AI-generated sources (headings, bullet lists, inline code) and HTML from scanners like ZAP are both displayed cleanly rather than as raw markup.
+
 ---
 
 ## What next

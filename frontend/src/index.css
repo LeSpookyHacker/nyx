@@ -109,4 +109,33 @@
   .severity-info {
     @apply bg-slate-800/60 text-slate-400 border border-slate-700/40;
   }
+
+  /* Scanner-sourced HTML content (ZAP, Semgrep, etc.) */
+  .nyx-html-content p {
+    @apply text-nyx-mist leading-relaxed mb-2 last:mb-0;
+  }
+  .nyx-html-content ul {
+    @apply text-nyx-mist space-y-1 mb-2 pl-4 list-disc;
+  }
+  .nyx-html-content ol {
+    @apply text-nyx-mist space-y-1 mb-2 pl-4 list-decimal;
+  }
+  .nyx-html-content li {
+    @apply leading-relaxed;
+  }
+  .nyx-html-content a {
+    @apply text-nyx-stardust hover:text-nyx-amethyst underline underline-offset-2 transition-colors;
+  }
+  .nyx-html-content code {
+    @apply font-mono text-nyx-amethyst bg-nyx-eclipse/70 px-1 py-0.5 rounded border border-nyx-iris/20;
+  }
+  .nyx-html-content strong, .nyx-html-content b {
+    @apply text-nyx-moonbeam font-semibold;
+  }
+  .nyx-html-content em, .nyx-html-content i {
+    @apply italic text-nyx-mist/80;
+  }
+  .nyx-html-content h1, .nyx-html-content h2, .nyx-html-content h3 {
+    @apply text-nyx-moonbeam font-semibold mt-3 mb-1.5 first:mt-0;
+  }
 }

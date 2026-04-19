@@ -41,6 +41,26 @@ Pick a framework from the selector and see:
 | **Drill-down** | Click a control to see all open findings mapped to it |
 | **Trend** | 30 / 60 / 90 day coverage line |
 
+### Repository filter
+
+A row of tiles above the framework gauges lets you narrow every metric on the page to a single repository:
+
+- **All Repositories** (default) — aggregate across every registered repo
+- **Per-repo tiles** — one tile per registered repository. Click to filter; the framework gauges, control list, and findings drill-down all update to reflect only that repo's data. Click the selected tile again to reset.
+
+### Exporting compliance metrics
+
+The **Export** button (top-right of the page) opens a dropdown with four options:
+
+| Option | Contents |
+|---|---|
+| **Current view — JSON** | Full framework report for the active framework and current repo filter |
+| **Current view — CSV** | Same data as a flat spreadsheet: Framework, Repository Scope, Control ID, Title, Status, Open Findings, Total Findings, Coverage % |
+| **All repositories — JSON** | Same framework, unfiltered across all repos (only shown when a repo filter is active) |
+| **All repositories — CSV** | Same as above in CSV format |
+
+Files are named descriptively, e.g. `compliance-pci-dss-my-repo-2026-04-19.csv`. CSV format is ideal for sharing with auditors; JSON preserves the full report structure for tooling.
+
 ---
 
 ## Custom frameworks

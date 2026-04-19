@@ -92,6 +92,8 @@ Every fix response is expected to be structured:
 
 Unstructured responses are retried once with a stricter schema reminder. A second failure is marked `PARSE_ERROR` and queued for human review.
 
+The **explanation** field renders as formatted markdown in the UI — headings, bullet lists, and inline code are all displayed cleanly. The **diff** is displayed as a colour-coded view with green addition lines, red deletion lines, and dimmed context lines.
+
 ---
 
 ## Diff security scanning
