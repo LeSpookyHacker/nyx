@@ -125,6 +125,38 @@ checkov -f Dockerfile --output json > checkov-results.json
 
 ---
 
+## Hadolint — Dockerfile linting
+
+```bash
+# macOS
+brew install hadolint
+
+hadolint -f json Dockerfile > hadolint-results.json
+
+# Push with scanner: "HADOLINT"
+```
+
+Catches Dockerfile best-practice violations (pinned base images, `USER` directive present, no `ADD` when `COPY` would do, shell form vs exec form, etc.). The shipped `nyx-scan.yml` runs Hadolint automatically when a `Dockerfile` is present.
+
+---
+
+## Gitleaks — secrets detection across full git history
+
+```bash
+# macOS
+brew install gitleaks
+
+gitleaks detect --source . --report-format json --report-path gitleaks-results.json
+
+# Push with scanner: "GITLEAKS"
+```
+
+Gitleaks scans the **entire git history**, not just the current working tree — so it catches secrets that were committed and later removed without rotation. This is why the shipped `nyx-scan-gitleaks.yml` workflow uses `fetch-depth: 0` on the checkout step. Running it on shallow clones silently misses findings.
+
+> If you set `GITLEAKS_CONFIG` to a path, Gitleaks reads custom rules from there. Useful for suppressing known-safe placeholders without polluting the default rule set.
+
+---
+
 ## OWASP ZAP — DAST
 
 ```bash
@@ -149,9 +181,15 @@ Nyx polls the GitHub Code Scanning API for every registered repo and imports ale
 
 ---
 
+## Dependabot — automatic pull
+
+Also no CI step. Dependabot alerts are pulled from GitHub's API on the same schedule as Code Scanning and dedup against Snyk/Grype by CVE. As long as Dependabot is enabled on the repo and your GitHub token carries the `security_events` scope, Nyx picks them up automatically. See **[CI/CD Integration](CICD-Integration.md)** for the Dependabot-specific notes.
+
+---
+
 ## All-in-one GitHub Actions workflow
 
-The canonical `nyx-scan.yml` that runs Semgrep, Bandit, Trivy, Grype, and Checkov in parallel and pushes results to Nyx lives at `.github/workflows/nyx-scan.yml`. Deploy it to any registered repository with the **Push Workflow** button (Repositories → repo → Push Workflow). See **[CI/CD Integration](CICD-Integration.md)** for the full breakdown.
+The canonical `nyx-scan.yml` that runs Semgrep, Bandit, Trivy, Grype, Checkov, Hadolint, and Gitleaks in parallel and pushes results to Nyx lives at `.github/workflows/nyx-scan.yml`. Deploy it to any registered repository with the **Push Workflow** button (Repositories → repo → Push Workflow). A dedicated `nyx-scan-gitleaks.yml` is also shipped for teams that want secrets scanning on a separate schedule (for example, scanning the full history weekly while the main workflow runs on every push). See **[CI/CD Integration](CICD-Integration.md)** for the full breakdown.
 
 <!-- IMAGE: A GitHub Actions run of nyx-scan.yml with all scanners green.
      File: wiki/images/github-actions-run.png -->
@@ -166,10 +204,11 @@ When you register a repo, Nyx inspects its contents and recommends the best scan
 
 | File detected | Scanner suggested |
 |---|---|
+| Any repo with a `.git` directory | Gitleaks |
 | `requirements.txt`, `pyproject.toml` | Bandit, Semgrep, Grype |
 | `package.json` | Semgrep, Snyk, Grype |
 | `go.mod` | Semgrep, Grype |
-| `Dockerfile` | Trivy, Checkov |
+| `Dockerfile` | Trivy, Checkov, Hadolint |
 | `*.tf`, `terraform/` | Checkov, Trivy |
 | `k8s/`, `*.yaml` (manifests) | Checkov, Trivy |
 | Any web-facing app | ZAP (manual configuration) |

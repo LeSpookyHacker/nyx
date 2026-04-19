@@ -129,7 +129,7 @@ All AI fix requests — pending, streaming, completed, low-confidence, or flagge
 
 ## Compliance (`/compliance`)
 
-Control coverage by framework. Pick PCI DSS, SOC 2, NIST 800-53, CIS, OWASP Top 10, or any custom framework you have defined. Each control shows:
+Control coverage by framework. Pick PCI DSS, SOC 2, HIPAA, NIST CSF, ISO 27001, or any custom framework you have defined. Each control shows:
 
 - Coverage percentage
 - Open findings mapped to it

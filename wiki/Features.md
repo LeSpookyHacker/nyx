@@ -9,7 +9,7 @@ A full tour of what Nyx does, grouped by category.
 ## 1. Finding ingestion and consolidation
 
 ### Multi-scanner ingestion
-Nyx accepts raw JSON output from eight first-class scanners and converts each into a unified `Finding` record. Supported today:
+Nyx accepts raw JSON output from eleven first-class scanners and converts each into a unified `Finding` record. Supported today:
 
 | Scanner | Type | Languages / targets |
 |---|---|---|
@@ -19,8 +19,11 @@ Nyx accepts raw JSON output from eight first-class scanners and converts each in
 | **Snyk** | SCA | Package manifests |
 | **Grype** | SCA | Images, dir scans |
 | **Checkov** | IaC | Terraform, K8s, Dockerfile |
+| **Hadolint** | IaC | Dockerfile best practices |
+| **Gitleaks** | Secrets | Hardcoded credentials across full git history |
 | **OWASP ZAP** | DAST | Any HTTP endpoint |
 | **GitHub Code Scanning** | SAST (polled) | Whatever CodeQL / partners are configured |
+| **Dependabot** | SCA (polled) | GitHub-native dependency alerts |
 
 Each scanner has a dedicated **normalizer** under `backend/app/services/normalization/` that maps its schema onto Nyx's `Finding` shape. Adding a new scanner is a matter of implementing one class — see **[Adding a Scanner](Adding-a-Scanner.md)**.
 
@@ -140,11 +143,11 @@ Every state-changing action is logged with `entry_hash` and `prev_hash` — walk
 ### Compliance mapping
 Findings are mapped to controls in:
 
-- **PCI DSS** (4.0)
-- **SOC 2** Trust Services Criteria
-- **NIST 800-53** Rev 5
-- **CIS Controls** v8
-- **OWASP Top 10** (2021)
+- **PCI DSS** 4.0
+- **SOC 2** Type II (Trust Services Criteria)
+- **HIPAA** Security Rule
+- **NIST CSF** 2.0
+- **ISO 27001:2022**
 
 Custom frameworks can be defined in the DB — see **[Compliance](Compliance.md)**.
 

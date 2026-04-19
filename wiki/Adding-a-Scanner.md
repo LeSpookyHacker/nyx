@@ -26,6 +26,8 @@ class AbstractNormalizer(Protocol):
 
 ## Walkthrough — adding Gitleaks
 
+> **Heads up:** Gitleaks is now shipped by default — the normalizer below already lives at `backend/app/services/normalization/gitleaks.py` and is pre-registered. This walkthrough is kept as a complete, working example of the pattern. Read it end-to-end to understand the shape of a normalizer, then substitute your own scanner (TruffleHog, KICS, Nuclei, etc.) and adjust the fields.
+
 Suppose you want to add Gitleaks (secrets scanning). Three steps:
 
 ### 1. Write the normalizer

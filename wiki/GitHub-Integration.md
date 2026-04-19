@@ -170,7 +170,7 @@ curl -X POST "https://your-nyx-url/api/v1/repositories" \
 
 ## Push the scan workflow to a repo
 
-Nyx ships a canonical `nyx-scan.yml` GitHub Actions workflow that runs five scanners and posts results back. You do not need to copy it manually — use the **Push Workflow** button on the repository detail page.
+Nyx ships a canonical `nyx-scan.yml` GitHub Actions workflow that runs seven scanners (Semgrep, Bandit, Trivy, Grype, Checkov, Hadolint, Gitleaks) in parallel and posts results back. You do not need to copy it manually — use the **Push Workflow** button on the repository detail page.
 
 1. Repositories → click your repo → **Push Workflow**
 2. Pick the target branch (default: `main`)

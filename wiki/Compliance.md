@@ -9,10 +9,10 @@ Nyx maps every finding to one or more control frameworks so auditors (and your C
 Out of the box:
 
 - **PCI DSS** 4.0
-- **SOC 2** Trust Services Criteria (Common Criteria, Confidentiality, Availability)
-- **NIST 800-53** Rev 5
-- **CIS Controls** v8
-- **OWASP Top 10** 2021
+- **SOC 2** Type II (Trust Services Criteria — Common Criteria, Confidentiality, Availability)
+- **HIPAA** Security Rule (administrative, physical, and technical safeguards)
+- **NIST CSF** 2.0
+- **ISO 27001:2022** (Annex A controls)
 
 Plus any **custom framework** you define from the Compliance page in the dashboard — controls and mappings are stored in the `custom_frameworks` / `custom_controls` tables and are always available, no feature flag required.
 

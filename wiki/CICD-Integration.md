@@ -6,7 +6,7 @@ Wire Nyx into your continuous integration so every push triggers the right scans
 
 ## The canonical workflow
 
-Nyx ships a ready-to-use GitHub Actions workflow at `.github/workflows/nyx-scan.yml`. It runs five scanners in parallel (Semgrep, Bandit, Trivy, Grype, Checkov), pushes each result to Nyx via `POST /scans/import-json`, and fails the build if critical findings regress.
+Nyx ships a ready-to-use GitHub Actions workflow at `.github/workflows/nyx-scan.yml`. It runs seven scanners in parallel (Semgrep, Bandit, Trivy, Grype, Checkov, Hadolint, Gitleaks), pushes each result to Nyx via `POST /scans/import-json`, and fails the build if critical findings regress. A second shipped workflow, `nyx-scan-gitleaks.yml`, is a dedicated secrets-only pipeline for teams that want to scan the full git history on a different cadence than the main workflow.
 
 ### Push it with one click
 

@@ -4,7 +4,7 @@
 
 ### What does Nyx actually do?
 
-It ingests scanner output (Semgrep, Bandit, Trivy, Snyk, Grype, Checkov, ZAP, GitHub Code Scanning), deduplicates across scanners, ranks findings by a composite priority score, uses Claude to generate fix PRs, tracks SLAs, maps findings to compliance frameworks, and produces reports for leadership. Short version: a single pane of glass for security findings across every repo and scanner, with an AI doing the boring part.
+It ingests scanner output (Semgrep, Bandit, Trivy, Snyk, Grype, Checkov, Hadolint, Gitleaks, ZAP, GitHub Code Scanning, Dependabot), deduplicates across scanners, ranks findings by a composite priority score, uses Claude to generate fix PRs, tracks SLAs, maps findings to compliance frameworks, and produces reports for leadership. Short version: a single pane of glass for security findings across every repo and scanner, with an AI doing the boring part.
 
 ---
 

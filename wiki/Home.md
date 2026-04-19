@@ -43,14 +43,14 @@ Nyx sits between your scanners and your engineers. It ingests results from every
 ### Integrations
 - **[GitHub Integration](GitHub-Integration.md)** — PAT vs GitHub App, webhooks, Check Runs, Code Scanning sync
 - **[JIRA Integration](JIRA-Integration.md)** — API token, project mapping, bidirectional sync
-- **[Scanner Integrations](Scanners.md)** — Semgrep, Bandit, Trivy, Snyk, Grype, Checkov, ZAP, GitHub Code Scanning
+- **[Scanner Integrations](Scanners.md)** — Semgrep, Bandit, Trivy, Snyk, Grype, Checkov, Hadolint, Gitleaks, ZAP, GitHub Code Scanning, Dependabot
 - **[CI/CD Integration](CICD-Integration.md)** — GitHub Actions template, scanner-scoped API keys, push-on-merge flow
 
 ### Day-to-day use
 - **[AI Remediation](AI-Remediation.md)** — how Claude generates, scores, and streams fixes
 - **[Findings Management](Findings-Management.md)** — triage, suppression, assignment, risk acceptance
 - **[SLA Policies](SLA-Policies.md)** — per-severity deadlines, escalation, breach reporting
-- **[Compliance Mapping](Compliance.md)** — PCI DSS, SOC 2, NIST 800-53, CIS, OWASP Top 10, custom frameworks
+- **[Compliance Mapping](Compliance.md)** — PCI DSS, SOC 2, HIPAA, NIST CSF, ISO 27001, custom frameworks
 - **[Reports & Analytics](Reports.md)** — executive PDFs, velocity, MTTR, AI cost, risk-over-time
 
 ### Operations
