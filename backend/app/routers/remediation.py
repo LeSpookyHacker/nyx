@@ -80,10 +80,29 @@ async def _run_ai_fix(remediation_id: str, finding_id: str, engineer_context: st
                     repo.default_branch,
                 )
 
+            # Fetch directory listing for richer AI context
+            import os as _os
+            dir_files: list[str] = []
+            if finding.file_path and repo:
+                _dir = _os.path.dirname(finding.file_path) or "."
+                try:
+                    dir_files = await github_service.list_directory(
+                        repo.github_full_name, _dir, repo.default_branch
+                    )
+                except Exception:
+                    pass
+
             # Generate fix with Claude
             fix_result = await ai_service.generate_fix(
-                finding, file_content, engineer_context, test_file_contents
+                finding, file_content, engineer_context, test_file_contents, dir_files
             )
+
+            # Surface scope issues as diff warnings so engineers see them during review,
+            # not only as a hard failure at PR creation time.
+            try:
+                _validate_diff_scope(fix_result.fix_diff, finding.file_path)
+            except ValueError as scope_err:
+                fix_result.diff_warnings.append(f"Scope warning: {scope_err}")
 
             remediation.ai_explanation = fix_result.explanation
             remediation.ai_fix_diff = fix_result.fix_diff
@@ -758,8 +777,19 @@ async def stream_remediation(
 
     engineer_context = rem.engineer_context or ""
 
+    import os as _os
+    dir_files: list[str] = []
+    if finding and finding.file_path and repo:
+        _dir = _os.path.dirname(finding.file_path) or "."
+        try:
+            dir_files = await github_service.list_directory(
+                repo.github_full_name, _dir, repo.default_branch
+            )
+        except Exception:
+            pass
+
     return StreamingResponse(
-        ai_service.stream_fix_generation(finding, file_content, engineer_context),
+        ai_service.stream_fix_generation(finding, file_content, engineer_context, dir_files),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

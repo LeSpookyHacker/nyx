@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -41,14 +42,20 @@ _CWE_ID_RE = re.compile(r"^CWE-\d+$")
 # Simple heuristic patterns that indicate a generated diff may introduce issues.
 # These are coarse checks — not a full SAST — but catch common AI blunders.
 _DIFF_SECURITY_PATTERNS = [
+    # Python
     (re.compile(r"^\+.*os\.system\s*\(", re.MULTILINE), "os.system() call introduced"),
     (re.compile(r"^\+.*subprocess\..*shell\s*=\s*True", re.MULTILINE), "shell=True in subprocess"),
     (re.compile(r"^\+.*eval\s*\(", re.MULTILINE), "eval() call introduced"),
     (re.compile(r"^\+.*exec\s*\(", re.MULTILINE), "exec() call introduced"),
     (re.compile(r'^\+.*password\s*=\s*["\'][^"\']{4,}["\']', re.MULTILINE | re.IGNORECASE), "hardcoded credential"),
     (re.compile(r'^\+.*secret\s*=\s*["\'][^"\']{4,}["\']', re.MULTILINE | re.IGNORECASE), "hardcoded secret"),
-    (re.compile(r"^\+.*TODO.*bypass", re.MULTILINE | re.IGNORECASE), "bypass TODO in diff"),
     (re.compile(r"^\+.*# noqa.*security", re.MULTILINE | re.IGNORECASE), "security check silenced"),
+    # JavaScript / TypeScript
+    (re.compile(r"^\+.*child_process\.exec\s*\(", re.MULTILINE), "child_process.exec() call introduced"),
+    (re.compile(r"^\+.*child_process\.spawn\s*\(", re.MULTILINE), "child_process.spawn() call introduced"),
+    (re.compile(r"^\+.*shell\s*:\s*true", re.MULTILINE | re.IGNORECASE), "shell: true in child_process options"),
+    # Cross-language: bypass TODOs in any comment style (# Python, // JS/Java/Go/C, -- SQL)
+    (re.compile(r"^\+.*(?:#|//|--)\s*TODO.*bypass", re.MULTILINE | re.IGNORECASE), "bypass TODO in diff"),
 ]
 
 
@@ -117,6 +124,7 @@ async def generate_fix(
     file_content: str,
     engineer_context: str = "",
     test_file_contents: Optional[dict[str, str]] = None,
+    dir_files: Optional[list[str]] = None,
 ) -> AIFixResult:
     """
     Generate an AI-powered fix for a security finding.
@@ -126,6 +134,7 @@ async def generate_fix(
         file_content: Current content of the vulnerable file
         engineer_context: Optional additional context from the security engineer
         test_file_contents: Optional dict of {filename: content} for related test files
+        dir_files: Optional sorted list of filenames in the same directory as the finding
 
     Returns:
         AIFixResult with the generated fix
@@ -157,11 +166,16 @@ async def generate_fix(
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
-    # Build test context snippet
+    # Build test context and directory context blocks
     test_context_block = _build_test_context(test_file_contents)
+    dir_context = _build_dir_context(
+        os.path.dirname(finding.file_path or "") or ".",
+        dir_files or [],
+        os.path.basename(finding.file_path or ""),
+    ) if dir_files else ""
 
     # Step 1: Generate the fix diff
-    fix_prompt = _build_fix_prompt(finding, truncated_content, owasp_info, safe_context, test_context_block)
+    fix_prompt = _build_fix_prompt(finding, truncated_content, owasp_info, safe_context, test_context_block, dir_context)
 
     last_error = None
     for attempt in range(settings.AI_MAX_RETRIES + 1):
@@ -281,6 +295,7 @@ async def stream_fix_generation(
     finding: Finding,
     file_content: str,
     engineer_context: str = "",
+    dir_files: Optional[list[str]] = None,
 ) -> AsyncIterator[str]:
     """
     Stream the AI fix generation as Server-Sent Event data chunks.
@@ -308,7 +323,13 @@ async def stream_fix_generation(
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
-    fix_prompt = _build_fix_prompt(finding, truncated_content, owasp_info, safe_context, "")
+    dir_context = _build_dir_context(
+        os.path.dirname(finding.file_path or "") or ".",
+        dir_files or [],
+        os.path.basename(finding.file_path or ""),
+    ) if dir_files else ""
+
+    fix_prompt = _build_fix_prompt(finding, truncated_content, owasp_info, safe_context, "", dir_context)
 
     yield f"data: {_json.dumps({'type': 'status', 'message': 'Generating fix diff...'})}\n\n"
 
@@ -371,12 +392,27 @@ def _build_test_context(test_file_contents: Optional[dict[str, str]]) -> str:
     return "\n".join(parts)
 
 
+def _build_dir_context(dir_path: str, files: list[str], target_filename: str) -> str:
+    """Build a compact directory listing block to orient Claude within the package."""
+    if not files:
+        return ""
+    capped = files[:50]
+    lines = [f"\n## Repository Context\n### Directory: {dir_path}/"]
+    for f in capped:
+        marker = "  ← target file" if f == target_filename else ""
+        lines.append(f"  - {f}{marker}")
+    if len(files) > 50:
+        lines.append(f"  ... ({len(files) - 50} more files not shown)")
+    return "\n".join(lines)
+
+
 def _build_fix_prompt(
     finding: Finding,
     file_content: str,
     owasp_info: str,
     engineer_context: str,
     test_context_block: str,
+    dir_context: str = "",
 ) -> str:
     cwe_str = ""
     try:
@@ -423,6 +459,7 @@ def _build_fix_prompt(
 
         <!-- END FINDING DATA -->
         {additional}
+        {dir_context}
         {test_context_block}
 
         ## Vulnerable File Content
@@ -431,6 +468,22 @@ def _build_fix_prompt(
         {_FILE_CONTENT_END}
 
         ## Your Task
+
+        Before outputting your diff, mentally verify ALL of the following.
+        If any check fails, output `NO_CODE_FIX: <reason>` instead of a diff.
+
+        1. LINE EXISTENCE  — Every line you are removing or modifying appears verbatim
+           in the file content shown above.
+        2. LINE NUMBERS    — Your @@ hunk headers use line numbers from the ORIGINAL file.
+           If a "Context window: lines N–M" note appears above, your hunk line numbers
+           must fall within that N–M range.
+        3. SCOPE           — Every changed line directly addresses this vulnerability.
+           No unrelated refactoring, cleanup, or style changes.
+        4. COMPLETENESS    — The fix fully eliminates the root cause, not just a symptom.
+        5. SAFETY          — The fix introduces no eval(), exec(), shell commands,
+           hardcoded secrets, path traversal, or other security anti-patterns.
+        6. SYNTAX          — The resulting code is syntactically valid in the target language.
+
         Produce a unified diff (standard `diff -u` format) that fixes ONLY this specific vulnerability.
         - Start with `--- a/{safe_file_path}`
         - Then `+++ b/{safe_file_path}`
@@ -539,10 +592,23 @@ def _extract_diff(text: str) -> str:
     return text
 
 
+def _strip_json_markdown(text: str) -> str:
+    """Remove markdown code-fence wrappers (```json ... ``` or ``` ... ```) from a response."""
+    text = text.strip()
+    if text.startswith("```"):
+        newline = text.find("\n")
+        if newline != -1:
+            text = text[newline + 1:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
+    return text
+
+
 def _parse_explanation(text: str) -> tuple[str, str, float]:
     """Parse the explanation JSON response from Claude."""
     try:
-        data = json.loads(text)
+        data = json.loads(_strip_json_markdown(text))
         explanation = data.get("explanation", "")
         fix_summary = data.get("fix_summary", "fix: address security vulnerability")
         confidence = float(data.get("confidence", 0.7))
@@ -556,7 +622,7 @@ def _parse_explanation(text: str) -> tuple[str, str, float]:
 def _parse_alternatives(text: str, file_path: str) -> list[AIAlternativeFix]:
     """Parse the alternatives JSON array response from Claude."""
     try:
-        data = json.loads(text)
+        data = json.loads(_strip_json_markdown(text))
         if not isinstance(data, list):
             return []
         result = []
@@ -608,10 +674,16 @@ def _scan_diff_for_issues(diff: str, reported_line: Optional[int]) -> list[str]:
     return warnings
 
 
+_FILE_HEADER_LINES = 30
+
+
 def _truncate_file(content: str, focus_line: Optional[int], max_lines: int) -> str:
     """
     If file is too large, extract a window around the vulnerable line.
-    Always returns at most max_lines lines.
+    Always returns at most max_lines lines of the window, plus up to
+    _FILE_HEADER_LINES of the file header (imports/class defs) when the
+    window starts mid-file. Emits explicit line-range comments so Claude
+    can write correct hunk headers.
     """
     lines = content.splitlines(keepends=True)
     if len(lines) <= max_lines:
@@ -621,8 +693,23 @@ def _truncate_file(content: str, focus_line: Optional[int], max_lines: int) -> s
         half = max_lines // 2
         start = max(0, focus_line - half - 1)
         end = min(len(lines), focus_line + half)
-        truncated = lines[start:end]
-        header = f"# [File truncated to {max_lines} lines around line {focus_line}]\n"
-        return header + "".join(truncated)
+
+        window_note = (
+            f"# [Context window: lines {start + 1}–{end}"
+            f" — use these line numbers in your diff hunk headers]\n"
+        )
+
+        if start > _FILE_HEADER_LINES:
+            header_section = "".join(lines[:_FILE_HEADER_LINES])
+            window_section = "".join(lines[start:end])
+            return (
+                f"# [File header: lines 1–{_FILE_HEADER_LINES}]\n"
+                + header_section
+                + f"\n# [...lines {_FILE_HEADER_LINES + 1}–{start} omitted...]\n"
+                + window_note
+                + window_section
+            )
+
+        return window_note + "".join(lines[start:end])
 
     return "".join(lines[:max_lines])

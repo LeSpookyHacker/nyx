@@ -587,6 +587,22 @@ async def get_file_content(repo_full_name: str, file_path: str, ref: str = "") -
         raise GitHubError(f"Failed to fetch {file_path} from {repo_full_name}: {e}") from e
 
 
+async def list_directory(repo_full_name: str, dir_path: str, ref: str = "") -> list[str]:
+    """Return sorted list of entry names in a repository directory. Returns [] on any error."""
+    def _sync():
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        kwargs = {"ref": ref} if ref else {}
+        contents = repo.get_contents(dir_path or ".", **kwargs)
+        if isinstance(contents, list):
+            return sorted(item.name for item in contents)
+        return []
+    try:
+        return await asyncio.to_thread(_sync)
+    except Exception:
+        return []
+
+
 async def create_fix_pr(
     repo_full_name: str,
     file_path: str,
