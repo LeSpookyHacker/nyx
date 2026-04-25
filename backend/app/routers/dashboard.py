@@ -236,11 +236,11 @@ async def get_hot_repos(
         repo = repo_res.scalar_one_or_none()
         if repo:
             hot.append({
-                "repository_id": row.repository_id,
-                "github_full_name": repo.github_full_name,
+                "id": repo.id,
+                "name": repo.github_full_name,
                 "new_findings": row.new_findings,
-                "critical_new": row.critical_new or 0,
-                "high_new": row.high_new or 0,
+                "open_critical": row.critical_new or 0,
+                "open_high": row.high_new or 0,
                 "risk_score": repo.risk_score,
             })
     return hot
@@ -271,7 +271,7 @@ async def get_coverage_gaps(
         scanners = set(s.strip().upper() for s in repo.enabled_scanners.split(",") if s.strip())
 
         if not scanners:
-            unconfigured.append({"id": repo.id, "github_full_name": repo.github_full_name})
+            unconfigured.append({"id": repo.id, "name": repo.github_full_name})
             continue
 
         last_scan = repo.last_scan_at.replace(tzinfo=timezone.utc) if repo.last_scan_at and repo.last_scan_at.tzinfo is None else repo.last_scan_at
@@ -279,7 +279,7 @@ async def get_coverage_gaps(
             days_since = int((now - last_scan).days) if last_scan else 9999
             stale.append({
                 "id": repo.id,
-                "github_full_name": repo.github_full_name,
+                "name": repo.github_full_name,
                 "last_scan_at": repo.last_scan_at,
                 "days_since_scan": days_since,
             })
@@ -288,12 +288,12 @@ async def get_coverage_gaps(
         if missing:
             partial.append({
                 "id": repo.id,
-                "github_full_name": repo.github_full_name,
-                "has_scanners": list(scanners),
+                "name": repo.github_full_name,
+                "scanner_count": len(scanners),
                 "missing_categories": missing,
             })
 
-    return {"stale_repos": stale, "unconfigured_repos": unconfigured, "partial_coverage": partial}
+    return {"stale_repos": stale, "no_scanner_repos": unconfigured, "partial_repos": partial}
 
 
 @router.get("/regressions")

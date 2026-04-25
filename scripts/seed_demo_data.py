@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 """
-Seed Nyx with rich demo data for three repositories.
+Seed Nyx with rich demo data for four repositories.
 
 Creates:
-  - 3 repos under acme-corp (payments-api, web-frontend, infra-terraform)
+  - 4 repos under acme-corp (payments-api, web-frontend, infra-terraform, auth-service)
   - 12 weeks of scan history per repo (multiple scanners, realistic cadence)
-  - ~30 findings per repo (varied severities, statuses, first_seen spread over 90 days)
-  - JIRA links on ~40% of CRITICAL/HIGH findings
-  - Proper repo stat counts so dashboards render immediately
+  - ~60+ findings across repos (varied severities, statuses, first_seen spread)
+  - Recent findings (<5 days old) on each repo — populates Hot Repos widget
+  - 3 regression findings — triggers the regression alert banner
+  - JIRA links on ~40% of CRITICAL/HIGH open findings
+  - 30 days of RepoRiskHistory — populates the Org Risk Score chart
+  - Proper repo aggregate stats so dashboards render immediately
 
 Run inside the backend container:
     docker compose cp scripts/seed_demo_data.py backend:/tmp/seed_demo_data.py
     docker compose exec -e PYTHONPATH=/app backend python3 /tmp/seed_demo_data.py
+
+Special keys in finding templates (stripped before DB insert):
+  _recent     — first_seen_at within last 5 days (drives Hot Repos widget)
+  _regression — is_regression=True, forced OPEN status, recent regression_detected_at
 """
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import random
 import sys
 from datetime import datetime, timedelta, timezone
@@ -31,6 +37,7 @@ from app.core.constants import FindingStatus, ScanStatus, ScanTrigger, Severity
 from app.database import AsyncSessionLocal, init_db
 from app.models.finding import Finding
 from app.models.jira_link import JiraLink
+from app.models.repo_risk_history import RepoRiskHistory
 from app.models.repository import Repository
 from app.models.scan import Scan
 
@@ -62,17 +69,22 @@ REPOS = [
         "is_private": True,
         "scanners": "CHECKOV,TRIVY,SEMGREP",
     },
+    {
+        "github_full_name": "acme-corp/auth-service",
+        "language": "Go",
+        "description": "OAuth 2.0 / OIDC identity provider — token issuance, MFA enforcement, and SSO for all internal services",
+        "is_private": True,
+        "scanners": "SEMGREP,TRIVY,GRYPE,SNYK",
+    },
 ]
 
 
-# ─── Finding templates per repo ────────────────────────────────────────────────
-# Each entry: (title, description, rule_id, scanner, severity, category, extras)
-# extras: file_path, line_start, code_snippet, cwe_ids, cve_id, cvss_score, url,
-#         remediation_guidance, is_exploitable, owasp_category
+# ─── Finding templates ─────────────────────────────────────────────────────────
 
 FINDINGS_PAYMENTS_API = [
-    # CRITICAL
+    # ── CRITICAL ──────────────────────────────────────────────────────────────
     {
+        "_recent": True,
         "title": "Hardcoded Stripe Secret Key",
         "description": "A Stripe live secret key is hardcoded in the configuration module. Anyone with repository access can use this key to process or refund payments.",
         "rule_id": "semgrep.python.stripe-secret-key",
@@ -81,12 +93,13 @@ FINDINGS_PAYMENTS_API = [
         "category": "SECRETS",
         "file_path": "payments/config.py",
         "line_start": 14,
-        "code_snippet": 'STRIPE_SECRET_KEY = "sk_test_DEMO_PLACEHOLDER_NOT_REAL_4eC39H"',
+        "code_snippet": 'STRIPE_SECRET_KEY = "sk_live_DEMO_PLACEHOLDER_NOT_REAL_4eC39H"',
         "cwe_ids": '["CWE-798"]',
         "remediation_guidance": "Move to environment variable or AWS Secrets Manager. Rotate the exposed key immediately.",
         "owasp_category": "A02:2021",
     },
     {
+        "_recent": True,
         "title": "CVE-2024-1135 — Gunicorn HTTP Request Smuggling",
         "description": "Gunicorn versions prior to 22.0.0 are vulnerable to HTTP request smuggling. An attacker can bypass security controls or poison caches.",
         "rule_id": "grype.CVE-2024-1135",
@@ -100,6 +113,7 @@ FINDINGS_PAYMENTS_API = [
         "remediation_guidance": "Upgrade gunicorn to >= 22.0.0.",
     },
     {
+        "_recent": True,
         "title": "SQL Injection in payment search endpoint",
         "description": "User-supplied order_id is concatenated directly into a raw SQL query, enabling full database read/write by an authenticated user.",
         "rule_id": "bandit.B608",
@@ -113,7 +127,7 @@ FINDINGS_PAYMENTS_API = [
         "remediation_guidance": "Use SQLAlchemy parameterized queries: db.execute(text('SELECT * FROM orders WHERE id = :id'), {'id': order_id})",
         "owasp_category": "A03:2021",
     },
-    # HIGH
+    # ── HIGH ──────────────────────────────────────────────────────────────────
     {
         "title": "Insecure deserialization — pickle used on user data",
         "description": "Pickle is used to deserialize data that originates from an HTTP request body. Pickle deserialization of untrusted data can lead to arbitrary code execution.",
@@ -183,7 +197,21 @@ FINDINGS_PAYMENTS_API = [
         "remediation_guidance": "Use bcrypt, argon2-cffi, or scrypt for password hashing.",
         "owasp_category": "A02:2021",
     },
-    # MEDIUM
+    {
+        "title": "Refund endpoint bypasses authorization check",
+        "description": "The /api/v1/refunds endpoint does not verify that the requesting user owns the original charge. Any authenticated user can refund any transaction.",
+        "rule_id": "semgrep.python.broken-access-control",
+        "scanner": "SEMGREP",
+        "severity": "HIGH",
+        "category": "SAST",
+        "file_path": "payments/api/refunds.py",
+        "line_start": 22,
+        "code_snippet": "    charge = Charge.objects.get(id=charge_id)  # no ownership check",
+        "cwe_ids": '["CWE-639", "CWE-284"]',
+        "remediation_guidance": "Add: if charge.user_id != request.user.id: raise PermissionDenied()",
+        "owasp_category": "A01:2021",
+    },
+    # ── MEDIUM ────────────────────────────────────────────────────────────────
     {
         "title": "Sensitive PII logged at INFO level",
         "description": "The payment processing function logs the full card object including masked PAN and cardholder name. Log aggregation systems may store this data insecurely.",
@@ -260,7 +288,7 @@ FINDINGS_PAYMENTS_API = [
         "cwe_ids": '["CWE-20"]',
         "remediation_guidance": "Look up the original charge amount from the database and cap refunds at that value.",
     },
-    # LOW
+    # ── LOW ───────────────────────────────────────────────────────────────────
     {
         "title": "HTTP timeout not set on external API calls",
         "description": "Requests to the fraud detection API do not specify a timeout, which can cause thread exhaustion under slow or unresponsive upstream services.",
@@ -310,11 +338,28 @@ FINDINGS_PAYMENTS_API = [
         "cwe_ids": '["CWE-209"]',
         "remediation_guidance": "Return generic error messages to clients. Log full exceptions server-side only.",
     },
+    # ── REGRESSION ────────────────────────────────────────────────────────────
+    {
+        "_regression": True,
+        "title": "SQL Injection regression — merchant search endpoint",
+        "description": "A previously patched SQL injection vulnerability has re-emerged in the merchant search endpoint after a recent refactor. The merchant_id is again concatenated directly into a raw query.",
+        "rule_id": "bandit.B608",
+        "scanner": "BANDIT",
+        "severity": "HIGH",
+        "category": "SAST",
+        "file_path": "payments/api/merchants.py",
+        "line_start": 67,
+        "code_snippet": '    query = f"SELECT * FROM merchants WHERE id = \'{merchant_id}\'"',
+        "cwe_ids": '["CWE-89"]',
+        "remediation_guidance": "Use parameterized queries. Add a regression test to lock this pattern.",
+        "owasp_category": "A03:2021",
+    },
 ]
 
 FINDINGS_WEB_FRONTEND = [
-    # CRITICAL
+    # ── CRITICAL ──────────────────────────────────────────────────────────────
     {
+        "_recent": True,
         "title": "CVE-2024-45590 — body-parser ReDoS",
         "description": "body-parser < 1.20.3 is vulnerable to a regular expression denial of service when parsing deeply nested JSON.",
         "rule_id": "grype.CVE-2024-45590",
@@ -328,7 +373,8 @@ FINDINGS_WEB_FRONTEND = [
         "remediation_guidance": "Upgrade body-parser to >= 1.20.3.",
     },
     {
-        "title": "Hardcoded Stripe publishable key committed with secret key",
+        "_recent": True,
+        "title": "Hardcoded Stripe secret key committed with publishable key",
         "description": "Both Stripe publishable and secret keys are committed together. The secret key in this bundle enables server-side payment operations.",
         "rule_id": "semgrep.js.stripe-secret-committed",
         "scanner": "SEMGREP",
@@ -336,12 +382,13 @@ FINDINGS_WEB_FRONTEND = [
         "category": "SECRETS",
         "file_path": "src/lib/stripe.ts",
         "line_start": 3,
-        "code_snippet": 'export const STRIPE_SECRET = "sk_test_DEMO_PLACEHOLDER_NOT_REAL_abc123"',
+        "code_snippet": 'export const STRIPE_SECRET = "sk_live_DEMO_PLACEHOLDER_NOT_REAL_abc123"',
         "cwe_ids": '["CWE-798"]',
         "remediation_guidance": "Remove from source code immediately and rotate the key. Use VITE_STRIPE_PUBLISHABLE_KEY for the publishable key only.",
     },
-    # HIGH
+    # ── HIGH ──────────────────────────────────────────────────────────────────
     {
+        "_recent": True,
         "title": "Reflected XSS via URL search parameter",
         "description": "The ?q= query parameter is rendered into the page DOM without sanitization, enabling reflected XSS attacks via crafted links.",
         "rule_id": "zap.40012",
@@ -405,7 +452,7 @@ FINDINGS_WEB_FRONTEND = [
         "remediation_guidance": "Always validate event.origin against your expected domain before processing message data.",
         "owasp_category": "A01:2021",
     },
-    # MEDIUM
+    # ── MEDIUM ────────────────────────────────────────────────────────────────
     {
         "title": "React dangerouslySetInnerHTML without sanitization",
         "description": "HTML is rendered using dangerouslySetInnerHTML with user-supplied content from the product description API, enabling stored XSS.",
@@ -472,7 +519,7 @@ FINDINGS_WEB_FRONTEND = [
         "cwe_ids": '["CWE-353"]',
         "remediation_guidance": "Add integrity and crossorigin attributes. Generate hash with: openssl dgst -sha384 -binary script.js | openssl base64 -A",
     },
-    # LOW
+    # ── LOW ───────────────────────────────────────────────────────────────────
     {
         "title": "Cookie without Secure flag",
         "description": "Session cookies are set without the Secure attribute, allowing them to be transmitted over plaintext HTTP connections.",
@@ -519,11 +566,26 @@ FINDINGS_WEB_FRONTEND = [
         "cwe_ids": '["CWE-540"]',
         "remediation_guidance": "Set sourcemap: false in Vite production build config, or restrict access to .map files in Nginx.",
     },
+    # ── REGRESSION ────────────────────────────────────────────────────────────
+    {
+        "_regression": True,
+        "title": "Reflected XSS regression — product filter parameter",
+        "description": "A reflected XSS vulnerability that was patched in the search page has resurfaced in the newly added product filter component, which shares the same unescaped URL parameter handling.",
+        "rule_id": "zap.40012",
+        "scanner": "ZAP",
+        "severity": "HIGH",
+        "category": "DAST",
+        "url": "https://shop.acme-corp.example.com/products?filter=<script>alert(1)</script>",
+        "cwe_ids": '["CWE-79"]',
+        "remediation_guidance": "Audit all URL parameter handling. Enforce DOMPurify globally for any parameter rendered as HTML.",
+        "owasp_category": "A03:2021",
+    },
 ]
 
 FINDINGS_INFRA_TERRAFORM = [
-    # CRITICAL
+    # ── CRITICAL ──────────────────────────────────────────────────────────────
     {
+        "_recent": True,
         "title": "S3 bucket with public ACL — customer-data",
         "description": "The customer-data S3 bucket has ACL set to 'public-read', making all objects publicly downloadable. This bucket contains PII and payment records.",
         "rule_id": "checkov.CKV_AWS_20",
@@ -537,6 +599,7 @@ FINDINGS_INFRA_TERRAFORM = [
         "remediation_guidance": "Set acl = 'private' and enable aws_s3_bucket_public_access_block with block_public_acls = true.",
     },
     {
+        "_recent": True,
         "title": "RDS instance publicly accessible",
         "description": "The production PostgreSQL RDS instance has publicly_accessible = true, exposing the database endpoint to the internet.",
         "rule_id": "checkov.CKV_AWS_17",
@@ -549,8 +612,9 @@ FINDINGS_INFRA_TERRAFORM = [
         "cwe_ids": '["CWE-668"]',
         "remediation_guidance": "Set publicly_accessible = false. Access RDS via VPC and private subnets only. Use a bastion host or VPN for admin access.",
     },
-    # HIGH
+    # ── HIGH ──────────────────────────────────────────────────────────────────
     {
+        "_recent": True,
         "title": "IAM role with wildcard action on all resources",
         "description": "An IAM role used by EKS pods grants Action: '*' on Resource: '*', violating least privilege. Any compromised pod gains full AWS account access.",
         "rule_id": "checkov.CKV_AWS_40",
@@ -614,7 +678,7 @@ FINDINGS_INFRA_TERRAFORM = [
         "cwe_ids": '["CWE-778"]',
         "remediation_guidance": "Enable CloudTrail in all regions with multi-region trail and log file validation enabled.",
     },
-    # MEDIUM
+    # ── MEDIUM ────────────────────────────────────────────────────────────────
     {
         "title": "EBS volumes not encrypted at rest",
         "description": "EBS volumes attached to EC2 instances are not encrypted. Data at rest on these volumes could be accessed if volumes are mishandled.",
@@ -678,7 +742,7 @@ FINDINGS_INFRA_TERRAFORM = [
         "cwe_ids": '["CWE-312"]',
         "remediation_guidance": "Add encrypt = true and specify a KMS key in the backend configuration.",
     },
-    # LOW
+    # ── LOW ───────────────────────────────────────────────────────────────────
     {
         "title": "S3 bucket access logging not enabled",
         "description": "Server access logging is disabled for S3 buckets, reducing auditability of object access patterns.",
@@ -719,17 +783,219 @@ FINDINGS_INFRA_TERRAFORM = [
     },
 ]
 
+FINDINGS_AUTH_SERVICE = [
+    # ── CRITICAL ──────────────────────────────────────────────────────────────
+    {
+        "_recent": True,
+        "title": "Hardcoded HMAC-SHA256 secret for JWT signing",
+        "description": "The JWT signing key is a hardcoded 16-character string embedded in the source code. Tokens can be forged offline by brute-forcing the weak secret.",
+        "rule_id": "semgrep.go.jwt-hardcoded-key",
+        "scanner": "SEMGREP",
+        "severity": "CRITICAL",
+        "category": "SAST",
+        "file_path": "internal/auth/tokens.go",
+        "line_start": 12,
+        "code_snippet": 'var signingKey = []byte("acme-secret-key")',
+        "cwe_ids": '["CWE-321", "CWE-798"]',
+        "remediation_guidance": "Load the signing key from environment variable or AWS Secrets Manager. Use at least 256 bits of entropy.",
+        "owasp_category": "A02:2021",
+    },
+    {
+        "_recent": True,
+        "title": "JWT 'none' algorithm accepted — arbitrary token forgery",
+        "description": "The token validation function does not restrict the signing algorithm. An attacker can set alg=none in the header, strip the signature, and forge tokens for any user.",
+        "rule_id": "semgrep.go.jwt-none-algorithm",
+        "scanner": "SEMGREP",
+        "severity": "CRITICAL",
+        "category": "SAST",
+        "file_path": "internal/auth/validate.go",
+        "line_start": 34,
+        "code_snippet": "token, _ := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {\n    return signingKey, nil\n})",
+        "cwe_ids": '["CWE-347"]',
+        "remediation_guidance": "Explicitly validate algorithm: if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok { return nil, fmt.Errorf(\"unexpected signing method: %v\", token.Header[\"alg\"]) }",
+        "owasp_category": "A02:2021",
+    },
+    # ── HIGH ──────────────────────────────────────────────────────────────────
+    {
+        "_recent": True,
+        "title": "Privilege escalation via user-controlled role claim",
+        "description": "The 'role' field from the user-supplied JWT payload is trusted without server-side validation. A user can modify their token to self-assign the 'admin' role.",
+        "rule_id": "semgrep.go.trust-user-controlled-role",
+        "scanner": "SEMGREP",
+        "severity": "HIGH",
+        "category": "SAST",
+        "file_path": "internal/middleware/rbac.go",
+        "line_start": 27,
+        "code_snippet": "role := claims[\"role\"].(string)\nif role == \"admin\" { grantAdminAccess(ctx) }",
+        "cwe_ids": '["CWE-269", "CWE-639"]',
+        "remediation_guidance": "Look up the user's role from the database using the sub claim. Never trust role or permission claims embedded in user-supplied tokens.",
+        "owasp_category": "A01:2021",
+    },
+    {
+        "title": "SQL injection via fmt.Sprintf in user lookup",
+        "description": "The user lookup function builds SQL queries by string interpolation with fmt.Sprintf, enabling SQL injection via the username parameter.",
+        "rule_id": "semgrep.go.sql-injection",
+        "scanner": "SEMGREP",
+        "severity": "HIGH",
+        "category": "SAST",
+        "file_path": "internal/store/user.go",
+        "line_start": 51,
+        "code_snippet": 'query := fmt.Sprintf("SELECT * FROM users WHERE username = \'%s\'", username)',
+        "cwe_ids": '["CWE-89"]',
+        "remediation_guidance": "Use parameterized queries: db.QueryContext(ctx, \"SELECT * FROM users WHERE username = $1\", username)",
+        "owasp_category": "A03:2021",
+    },
+    {
+        "title": "CVE-2023-26125 — Gin framework open redirect",
+        "description": "gin-gonic/gin < 1.9.1 allows open redirects via crafted Host headers in certain redirect helper functions used in the OAuth flow.",
+        "rule_id": "grype.CVE-2023-26125",
+        "scanner": "GRYPE",
+        "severity": "HIGH",
+        "category": "SCA",
+        "cve_id": "CVE-2023-26125",
+        "cvss_score": 7.1,
+        "cwe_ids": '["CWE-601"]',
+        "is_exploitable": True,
+        "remediation_guidance": "Upgrade gin-gonic/gin to >= 1.9.1.",
+    },
+    {
+        "title": "SSRF in OAuth 2.0 redirect_uri validation",
+        "description": "The redirect_uri is validated against a prefix match only, not an exact allowlist. An attacker can redirect tokens to internal services using URLs like https://acme-corp.com.attacker.com.",
+        "rule_id": "semgrep.go.ssrf-oauth-redirect",
+        "scanner": "SEMGREP",
+        "severity": "HIGH",
+        "category": "SAST",
+        "file_path": "internal/oauth/handler.go",
+        "line_start": 88,
+        "code_snippet": 'if !strings.HasPrefix(redirectURI, "https://acme-corp.com") {\n    return errors.New("invalid redirect_uri")\n}',
+        "cwe_ids": '["CWE-918", "CWE-601"]',
+        "remediation_guidance": "Validate redirect_uri against an exact allowlist of registered URIs per client_id — not a prefix.",
+        "owasp_category": "A10:2021",
+    },
+    # ── MEDIUM ────────────────────────────────────────────────────────────────
+    {
+        "title": "Timing attack on HMAC token comparison",
+        "description": "API token comparison uses the == operator instead of constant-time comparison, leaking timing information usable to brute-force valid tokens.",
+        "rule_id": "semgrep.go.timing-attack-comparison",
+        "scanner": "SEMGREP",
+        "severity": "MEDIUM",
+        "category": "SAST",
+        "file_path": "internal/auth/api_keys.go",
+        "line_start": 63,
+        "code_snippet": "if storedToken == providedToken { return true }",
+        "cwe_ids": '["CWE-208"]',
+        "remediation_guidance": "Use hmac.Equal() or subtle.ConstantTimeCompare() for all secret comparisons.",
+        "owasp_category": "A02:2021",
+    },
+    {
+        "title": "Weak PBKDF2 iteration count for password hashing",
+        "description": "Passwords are hashed with PBKDF2 at only 1,000 iterations. NIST SP 800-132 currently recommends at least 600,000 iterations for SHA-256.",
+        "rule_id": "semgrep.go.weak-pbkdf2",
+        "scanner": "SEMGREP",
+        "severity": "MEDIUM",
+        "category": "SAST",
+        "file_path": "internal/auth/passwords.go",
+        "line_start": 18,
+        "code_snippet": "dk := pbkdf2.Key(password, salt, 1000, 32, sha256.New)",
+        "cwe_ids": '["CWE-916"]',
+        "remediation_guidance": "Increase iteration count to 600,000+ or migrate to bcrypt (cost 12+) or argon2id.",
+        "owasp_category": "A02:2021",
+    },
+    {
+        "title": "CVE-2024-24790 — Go stdlib net/netip memory corruption",
+        "description": "Go standard library net/netip < 1.22.4 has a memory corruption vulnerability in IPv6 address parsing that can be triggered via the token validation endpoint.",
+        "rule_id": "trivy.CVE-2024-24790",
+        "scanner": "TRIVY",
+        "severity": "MEDIUM",
+        "category": "SCA",
+        "cve_id": "CVE-2024-24790",
+        "cvss_score": 5.9,
+        "cwe_ids": '["CWE-787"]',
+        "remediation_guidance": "Upgrade Go runtime to >= 1.22.4.",
+    },
+    {
+        "title": "Missing rate limiting on /login endpoint",
+        "description": "The /auth/login endpoint has no rate limiting or account lockout policy, enabling unlimited brute-force password attempts without detection.",
+        "rule_id": "semgrep.go.missing-rate-limit",
+        "scanner": "SEMGREP",
+        "severity": "MEDIUM",
+        "category": "SAST",
+        "file_path": "internal/api/auth_handler.go",
+        "line_start": 44,
+        "cwe_ids": '["CWE-307"]',
+        "remediation_guidance": "Add rate limiting middleware (e.g. golang.org/x/time/rate). Implement exponential backoff and account lockout after 5 consecutive failures.",
+        "owasp_category": "A07:2021",
+    },
+    # ── LOW ───────────────────────────────────────────────────────────────────
+    {
+        "title": "Goroutine leak in token refresh handler",
+        "description": "A goroutine started during token refresh is not cancelled when the parent request context is cancelled, causing accumulating goroutine leaks under sustained load.",
+        "rule_id": "semgrep.go.goroutine-leak",
+        "scanner": "SEMGREP",
+        "severity": "LOW",
+        "category": "SAST",
+        "file_path": "internal/auth/refresh.go",
+        "line_start": 77,
+        "code_snippet": "go func() { auditLogger.Log(ctx, event) }()",
+        "cwe_ids": '["CWE-400"]',
+        "remediation_guidance": "Pass a context with deadline and select on ctx.Done() inside the goroutine.",
+    },
+    {
+        "title": "Stack traces exposed in error responses",
+        "description": "Error responses include full Go runtime stack traces and internal file paths, providing attackers with a detailed map of internal service structure.",
+        "rule_id": "semgrep.go.verbose-error-response",
+        "scanner": "SEMGREP",
+        "severity": "LOW",
+        "category": "SAST",
+        "file_path": "internal/api/middleware.go",
+        "line_start": 32,
+        "code_snippet": 'c.JSON(500, gin.H{"error": err.Error(), "trace": string(debug.Stack())})',
+        "cwe_ids": '["CWE-209"]',
+        "remediation_guidance": "Log full errors server-side with a correlation ID. Return only a generic error message and the correlation ID to the client.",
+    },
+    {
+        "title": "Insecure temporary file creation during key export",
+        "description": "Temporary files for key material export use a predictable path in /tmp without O_EXCL, allowing symlink attacks in shared environments.",
+        "rule_id": "semgrep.go.insecure-temp-file",
+        "scanner": "SEMGREP",
+        "severity": "LOW",
+        "category": "SAST",
+        "file_path": "internal/keys/export.go",
+        "line_start": 19,
+        "code_snippet": 'f, err := os.Create("/tmp/key_export_" + userID)',
+        "cwe_ids": '["CWE-377"]',
+        "remediation_guidance": "Use os.CreateTemp(\"\", \"key_export_*\") which creates files securely with a unique unpredictable path.",
+    },
+    # ── REGRESSION ────────────────────────────────────────────────────────────
+    {
+        "_regression": True,
+        "title": "HMAC timing attack regression — refresh token endpoint",
+        "description": "The constant-time token comparison fix was applied to the API key handler but not carried over to the new refresh token endpoint, reintroducing the timing oracle on a different code path.",
+        "rule_id": "semgrep.go.timing-attack-comparison",
+        "scanner": "SEMGREP",
+        "severity": "MEDIUM",
+        "category": "SAST",
+        "file_path": "internal/auth/refresh_tokens.go",
+        "line_start": 44,
+        "code_snippet": "if storedRefreshToken == providedToken { return grantAccess() }",
+        "cwe_ids": '["CWE-208"]',
+        "remediation_guidance": "Apply hmac.Equal() consistently across ALL token comparison paths. Consider a shared helper to prevent future regressions.",
+        "owasp_category": "A02:2021",
+    },
+]
+
 ALL_REPO_FINDINGS = [
     FINDINGS_PAYMENTS_API,
     FINDINGS_WEB_FRONTEND,
     FINDINGS_INFRA_TERRAFORM,
+    FINDINGS_AUTH_SERVICE,
 ]
 
-# Scanners used in historical scans per repo
 REPO_SCANNERS = [
     ["SEMGREP", "BANDIT", "TRIVY", "GRYPE", "SNYK"],
     ["SEMGREP", "TRIVY", "GRYPE", "ZAP"],
     ["CHECKOV", "TRIVY", "SEMGREP"],
+    ["SEMGREP", "TRIVY", "GRYPE", "SNYK"],
 ]
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
@@ -747,7 +1013,7 @@ def jira_key(project: str, n: int) -> str:
     return f"{project}-{100 + n}"
 
 
-# ─── Seed ─────────────────────────────────────────────────────────────────────
+# ─── Seed ──────────────────────────────────────────────────────────────────────
 
 async def seed():
     await init_db()
@@ -761,7 +1027,7 @@ async def seed():
             select(Repository).where(Repository.github_full_name.in_(demo_names))
         )
         for old_repo in existing.scalars().all():
-            # cascade-delete scans, findings, jira_links
+            await db.execute(delete(RepoRiskHistory).where(RepoRiskHistory.repository_id == old_repo.id))
             scans_q = await db.execute(select(Scan).where(Scan.repository_id == old_repo.id))
             for s in scans_q.scalars().all():
                 findings_q = await db.execute(select(Finding).where(Finding.scan_id == s.id))
@@ -769,7 +1035,6 @@ async def seed():
                     await db.execute(delete(JiraLink).where(JiraLink.finding_id == f.id))
                     await db.delete(f)
                 await db.delete(s)
-            # also delete findings directly linked to repo (no scan_id)
             all_findings = await db.execute(
                 select(Finding).where(Finding.repository_id == old_repo.id)
             )
@@ -799,13 +1064,10 @@ async def seed():
         print(f"  ✓ Created {len(repo_objects)} repositories")
 
         # ── Create 12 weeks of scan history ───────────────────────────────────
-        # Each repo gets 2-3 scans per week across its scanners
         all_scans: list[Scan] = []
         for repo_idx, repo in enumerate(repo_objects):
             scanners = REPO_SCANNERS[repo_idx]
-            week_count = 12
-            for week in range(week_count, 0, -1):
-                # pick 2-3 scanners randomly for this week
+            for week in range(12, 0, -1):
                 week_scanners = random.sample(scanners, k=min(random.randint(2, 3), len(scanners)))
                 for scanner in week_scanners:
                     age_days = week * 7 - random.uniform(0, 4)
@@ -829,29 +1091,28 @@ async def seed():
                     all_scans.append(scan)
 
         await db.flush()
-        print(f"  ✓ Created {len(all_scans)} scan records (12 weeks × 3 repos)")
+        print(f"  ✓ Created {len(all_scans)} scan records (12 weeks × {len(repo_objects)} repos)")
 
         # ── Create findings ────────────────────────────────────────────────────
         jira_ticket_counter = 0
         total_findings = 0
+        regression_count = 0
 
-        # Status weight distribution: 65% OPEN, 15% FIXED, 10% IN_REMEDIATION, 10% SUPPRESSED
         def pick_status(severity: str) -> str:
             r = random.random()
-            # CRITICAL/HIGH findings are more likely to be acted on
             if severity in ("CRITICAL", "HIGH"):
-                if r < 0.60:
+                if r < 0.58:
                     return FindingStatus.OPEN.value
-                elif r < 0.80:
+                elif r < 0.78:
                     return FindingStatus.IN_REMEDIATION.value
-                elif r < 0.95:
+                elif r < 0.93:
                     return FindingStatus.FIXED.value
                 else:
                     return FindingStatus.SUPPRESSED.value
             else:
-                if r < 0.70:
+                if r < 0.68:
                     return FindingStatus.OPEN.value
-                elif r < 0.82:
+                elif r < 0.80:
                     return FindingStatus.FIXED.value
                 elif r < 0.90:
                     return FindingStatus.ACCEPTED_RISK.value
@@ -859,7 +1120,6 @@ async def seed():
                     return FindingStatus.SUPPRESSED.value
 
         def mttr_days(severity: str) -> int:
-            """Realistic mean time to remediate based on severity."""
             base = {"CRITICAL": 5, "HIGH": 18, "MEDIUM": 45, "LOW": 90, "INFO": 150}
             b = base.get(severity, 30)
             return max(1, int(random.gauss(b, b * 0.3)))
@@ -870,16 +1130,30 @@ async def seed():
             finding_objects: list[Finding] = []
 
             for f_idx, f_data in enumerate(findings_list):
-                # Spread first_seen_at across last 90 days — older findings first
-                age_days = random.uniform(5, 85)
-                first_seen = days_ago(age_days)
-                status = pick_status(f_data["severity"])
+                is_reg = f_data.get("_regression", False)
+                is_recent = f_data.get("_recent", False)
 
-                # Assign to a matching scan (same scanner, closest in time)
+                # Age assignment — regressions are older findings that re-emerged recently
+                if is_reg:
+                    age_days = random.uniform(25, 60)
+                elif is_recent:
+                    age_days = random.uniform(1, 5)
+                else:
+                    age_days = random.uniform(8, 82)
+
+                first_seen = days_ago(age_days)
+
+                # Status — regressions are always OPEN
+                status = FindingStatus.OPEN.value if is_reg else pick_status(f_data["severity"])
+
+                # Regression metadata
+                reg_detected_at = (
+                    NOW - timedelta(hours=random.randint(8, 60)) if is_reg else None
+                )
+
                 matching_scans = [s for s in repo_scans if s.scanner == f_data["scanner"]]
                 scan = matching_scans[f_idx % len(matching_scans)] if matching_scans else repo_scans[0]
 
-                # Resolved at
                 if status in (FindingStatus.FIXED.value, FindingStatus.ACCEPTED_RISK.value):
                     days_to_fix = mttr_days(f_data["severity"])
                     resolved_at = min(first_seen + timedelta(days=days_to_fix), NOW)
@@ -891,7 +1165,12 @@ async def seed():
                 sev_enum = Severity(f_data["severity"])
 
                 finding = Finding(
-                    fingerprint=fp(repo.github_full_name, f_data["rule_id"], f_data.get("file_path"), f_data.get("line_start")),
+                    fingerprint=fp(
+                        repo.github_full_name,
+                        f_data["rule_id"],
+                        f_data.get("file_path"),
+                        f_data.get("line_start"),
+                    ),
                     repository_id=repo.id,
                     scan_id=scan.id,
                     title=f_data["title"],
@@ -912,6 +1191,8 @@ async def seed():
                     remediation_guidance=f_data.get("remediation_guidance"),
                     cvss_score=f_data.get("cvss_score"),
                     is_exploitable=f_data.get("is_exploitable", False),
+                    is_regression=is_reg,
+                    regression_detected_at=reg_detected_at,
                     status=status,
                     first_seen_at=first_seen,
                     last_seen_at=NOW - timedelta(hours=random.randint(0, 48)),
@@ -921,7 +1202,7 @@ async def seed():
                         + (f_data.get("cvss_score") or 0) * 2
                         + (10 if f_data.get("is_exploitable") else 0)
                         + random.uniform(0, 15),
-                        2
+                        2,
                     ),
                     sla_breach_at=first_seen + timedelta(days=sev_enum.sla_days),
                 )
@@ -930,21 +1211,25 @@ async def seed():
 
                 if status == FindingStatus.OPEN.value:
                     open_counts[f_data["severity"]] += 1
+                if is_reg:
+                    regression_count += 1
 
             await db.flush()
             total_findings += len(finding_objects)
 
-            # ── Create JIRA links for ~40% of CRITICAL/HIGH open findings ──────
+            # ── JIRA links for ~40% of CRITICAL/HIGH open findings ─────────────
             jira_project = repo.github_full_name.split("/")[1].upper().replace("-", "")[:4]
             jira_statuses = ["To Do", "In Progress", "In Progress", "Done", "In Progress"]
             jira_priorities = ["Highest", "High", "High", "Medium", "High"]
-            jira_assignees = ["alice@acme-corp.com", "bob@acme-corp.com", None, "carol@acme-corp.com", None]
+            jira_assignees = [
+                "alice@acme-corp.com", "bob@acme-corp.com", None,
+                "carol@acme-corp.com", None,
+            ]
 
             for f in finding_objects:
-                sev = f.severity
-                if sev in ("CRITICAL", "HIGH") and f.status == FindingStatus.OPEN.value:
+                if f.severity in ("CRITICAL", "HIGH") and f.status == FindingStatus.OPEN.value:
                     if random.random() < 0.45:
-                        await db.flush()  # ensure f.id is set
+                        await db.flush()
                         jira_ticket_counter += 1
                         ticket_key = jira_key(jira_project, jira_ticket_counter)
                         pick = jira_ticket_counter % len(jira_statuses)
@@ -975,19 +1260,96 @@ async def seed():
             repo.risk_score = min(round(risk, 1), 100)
             repo.last_scan_at = NOW - timedelta(hours=random.randint(1, 6))
 
+        await db.flush()
+
+        # ── Seed 30 days of RepoRiskHistory ───────────────────────────────────
+        history_count = 0
+        for repo in repo_objects:
+            for day_offset in range(30, 0, -1):
+                snapshot_date = (NOW - timedelta(days=day_offset)).date()
+                # Simulate risk trending down over time (higher in the past)
+                decay = day_offset / 30.0  # 1.0 = 30 days ago, 0.0 = today
+                hist_risk = min(
+                    round(repo.risk_score * (1.0 + decay * 0.55) + random.gauss(0, 2.5), 1),
+                    100.0,
+                )
+                hist_critical = max(0, repo.open_critical + round(decay * 2.5))
+                hist_high = max(0, repo.open_high + round(decay * 3.5))
+                hist_medium = max(0, repo.open_medium + round(decay * 2.0))
+                hist_low = max(0, repo.open_low + round(decay * 1.5))
+                db.add(RepoRiskHistory(
+                    repository_id=repo.id,
+                    snapshot_date=snapshot_date,
+                    risk_score=hist_risk,
+                    open_critical=hist_critical,
+                    open_high=hist_high,
+                    open_medium=hist_medium,
+                    open_low=hist_low,
+                    open_info=0,
+                    total_findings=hist_critical + hist_high + hist_medium + hist_low,
+                ))
+                history_count += 1
+
         await db.commit()
 
         print(f"  ✓ Created {total_findings} findings across {len(repo_objects)} repos")
+        print(f"  ✓ Created {regression_count} regression findings (triggers alert banner)")
         print(f"  ✓ Created {jira_ticket_counter} JIRA ticket links")
+        print(f"  ✓ Created {history_count} RepoRiskHistory snapshots (30 days × {len(repo_objects)} repos)")
         print()
         print("🌑 Demo data seeded successfully!")
         print()
         for repo in repo_objects:
-            print(f"   {repo.github_full_name}  risk={repo.risk_score}  "
-                  f"C={repo.open_critical} H={repo.open_high} M={repo.open_medium} L={repo.open_low}")
+            print(
+                f"   {repo.github_full_name}  risk={repo.risk_score}  "
+                f"C={repo.open_critical} H={repo.open_high} "
+                f"M={repo.open_medium} L={repo.open_low}"
+            )
         print()
         print("   Open http://localhost:3000 to explore the dashboard.")
 
 
+async def wipe():
+    """Delete all demo repos and their associated data, then exit."""
+    await init_db()
+    demo_names = [r["github_full_name"] for r in REPOS]
+    async with AsyncSessionLocal() as db:
+        print("🌑 Wiping Nyx demo data...")
+        existing = await db.execute(
+            select(Repository).where(Repository.github_full_name.in_(demo_names))
+        )
+        removed = 0
+        for old_repo in existing.scalars().all():
+            await db.execute(delete(RepoRiskHistory).where(RepoRiskHistory.repository_id == old_repo.id))
+            scans_q = await db.execute(select(Scan).where(Scan.repository_id == old_repo.id))
+            for s in scans_q.scalars().all():
+                findings_q = await db.execute(select(Finding).where(Finding.scan_id == s.id))
+                for f in findings_q.scalars().all():
+                    await db.execute(delete(JiraLink).where(JiraLink.finding_id == f.id))
+                    await db.delete(f)
+                await db.delete(s)
+            all_findings = await db.execute(
+                select(Finding).where(Finding.repository_id == old_repo.id)
+            )
+            for f in all_findings.scalars().all():
+                await db.execute(delete(JiraLink).where(JiraLink.finding_id == f.id))
+                await db.delete(f)
+            await db.delete(old_repo)
+            removed += 1
+        await db.commit()
+        if removed:
+            print(f"  ✓ Removed {removed} demo repo(s) and all associated data.")
+        else:
+            print("  Nothing to remove — no demo repos found.")
+
+
 if __name__ == "__main__":
-    asyncio.run(seed())
+    import argparse
+    parser = argparse.ArgumentParser(description="Nyx demo data tool")
+    parser.add_argument("--wipe", action="store_true", help="Delete demo data and exit without re-seeding")
+    args = parser.parse_args()
+
+    if args.wipe:
+        asyncio.run(wipe())
+    else:
+        asyncio.run(seed())
