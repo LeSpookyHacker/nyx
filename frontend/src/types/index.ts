@@ -55,6 +55,7 @@ export interface Repository {
   language?: string
   is_private: boolean
   webhook_active: boolean
+  webhook_secret?: string
   enabled_scanners: string
   risk_score: number
   open_critical: number

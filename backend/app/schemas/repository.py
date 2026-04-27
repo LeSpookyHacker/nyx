@@ -82,6 +82,7 @@ class RepositoryResponse(BaseModel):
     language: Optional[str] = None
     is_private: bool
     webhook_active: bool
+    webhook_secret: Optional[str] = None
     enabled_scanners: str
     risk_score: float
     open_critical: int

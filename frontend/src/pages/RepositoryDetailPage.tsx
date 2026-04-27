@@ -39,6 +39,38 @@ const JIRA_STATUS_COLORS: Record<string, string> = {
 
 type Tab = 'findings' | 'scans' | 'jira' | 'trends' | 'risk'
 
+function WebhookSecretRow({ secret }: { secret: string }) {
+  const [revealed, setRevealed] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const copy = async () => {
+    await navigator.clipboard.writeText(secret)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-nyx-iris/10">
+      <span className="text-nyx-mist/60 text-xs shrink-0">NYX_WEBHOOK_SECRET:</span>
+      <code className="text-xs font-mono text-nyx-lavender flex-1 truncate">
+        {revealed ? secret : '•'.repeat(32)}
+      </code>
+      <button
+        onClick={() => setRevealed(r => !r)}
+        className="nyx-btn-ghost text-xs py-1 px-2 shrink-0"
+      >
+        {revealed ? 'Hide' : 'Reveal'}
+      </button>
+      <button
+        onClick={copy}
+        className="nyx-btn-ghost text-xs py-1 px-2 gap-1 shrink-0"
+      >
+        {copied ? <><Check size={11} className="text-green-400" /> Copied</> : <><ClipboardCopy size={11} /> Copy</>}
+      </button>
+    </div>
+  )
+}
+
 // ── Findings Tab ───────────────────────────────────────────────────────────────
 
 function FindingsTab({ repoId }: { repoId: string }) {
@@ -695,6 +727,9 @@ export default function RepositoryDetailPage() {
             <span key={s} className="nyx-badge text-[10px] bg-nyx-dusk text-nyx-mist border border-nyx-iris/10">{s}</span>
           ))}
         </div>
+
+        {/* Webhook secret */}
+        {repo.webhook_secret && <WebhookSecretRow secret={repo.webhook_secret} />}
       </div>
 
       {/* Tabs */}
