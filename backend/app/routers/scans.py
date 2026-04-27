@@ -71,7 +71,6 @@ class ScanImportJsonRequest(BaseModel):
 @limiter.limit("30/minute")
 async def import_scan_results_json(
     request: Request,
-    body: ScanImportJsonRequest,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_SCANNER, SCOPE_ANALYST)),
@@ -86,16 +85,28 @@ async def import_scan_results_json(
     Example (GitHub Actions / curl):
         jq -n --arg repo "$REPO_ID" --arg scanner "SEMGREP" --arg ref "$GIT_REF" \\
                --slurpfile data results.json \\
-           '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$data[0]}' | \\
+           '{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$data[0]}' \\
+           > /tmp/nyx_payload.json
+        HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
+          | openssl dgst -sha256 -hmac "$NYX_WEBHOOK_SECRET" | awk '{print $2}')
         curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
              -H "Content-Type: application/json" -H "X-API-Key: $NYX_API_KEY" \\
-             -H "X-Nyx-Submission-HMAC: sha256=$(echo -n '...' | openssl dgst -sha256 -hmac '$SECRET')" \\
-             -d @-
+             -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
+             -d @/tmp/nyx_payload.json
     """
     _MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MB
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > _MAX_IMPORT_BYTES:
         raise HTTPException(status_code=413, detail="Payload too large (max 50 MB)")
+
+    # Read raw body first so the HMAC is computed over the exact bytes received,
+    # then parse manually — Pydantic model injection via FastAPI consumes the stream
+    # without caching in newer Starlette versions, leaving request.body() empty.
+    body_bytes = await request.body()
+    try:
+        body = ScanImportJsonRequest.model_validate_json(body_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid request body: {exc}") from exc
 
     repo_result = await db.execute(select(Repository).where(Repository.id == body.repository_id))
     repo = repo_result.scalar_one_or_none()
@@ -104,7 +115,6 @@ async def import_scan_results_json(
 
     # Verify optional submission HMAC for provenance checking
     submission_hmac_header = request.headers.get("X-Nyx-Submission-HMAC")
-    body_bytes = await request.body()
     submission_verified = False
     if repo.webhook_secret:
         submission_verified = verify_submission_hmac(body_bytes, submission_hmac_header, repo.webhook_secret)
