@@ -58,6 +58,32 @@ def _sanitize_path(value: str | None) -> str | None:
     return cleaned or None
 from app.services.prioritization_service import compute_priority_score, fetch_epss_score
 
+_SEMGREP_LOGIN_SENTINEL = "requires login"
+
+
+async def _fetch_github_snippet(
+    repo_full_name: str,
+    file_path: str,
+    line_start: int,
+    line_end: int | None,
+    git_ref: str | None,
+) -> str | None:
+    """Fetch the matched source lines from GitHub for Semgrep Pro findings.
+
+    Semgrep OSS puts 'requires login' in extra.lines for Pro-gated rules instead
+    of the actual matched code. We recover the real snippet via the GitHub API
+    using the file path and line range already present in the finding.
+    """
+    try:
+        from app.services.github_service import GitHubError, get_file_content  # noqa: PLC0415
+        content = await get_file_content(repo_full_name, file_path, ref=git_ref or "")
+        source_lines = content.splitlines()
+        start = max(0, line_start - 1)          # convert 1-indexed to 0-indexed
+        end = line_end if line_end else line_start  # inclusive, 1-indexed
+        return "\n".join(source_lines[start:end])
+    except Exception:
+        return None
+
 
 async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any]) -> None:
     """
@@ -72,6 +98,10 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
 
         scan.status = ScanStatus.RUNNING.value
         await db.commit()
+
+        repo_result = await db.execute(select(Repository).where(Repository.id == scan.repository_id))
+        repo = repo_result.scalar_one_or_none()
+        repo_full_name: str | None = repo.github_full_name if repo else None
 
         try:
             # Validate scanner identifier against known list — reject unknown/spoofed scanners (M7)
@@ -102,6 +132,22 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
 
         for nf in normalized_findings:
             try:
+                # For Semgrep Pro rules, extra.lines is "requires login" instead of real code.
+                # Recover the actual snippet from GitHub using the file path and line range.
+                if (
+                    nf.scanner == "SEMGREP"
+                    and nf.code_snippet
+                    and nf.code_snippet.strip().lower() == _SEMGREP_LOGIN_SENTINEL
+                    and nf.file_path
+                    and nf.line_start
+                    and repo_full_name
+                ):
+                    fetched = await _fetch_github_snippet(
+                        repo_full_name, nf.file_path, nf.line_start, nf.line_end, scan.git_ref
+                    )
+                    if fetched:
+                        nf.code_snippet = fetched
+
                 existing, is_new = await find_existing(db, nf, scan.repository_id)
 
                 if is_new:
@@ -159,6 +205,13 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
                     # Update last seen and rescan stats
                     now_ts = datetime.now(timezone.utc)
                     existing.last_seen_at = now_ts
+                    # If we now have a real snippet where only "requires login" was stored, write it back.
+                    if (
+                        nf.code_snippet
+                        and nf.code_snippet.strip().lower() != _SEMGREP_LOGIN_SENTINEL
+                        and (not existing.code_snippet or existing.code_snippet.strip().lower() == _SEMGREP_LOGIN_SENTINEL)
+                    ):
+                        existing.code_snippet = _sanitize_field(nf.code_snippet, 10000)
                     # If it was suppressed/fixed, keep that status; otherwise keep OPEN
                     if existing.status == FindingStatus.FIXED.value:
                         # Finding reappeared after being fixed — check if it should be auto-restored
