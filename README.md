@@ -27,7 +27,7 @@
 
 <div align="center">
 
-![Nyx Dashboard](wiki/images/walkthrough-demo-data.png)
+![Nyx Dashboard](wiki/images/dashboard-full.png)
 
 </div>
 
