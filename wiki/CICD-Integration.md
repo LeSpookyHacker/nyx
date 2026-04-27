@@ -57,7 +57,7 @@ Every scan submission to `POST /scans/import-json` can be signed so Nyx can veri
 The workflow computes a two-step HMAC for each scanner payload before sending it to Nyx:
 
 ```
-HMAC = HMAC-SHA256(key=NYX_WEBHOOK_SECRET, msg=SHA256(request_body))
+HMAC = HMAC-SHA256(key=NYX_WEBHOOK_SECRET, msg=request_body)
 ```
 
 This is sent as the `X-Nyx-Submission-HMAC: sha256=<hex>` request header. Nyx verifies it on arrival using the per-repo `webhook_secret` stored in its database. Verified scans are flagged as `submission_verified: true` in the scan record and audit log.
@@ -94,10 +94,9 @@ jq -n \
   '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, git_sha: $sha, trigger: "push", data: $data[0]}' \
   > /tmp/nyx_payload.json
 
-# Compute submission HMAC: HMAC-SHA256(key=webhook_secret, msg=SHA256(body))
-HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \
-  | openssl dgst -sha256 -hmac "$NYX_WEBHOOK_SECRET" \
-  | awk '{print $2}')
+# Compute submission HMAC: HMAC-SHA256(key=webhook_secret, msg=body)
+HMAC=$(openssl dgst -sha256 -hmac "$NYX_WEBHOOK_SECRET" /tmp/nyx_payload.json \
+  | awk '{print $NF}')
 
 curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
   -H "Content-Type: application/json" \

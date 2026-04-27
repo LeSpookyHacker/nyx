@@ -227,22 +227,21 @@ jobs:
           NYX_WEBHOOK_SECRET: ${{{{ secrets.NYX_WEBHOOK_SECRET }}}}
         run: |
           NYX_URL="${{NYX_URL// /}}"
-          jq -n \\
+          jq -cn \\
             --arg repo    "{repo_id}" \\
             --arg scanner "SEMGREP" \\
             --arg ref     "$GITHUB_REF_NAME" \\
             --slurpfile d semgrep.json \\
             '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
             > /tmp/nyx_payload.json
-          HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
-            | openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" \\
-            | awk '{{print $2}}')
+          HMAC=$(openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" /tmp/nyx_payload.json \\
+            | awk '{{print $NF}}')
           curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
               -H "Content-Type: application/json" \\
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
               -H "ngrok-skip-browser-warning: true" \\
-              -d @/tmp/nyx_payload.json
+              --data-binary @/tmp/nyx_payload.json
           echo "✓ Semgrep results sent to Nyx"
 
       # ── Gitleaks (Secrets) — always runs ─────────────────────────────────────
@@ -269,22 +268,21 @@ jobs:
           COUNT=$(jq 'if type == "array" then length else 0 end' gitleaks.json 2>/dev/null || echo 0)
           if [ "$COUNT" -eq 0 ]; then echo "✓ Gitleaks: no secrets found"; exit 0; fi
           NYX_URL="${{NYX_URL// /}}"
-          jq -n \\
+          jq -cn \\
             --arg repo    "{repo_id}" \\
             --arg scanner "GITLEAKS" \\
             --arg ref     "$GITHUB_REF_NAME" \\
             --slurpfile d gitleaks.json \\
             '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
             > /tmp/nyx_payload.json
-          HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
-            | openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" \\
-            | awk '{{print $2}}')
+          HMAC=$(openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" /tmp/nyx_payload.json \\
+            | awk '{{print $NF}}')
           curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
               -H "Content-Type: application/json" \\
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
               -H "ngrok-skip-browser-warning: true" \\
-              -d @/tmp/nyx_payload.json
+              --data-binary @/tmp/nyx_payload.json
           echo "✓ Gitleaks: $COUNT secret(s) sent to Nyx"
 
       # ── Hadolint (Dockerfile linting) — auto-activates when Dockerfile exists ─
@@ -314,22 +312,21 @@ jobs:
           COUNT=$(jq 'if type == "array" then length else 0 end' hadolint.json 2>/dev/null || echo 0)
           if [ "$COUNT" -eq 0 ]; then echo "✓ Hadolint: no issues found"; exit 0; fi
           NYX_URL="${{NYX_URL// /}}"
-          jq -n \\
+          jq -cn \\
             --arg repo    "{repo_id}" \\
             --arg scanner "HADOLINT" \\
             --arg ref     "$GITHUB_REF_NAME" \\
             --slurpfile d hadolint.json \\
             '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
             > /tmp/nyx_payload.json
-          HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
-            | openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" \\
-            | awk '{{print $2}}')
+          HMAC=$(openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" /tmp/nyx_payload.json \\
+            | awk '{{print $NF}}')
           curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
               -H "Content-Type: application/json" \\
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
               -H "ngrok-skip-browser-warning: true" \\
-              -d @/tmp/nyx_payload.json
+              --data-binary @/tmp/nyx_payload.json
           echo "✓ Hadolint: $COUNT issue(s) sent to Nyx"
 
       # ── Snyk (SCA) — activates when SNYK_TOKEN secret is set ─────────────────
@@ -355,22 +352,21 @@ jobs:
         run: |
           if [ -z "$SNYK_TOKEN" ]; then exit 0; fi
           NYX_URL="${{NYX_URL// /}}"
-          jq -n \\
+          jq -cn \\
             --arg repo    "{repo_id}" \\
             --arg scanner "SNYK" \\
             --arg ref     "$GITHUB_REF_NAME" \\
             --slurpfile d snyk.json \\
             '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
             > /tmp/nyx_payload.json
-          HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
-            | openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" \\
-            | awk '{{print $2}}')
+          HMAC=$(openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" /tmp/nyx_payload.json \\
+            | awk '{{print $NF}}')
           curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
               -H "Content-Type: application/json" \\
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
               -H "ngrok-skip-browser-warning: true" \\
-              -d @/tmp/nyx_payload.json
+              --data-binary @/tmp/nyx_payload.json
           echo "✓ Snyk results sent to Nyx"
 
       # ── Trivy (SCA + IaC + Container) ────────────────────────────────────────
@@ -391,22 +387,21 @@ jobs:
           NYX_WEBHOOK_SECRET: ${{{{ secrets.NYX_WEBHOOK_SECRET }}}}
         run: |
           NYX_URL="${{NYX_URL// /}}"
-          jq -n \\
+          jq -cn \\
             --arg repo    "{repo_id}" \\
             --arg scanner "TRIVY" \\
             --arg ref     "$GITHUB_REF_NAME" \\
             --slurpfile d trivy.json \\
             '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
             > /tmp/nyx_payload.json
-          HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
-            | openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" \\
-            | awk '{{print $2}}')
+          HMAC=$(openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" /tmp/nyx_payload.json \\
+            | awk '{{print $NF}}')
           curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
               -H "Content-Type: application/json" \\
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
               -H "ngrok-skip-browser-warning: true" \\
-              -d @/tmp/nyx_payload.json
+              --data-binary @/tmp/nyx_payload.json
           echo "✓ Trivy results sent to Nyx"
 
       # ── SBOM (CycloneDX via Trivy) ────────────────────────────────────────────
@@ -421,7 +416,7 @@ jobs:
           NYX_API_KEY: ${{{{ secrets.NYX_API_KEY }}}}
         run: |
           NYX_URL="${{NYX_URL// /}}"
-          jq -n \\
+          jq -cn \\
             --arg ref "$GITHUB_REF_NAME" \\
             --slurpfile s sbom-cdx.json \\
             '{{"git_ref":$ref,"sbom":$s[0]}}' \\
@@ -475,22 +470,21 @@ jobs:
             echo "⚠ ZAP returned no site data — skipping submission"
             exit 0
           fi
-          jq -n \\
+          jq -cn \\
             --arg repo    "{repo_id}" \\
             --arg scanner "ZAP" \\
             --arg ref     "$GITHUB_REF_NAME" \\
             --slurpfile d zap.json \\
             '{{repository_id:$repo, scanner:$scanner, git_ref:$ref, data:$d[0]}}' \\
             > /tmp/nyx_payload.json
-          HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \\
-            | openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" \\
-            | awk '{{print $2}}')
+          HMAC=$(openssl dgst -sha256 -hmac "${{NYX_WEBHOOK_SECRET}}" /tmp/nyx_payload.json \\
+            | awk '{{print $NF}}')
           curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \\
               -H "Content-Type: application/json" \\
               -H "X-API-Key: $NYX_API_KEY" \\
               -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \\
               -H "ngrok-skip-browser-warning: true" \\
-              -d @/tmp/nyx_payload.json
+              --data-binary @/tmp/nyx_payload.json
           echo "✓ ZAP results sent to Nyx ($SITE_COUNT site(s) scanned)"
 """
 

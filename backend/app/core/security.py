@@ -660,7 +660,7 @@ def verify_submission_hmac(
     Verify the optional X-Nyx-Submission-HMAC header on scan imports.
 
     The CI workflow computes:
-        HMAC-SHA256(key=repo_webhook_secret, msg=SHA256(payload_bytes))
+        HMAC-SHA256(key=repo_webhook_secret, msg=payload_bytes)
     and sends it as: sha256=<hexdigest>
 
     Returns True if verified.
@@ -682,9 +682,8 @@ def verify_submission_hmac(
             detail="Malformed X-Nyx-Submission-HMAC header (expected sha256=<hex>)",
         )
 
-    payload_hash = hashlib.sha256(body_bytes).digest()
     expected = "sha256=" + hmac.new(
-        repo_webhook_secret.encode(), payload_hash, hashlib.sha256
+        repo_webhook_secret.encode(), body_bytes, hashlib.sha256
     ).hexdigest()
 
     if not hmac.compare_digest(submission_hmac_header, expected):
