@@ -41,6 +41,8 @@ Dozens of scanners, thousands of findings, hundreds of repositories — and no c
 
 > **Zero friction from "vulnerability detected" to "vulnerability fixed"** — with a full audit trail at every step.
 
+Check out the blogpost! [Nyx Blog Post](https://wanderersgrimoire.com/posts/nyx-i-built-a-security-platform-for-fun-now-i-actually-use-it)
+
 ---
 
 ## Highlights
