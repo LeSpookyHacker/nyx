@@ -30,6 +30,7 @@ After clicking **Push Workflow**, configure these in the target repository under
 | Secret | Value | Required |
 |---|---|---|
 | `NYX_API_KEY` | A **scanner-scoped** Nyx API key — create one from Nyx **Settings → API Keys** with `scanner` scope | Yes |
+| `NYX_WEBHOOK_SECRET` | The per-repo webhook secret from Nyx — find it on the repository detail page (reveal button at the bottom of the header card) | Strongly recommended |
 | `SNYK_TOKEN` | Snyk API token from [app.snyk.io/account](https://app.snyk.io/account) — enables the Snyk SCA step | Optional |
 
 > **Never use an admin-scope key in CI.** A `scanner`-scoped key can submit scans but cannot suppress findings, manage keys, or access audit exports — limiting blast radius if a CI secret is ever compromised.
@@ -47,12 +48,41 @@ After clicking **Push Workflow**, configure these in the target repository under
 
 ---
 
+## Scan submission verification (X-Nyx-Submission-HMAC)
+
+Every scan submission to `POST /scans/import-json` can be signed so Nyx can verify the payload hasn't been tampered with or injected by someone who discovered your ngrok/public URL and API key.
+
+### How it works
+
+The workflow computes a two-step HMAC for each scanner payload before sending it to Nyx:
+
+```
+HMAC = HMAC-SHA256(key=NYX_WEBHOOK_SECRET, msg=SHA256(request_body))
+```
+
+This is sent as the `X-Nyx-Submission-HMAC: sha256=<hex>` request header. Nyx verifies it on arrival using the per-repo `webhook_secret` stored in its database. Verified scans are flagged as `submission_verified: true` in the scan record and audit log.
+
+### Setup
+
+1. Go to the repository detail page in Nyx — the `NYX_WEBHOOK_SECRET` value is shown at the bottom of the header card (hidden by default, click **Reveal** then **Copy**).
+2. Add it as a GitHub Actions secret named `NYX_WEBHOOK_SECRET` in the target repo under **Settings → Secrets and variables → Actions → Secrets**.
+
+Each repository has its own webhook secret — set the correct one per repo.
+
+> **Each repo has a unique secret.** Do not share the same `NYX_WEBHOOK_SECRET` across multiple repositories. If you push the Nyx workflow to a new repo, retrieve its specific secret from the Nyx repository detail page.
+
+### Enforcement
+
+By default, Nyx accepts scan submissions with or without the header — `submission_verified` is informational. To make the header mandatory (rejecting unsigned submissions entirely), set `REQUIRE_SUBMISSION_HMAC=true` in your Nyx `.env`. This is recommended for production deployments exposed to the internet.
+
+---
+
 ## Manual CI — if you don't use GitHub Actions
 
 The endpoint is the same regardless of CI system. Here's a generic shell template that works anywhere:
 
 ```bash
-# Assumes $NYX_URL, $NYX_API_KEY, $NYX_REPO_ID are set in env
+# Assumes $NYX_URL, $NYX_API_KEY, $NYX_REPO_ID, $NYX_WEBHOOK_SECRET are set in env
 
 semgrep --config=auto --json --output=semgrep.json .
 
@@ -61,11 +91,19 @@ jq -n \
   --arg ref "$(git rev-parse --abbrev-ref HEAD)" \
   --arg sha "$(git rev-parse HEAD)" \
   --slurpfile data semgrep.json \
-  '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, git_sha: $sha, trigger: "push", data: $data[0]}' | \
+  '{repository_id: $repo, scanner: "SEMGREP", git_ref: $ref, git_sha: $sha, trigger: "push", data: $data[0]}' \
+  > /tmp/nyx_payload.json
+
+# Compute submission HMAC: HMAC-SHA256(key=webhook_secret, msg=SHA256(body))
+HMAC=$(openssl dgst -sha256 -binary /tmp/nyx_payload.json \
+  | openssl dgst -sha256 -hmac "$NYX_WEBHOOK_SECRET" \
+  | awk '{print $2}')
+
 curl -sf -X POST "$NYX_URL/api/v1/scans/import-json" \
   -H "Content-Type: application/json" \
   -H "X-API-Key: $NYX_API_KEY" \
-  -d @-
+  -H "X-Nyx-Submission-HMAC: sha256=$HMAC" \
+  -d @/tmp/nyx_payload.json
 ```
 
 Adapt for GitLab CI, CircleCI, Jenkins, Bitbucket Pipelines, or whatever you run.
@@ -114,7 +152,9 @@ If the repository uses Dependabot, Nyx automatically picks up Dependabot alerts 
 | CI passes but no findings appear | Check `NYX_URL` is reachable from the runner; check `NYX_API_KEY` scope |
 | `202 Accepted` but nothing in Nyx | Check backend logs — payload may have failed schema validation |
 | `401 Unauthorized` | Wrong or revoked API key |
-| `403 Forbidden` | Key lacks `scanner` scope |
+| `403 Forbidden` | Key lacks `scanner` scope, or `X-Nyx-Submission-HMAC` is present but invalid |
+| `403` with `"Invalid X-Nyx-Submission-HMAC"` | `NYX_WEBHOOK_SECRET` in GitHub doesn't match the per-repo secret in Nyx — retrieve the correct value from the repository detail page and update the secret |
+| Scans show `submission_verified: false` | `NYX_WEBHOOK_SECRET` secret is missing from the repo — add it as described in the [Scan submission verification](#scan-submission-verification-x-nyx-submission-hmac) section |
 | `429 Too Many Requests` | Raise `RATE_LIMIT_PER_MINUTE` or stagger CI concurrency |
 
 ---
