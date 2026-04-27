@@ -5,7 +5,12 @@ import { apiKeysApi, type ApiKeyRecord, type ApiKeyCreated } from '../api/apiKey
 import client from '../api/client'
 
 type HealthStatus = 'ok' | 'error' | 'not_configured'
-type IntegrationsHealth = Record<string, { status: HealthStatus; detail?: string }>
+type IntegrationInfo = { status: HealthStatus; detail?: string; [key: string]: unknown }
+type IntegrationsHealth = Record<string, IntegrationInfo>
+
+function getDetail(info: IntegrationInfo): string | undefined {
+  return (info.detail || info.model || info.authenticated_as) as string | undefined
+}
 
 function HealthCard() {
   const [data, setData] = useState<IntegrationsHealth | null>(null)
@@ -17,8 +22,8 @@ function HealthCard() {
     setError('')
     try {
       // /health/integrations lives outside /api/v1
-      const { data } = await client.get('/health/integrations', { baseURL: '' })
-      setData(data as IntegrationsHealth)
+      const { data: resp } = await client.get('/health/integrations', { baseURL: '' })
+      setData(resp.integrations as IntegrationsHealth)
     } catch {
       setError('Failed to reach the backend health endpoint.')
     } finally {
@@ -66,10 +71,10 @@ function HealthCard() {
               </div>
               <span className="text-nyx-mist text-xs">
                 {info.status === 'ok'
-                  ? 'Connected'
+                  ? getDetail(info) ? `Connected · ${getDetail(info)}` : 'Connected'
                   : info.status === 'not_configured'
                   ? 'Not configured'
-                  : info.detail || 'Error'}
+                  : getDetail(info) || 'Error'}
               </span>
             </div>
           ))}
