@@ -404,6 +404,7 @@ export default function RepositoriesPage() {
             {!pushResult.error && (
               <span className="text-nyx-mist ml-2">
                 Set <code className="text-nyx-lavender">NYX_URL</code> (var) and <code className="text-nyx-lavender">NYX_API_KEY</code> (secret) in GitHub.
+                Add <code className="text-nyx-lavender">NYX_WEBHOOK_SECRET</code> (secret) — copy it from the repository detail page.
                 Optional: set <code className="text-nyx-lavender">NYX_ZAP_TARGET</code> (var) to enable DAST.
                 Add <code className="text-nyx-lavender">SNYK_TOKEN</code> (secret) to enable Snyk.
               </span>
