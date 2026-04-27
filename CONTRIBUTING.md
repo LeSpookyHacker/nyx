@@ -15,7 +15,7 @@ Thank you for your interest in contributing to Nyx! This guide will help you get
 
 ```bash
 # Clone the repository
-git clone https://github.com/shadowm82/nyx.git
+git clone https://github.com/LeSpookyHacker/nyx.git
 cd nyx
 
 # Run the setup wizard
