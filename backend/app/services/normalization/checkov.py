@@ -5,10 +5,13 @@ Run with: checkov -d . -o json > results.json
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding
+
+logger = logging.getLogger(__name__)
 
 
 class CheckovNormalizer(AbstractNormalizer):
@@ -34,6 +37,7 @@ class CheckovNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_check(check, check_type))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 
@@ -74,7 +78,7 @@ class CheckovNormalizer(AbstractNormalizer):
         )
 
     def _infer_severity(self, check_id: str, raw_severity: str | None) -> str:
-        if raw_severity:
+        if raw_severity and isinstance(raw_severity, str):  # SEC-313: guard against non-string types
             mapping = {"HIGH": "HIGH", "MEDIUM": "MEDIUM", "LOW": "LOW", "CRITICAL": "CRITICAL"}
             return mapping.get(raw_severity.upper(), "MEDIUM")
         # Heuristic: CKV_AWS_* networking/iam rules are higher priority

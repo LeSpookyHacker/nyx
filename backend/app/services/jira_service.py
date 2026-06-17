@@ -307,7 +307,12 @@ async def test_connection() -> Dict[str, Any]:
             data = resp.json()
         return {"ok": True, "mode": "real", "user": data.get("emailAddress"), "url": settings.JIRA_URL}
     except Exception as e:
-        return {"ok": False, "mode": "real", "error": str(e)}
+        # SEC-312: return sanitized error, not raw exception (may contain auth headers)
+        if isinstance(e, httpx.HTTPStatusError):
+            _err_msg = f"HTTP {e.response.status_code}"
+        else:
+            _err_msg = "Connection error — check server logs"
+        return {"ok": False, "mode": "real", "error": _err_msg}
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

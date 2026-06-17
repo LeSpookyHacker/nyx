@@ -2,8 +2,8 @@
 FROM node:20-alpine AS builder
 
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci  # SEC-335: use ci for reproducible installs; lockfile must be committed
 
 COPY . .
 RUN npm run build

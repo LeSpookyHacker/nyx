@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import limiter
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.database import get_db
 from app.models.scan_schedule import ScanSchedule
 from app.services.audit_service import log_event
@@ -49,6 +49,13 @@ class ScheduleUpdate(BaseModel):
     enabled_scanners: Optional[List[str]] = None
     interval_hours: Optional[int] = None
     enabled: Optional[bool] = None
+
+    @field_validator("interval_hours")
+    @classmethod
+    def validate_interval(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 1 or v > 8760):  # SEC-327: same bounds as ScheduleCreate
+            raise ValueError("interval_hours must be between 1 and 8760")
+        return v
 
 
 def _to_dict(s: ScanSchedule) -> dict:
@@ -96,7 +103,7 @@ async def create_schedule(
     request: Request,
     body: ScheduleCreate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-324
 ):
     now = datetime.now(timezone.utc)
     s = ScanSchedule(
@@ -124,7 +131,7 @@ async def update_schedule(
     schedule_id: str,
     body: ScheduleUpdate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-324
 ):
     result = await db.execute(select(ScanSchedule).where(ScanSchedule.id == schedule_id))
     s = result.scalar_one_or_none()
@@ -158,7 +165,7 @@ async def delete_schedule(
     request: Request,
     schedule_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-324
 ):
     result = await db.execute(select(ScanSchedule).where(ScanSchedule.id == schedule_id))
     s = result.scalar_one_or_none()
@@ -177,7 +184,7 @@ async def trigger_schedule(
     request: Request,
     schedule_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-324
 ):
     """Manually trigger a scheduled scan immediately."""
     result = await db.execute(select(ScanSchedule).where(ScanSchedule.id == schedule_id))

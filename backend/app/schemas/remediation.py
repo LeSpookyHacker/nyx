@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RemediationRequest(BaseModel):
@@ -23,13 +23,13 @@ class RemediationRequest(BaseModel):
 
 
 class RemediationApprove(BaseModel):
-    engineer_notes: Optional[str] = None
+    engineer_notes: Optional[str] = Field(None, max_length=5000)  # SEC-330
     auto_merge: bool = False
     jira_assignee: Optional[str] = None
 
 
 class RemediationReject(BaseModel):
-    engineer_notes: str
+    engineer_notes: str = Field(..., max_length=5000)  # SEC-330
 
 
 class RemediationRegenerate(BaseModel):

@@ -7,10 +7,13 @@ API reference: GET /repos/{owner}/{repo}/code-scanning/alerts
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding
+
+logger = logging.getLogger(__name__)
 
 _SEVERITY_MAP = {
     "critical": "CRITICAL",
@@ -55,6 +58,7 @@ class CodeScanningNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_alert(alert))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 

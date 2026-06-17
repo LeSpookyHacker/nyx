@@ -16,7 +16,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 
 logger = logging.getLogger("nyx.sbom")
 from app.database import get_db
@@ -36,7 +36,7 @@ router = APIRouter(prefix="/sbom", tags=["sbom"])
 async def trigger_sbom_generation(
     repo_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-325
 ):
     """
     Dispatch the nyx-scan.yml workflow on the repository's GitHub Actions,
@@ -388,7 +388,7 @@ async def acknowledge_alert(
 async def acknowledge_all_alerts(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-325
 ):
     result = await db.execute(
         select(SbomAlert).where(SbomAlert.acknowledged_at.is_(None))

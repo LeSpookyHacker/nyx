@@ -59,7 +59,7 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: s
         <p className="text-nyx-mist text-xs">AI Confidence: {(rem.ai_confidence * 100).toFixed(0)}%</p>
       )}
       {rem.pr_url && (
-        <a href={rem.pr_url} target="_blank" rel="noopener noreferrer"
+        <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"  {/* SEC-332 */}
           className="text-nyx-stardust text-xs flex items-center gap-1 mt-2 hover:text-nyx-amethyst"
           onClick={e => e.stopPropagation()}>
           <GitPullRequest size={11} /> View PR <ExternalLink size={10} />

@@ -6,6 +6,7 @@ Run with: trivy fs --format json --output results.json .
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
@@ -15,6 +16,8 @@ from app.services.normalization.base import (
     cvss_to_severity,
     map_severity,
 )
+
+logger = logging.getLogger(__name__)
 
 _CLASS_TO_CATEGORY = {
     "lang-pkgs": FindingCategory.SCA.value,
@@ -45,6 +48,7 @@ class TrivyNormalizer(AbstractNormalizer):
                 try:
                     findings.append(self._normalize_vuln(vuln, target, category))
                 except Exception:
+                    logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                     continue
 
             # Misconfigurations (IaC)
@@ -52,6 +56,7 @@ class TrivyNormalizer(AbstractNormalizer):
                 try:
                     findings.append(self._normalize_misconf(misconf, target))
                 except Exception:
+                    logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                     continue
 
             # Secrets
@@ -59,6 +64,7 @@ class TrivyNormalizer(AbstractNormalizer):
                 try:
                     findings.append(self._normalize_secret(secret, target))
                 except Exception:
+                    logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                     continue
 
         return findings

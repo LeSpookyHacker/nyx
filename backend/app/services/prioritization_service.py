@@ -12,6 +12,7 @@ Higher scores appear first in the dashboard.
 """
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timezone
 
@@ -22,6 +23,7 @@ from app.core.constants import Severity
 from app.services.normalization.base import NormalizedFinding
 
 settings = get_settings()
+logger = logging.getLogger("nyx.prioritization")
 
 _SEVERITY_WEIGHTS = {
     Severity.CRITICAL.value: 1.0,
@@ -80,6 +82,22 @@ async def fetch_epss_score(cve_id: str) -> float | None:
     """
     if not settings.EPSS_API_ENABLED or not cve_id:
         return None
+    # SEC-310: validate EPSS URL is HTTPS and doesn't point to internal ranges
+    import ipaddress as _ipaddress
+    import socket as _socket
+    from urllib.parse import urlparse as _urlparse
+    _parsed_epss = _urlparse(settings.EPSS_API_BASE_URL)
+    if _parsed_epss.scheme != "https":
+        logger.warning("EPSS_API_BASE_URL must use https — skipping EPSS enrichment")
+        return None
+    try:
+        _epss_ip = _socket.gethostbyname(_parsed_epss.hostname or "")
+        _epss_addr = _ipaddress.ip_address(_epss_ip)
+        if _epss_addr.is_private or _epss_addr.is_loopback or _epss_addr.is_link_local:
+            logger.warning("EPSS_API_BASE_URL resolves to a private/loopback address — skipping")
+            return None
+    except Exception:
+        pass  # DNS failure handled by httpx timeout below
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(

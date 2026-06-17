@@ -5,10 +5,13 @@ Processes alerts from the GitHub Dependabot Alerts API:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from app.core.constants import FindingCategory
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding, cvss_to_severity
+
+logger = logging.getLogger(__name__)
 
 _SEVERITY_MAP = {
     "critical": "CRITICAL",
@@ -28,6 +31,7 @@ class DependabotNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_alert(alert))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 

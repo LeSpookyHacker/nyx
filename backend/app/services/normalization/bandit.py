@@ -4,10 +4,13 @@ Run with: bandit -r . -f json -o results.json
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding, map_severity
+
+logger = logging.getLogger(__name__)
 
 _CONFIDENCE_MAP = {"HIGH": 1.0, "MEDIUM": 0.6, "LOW": 0.3}
 
@@ -24,6 +27,7 @@ class BanditNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_result(r))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 

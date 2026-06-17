@@ -238,15 +238,15 @@ async def executive_report(
         _sev_order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"]
         row_html = "".join(
             "<tr><td>{}</td><td>{}</td><td style='color:{}'>{}</td><td>{}</td></tr>".format(
-                row.scanner, row.category or "—",
-                _SEVERITY_COLORS.get(row.severity, "#000"), row.severity, row.cnt
+                _html.escape(row.scanner), _html.escape(row.category or "—"),
+                _SEVERITY_COLORS.get(row.severity, "#000"), _html.escape(row.severity), row.cnt  # SEC-328: row.cnt is an int, safe
             )
             for row in sorted(rows, key=lambda r: (_sev_order.index(r.severity) if r.severity in _sev_order else 99, r.scanner))
         )
         repo_detail_html += f"""
         <div class='repo-section'>
           <div class='repo-header'>
-            <strong>{repo_name}</strong>
+            <strong>{_html.escape(repo_name)}</strong>
             <span class='repo-badge'>{total_repo} open findings</span>
             <span style='color:#ef4444'>{sev_totals['CRITICAL']}C</span>
             <span style='color:#f97316'>{sev_totals['HIGH']}H</span>

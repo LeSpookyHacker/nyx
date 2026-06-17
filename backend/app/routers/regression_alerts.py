@@ -47,7 +47,7 @@ async def acknowledge_alert(
     request: Request,
     alert_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-331
 ):
     result = await db.execute(select(RegressionAutoAlert).where(RegressionAutoAlert.id == alert_id))
     alert = result.scalar_one_or_none()

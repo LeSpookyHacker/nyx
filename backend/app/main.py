@@ -17,7 +17,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.core.limiter import limiter
-from app.core.security import require_api_key, require_scope, warn_insecure_config, SCOPE_ADMIN
+from app.core.security import require_api_key, require_scope, warn_insecure_config, SCOPE_ADMIN, _compute_key_hashes
 from app.database import init_db
 from app.routers import (
     audit, api_keys, compliance, dashboard, findings, jira, remediation,
@@ -309,7 +309,7 @@ async def _seed_api_key_from_env() -> None:
     so the DB auth path is immediately active without manual provisioning.
     Only runs when the api_keys table is empty — safe to call on every startup.
     """
-    import hashlib as _hashlib
+    from datetime import datetime, timezone, timedelta as _td
     from sqlalchemy import func, select as sa_select
     from app.database import AsyncSessionLocal
     from app.models.api_key import ApiKey
@@ -321,13 +321,21 @@ async def _seed_api_key_from_env() -> None:
         async with AsyncSessionLocal() as db:
             count_result = await db.execute(sa_select(func.count()).select_from(ApiKey))
             if count_result.scalar_one() == 0:
-                key_hash = _hashlib.sha256(settings.NYX_API_KEY.encode()).hexdigest()
+                key_hash = _compute_key_hashes(settings.NYX_API_KEY)[0]  # SEC-301: use HMAC-SHA256 when NYX_SECRET_KEY available
+                # SEC-304: respect API_KEY_MAX_LIFETIME_DAYS for the bootstrap key too
+                _now = datetime.now(timezone.utc)
+                _bootstrap_expires = (
+                    _now + _td(days=settings.API_KEY_MAX_LIFETIME_DAYS)
+                    if settings.API_KEY_MAX_LIFETIME_DAYS > 0
+                    else None
+                )
                 db.add(ApiKey(
                     name="bootstrap",
                     key_hash=key_hash,
                     is_active=True,
                     created_by="system",
                     scopes="admin",
+                    expires_at=_bootstrap_expires,
                 ))
                 await db.commit()
                 logger.info("Seeded bootstrap API key from NYX_API_KEY environment variable")
@@ -568,7 +576,7 @@ async def security_headers_middleware(request: Request, call_next):
     else:
         response.headers["Content-Security-Policy"] = "default-src 'none'"  # API returns JSON only
     if settings.HTTPS_ONLY:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains; preload"  # SEC-303
     return response
 
 
@@ -656,7 +664,7 @@ async def create_session(request: Request, response: Response):
                     scopes = record.scopes or SCOPE_ADMIN
                     api_key_id = record.id
     except Exception as db_exc:
-        logger.debug("Session DB key lookup failed, falling back to env var: %s", db_exc)
+        logger.debug("Session DB key lookup failed (%s), falling back to env var", type(db_exc).__name__)  # SEC-305: avoid logging DSN credentials
 
     if not key_valid and settings.NYX_API_KEY:
         key_valid = _secrets.compare_digest(api_key, settings.NYX_API_KEY)
@@ -700,6 +708,7 @@ async def create_session(request: Request, response: Response):
 
 
 @app.post("/auth/logout", tags=["auth"])
+@limiter.limit("20/minute")  # SEC-302: rate-limit logout to prevent DB amplification
 async def logout(request: Request, response: Response):
     """Delete the session row and clear the cookie."""
     cookie_token = request.cookies.get("nyx_session")

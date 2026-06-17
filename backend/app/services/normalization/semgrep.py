@@ -4,10 +4,13 @@ Run semgrep with: semgrep --json --output results.json
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory, Severity
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding, map_severity
+
+logger = logging.getLogger(__name__)
 
 # CWE tags that indicate secrets detection
 _SECRETS_TAGS = {"secret", "secrets", "credentials", "password", "api-key", "token"}
@@ -26,6 +29,7 @@ class SemgrepNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_result(r))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 

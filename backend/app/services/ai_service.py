@@ -417,12 +417,14 @@ def _build_test_context(test_file_contents: Optional[dict[str, str]]) -> str:
         return ""
 
     parts = ["\n\n## Associated Test Files"]
-    for filename, content in test_file_contents.items():
+    for filename, content in list(test_file_contents.items())[:5]:  # SEC-311: cap at 5 files to limit token amplification
         safe_filename = _safe(filename, 300)
         # Truncate test files to a reasonable size
         lines = content.splitlines()
         if len(lines) > 150:
             content = "\n".join(lines[:150]) + f"\n# [Test file truncated at 150 lines of {len(lines)} total]"
+        content = _CTRL_CHARS_RE.sub("", content)          # SEC-307: strip ctrl chars
+        content = _PROMPT_INJECTION_RE.sub("", content)    # SEC-307: strip injection patterns
         parts.append(
             f"\n### {safe_filename}\n"
             f"{_TEST_CONTENT_START}\n"
@@ -584,6 +586,7 @@ def _build_alternatives_prompt(
 
 
 def _build_explain_prompt(finding: Finding, diff: str) -> str:
+    diff = _CTRL_CHARS_RE.sub("", diff)  # SEC-308: strip ctrl/bidi chars before prompt assembly
     return textwrap.dedent(f"""
         A security fix has been generated for this vulnerability:
         - **Title**: {_safe(finding.title, 200)}

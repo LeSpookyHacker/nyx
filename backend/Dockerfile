@@ -31,4 +31,8 @@ EXPOSE 8000
 # Run as non-root user — compatible with no-new-privileges:true
 USER nyx
 
+# SEC-306: container health probe — orchestrators use this to detect hung workers
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"
+
 ENTRYPOINT ["/entrypoint.sh"]

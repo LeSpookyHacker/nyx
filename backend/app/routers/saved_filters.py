@@ -9,7 +9,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import require_api_key
+from app.core.security import require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.database import get_db
 from app.models.saved_filter import SavedFilter
 
@@ -75,7 +75,7 @@ async def list_saved_filters(
 async def create_saved_filter(
     body: SavedFilterCreate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-326
 ):
     # If this is marked default, clear any existing default for the same scope.
     if body.is_default:
@@ -101,7 +101,7 @@ async def create_saved_filter(
 async def delete_saved_filter(
     filter_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-326
 ):
     result = await db.execute(select(SavedFilter).where(SavedFilter.id == filter_id))
     record = result.scalar_one_or_none()

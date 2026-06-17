@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import re as _re
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,6 +17,89 @@ from app.models.custom_compliance import CustomControl, CustomFramework
 from app.services import compliance_service
 
 router = APIRouter(prefix="/compliance", tags=["compliance"])
+
+
+# ─── Request models (SEC-315 through SEC-321) ─────────────────────────────────
+
+class CustomFrameworkCreate(BaseModel):
+    slug: str = Field(..., max_length=100, pattern=r"^[a-z0-9][a-z0-9\-]{0,98}[a-z0-9]$")
+    name: str = Field(..., max_length=200)
+    description: Optional[str] = Field(None, max_length=2000)
+
+
+class CustomControlCreate(BaseModel):
+    title: str = Field(..., max_length=300)
+    description: Optional[str] = Field(None, max_length=2000)
+    cwe_ids: List[str] = Field(default_factory=list, max_length=50)
+    owasp_categories: List[str] = Field(default_factory=list, max_length=20)
+    severity_guidance: Optional[str] = Field(None, max_length=1000)
+
+    @field_validator("cwe_ids", mode="before")
+    @classmethod
+    def validate_cwe_ids(cls, v: list) -> list:
+        for item in v:
+            if not isinstance(item, str) or not _re.match(r"^CWE-\d+$", item):
+                raise ValueError(f"Invalid CWE ID: {item!r} — must match CWE-\\d+")
+        return v
+
+    @field_validator("owasp_categories", mode="before")
+    @classmethod
+    def validate_owasp_categories(cls, v: list) -> list:
+        for item in v:
+            if not isinstance(item, str) or not _re.match(r"^A\d{2}:\d{4}$|^[A-Z]\d{2}$", item):
+                raise ValueError(f"Invalid OWASP category: {item!r}")
+        return v
+
+
+class CustomControlUpdate(BaseModel):
+    title: Optional[str] = Field(None, max_length=300)
+    description: Optional[str] = Field(None, max_length=2000)
+    cwe_ids: Optional[List[str]] = Field(None, max_length=50)
+    owasp_categories: Optional[List[str]] = Field(None, max_length=20)
+    severity_guidance: Optional[str] = Field(None, max_length=1000)
+
+    @field_validator("cwe_ids", mode="before")
+    @classmethod
+    def validate_cwe_ids(cls, v: Optional[list]) -> Optional[list]:
+        if v is None:
+            return v
+        for item in v:
+            if not isinstance(item, str) or not _re.match(r"^CWE-\d+$", item):
+                raise ValueError(f"Invalid CWE ID: {item!r}")
+        return v
+
+    @field_validator("owasp_categories", mode="before")
+    @classmethod
+    def validate_owasp_categories(cls, v: Optional[list]) -> Optional[list]:
+        if v is None:
+            return v
+        for item in v:
+            if not isinstance(item, str) or not _re.match(r"^A\d{2}:\d{4}$|^[A-Z]\d{2}$", item):
+                raise ValueError(f"Invalid OWASP category: {item!r}")
+        return v
+
+
+class RiskAcceptanceCreate(BaseModel):
+    finding_id: str = Field(..., max_length=255)
+    business_justification: str = Field(..., max_length=5000)
+    expires_in_days: int = Field(180, ge=0, le=730)  # SEC-318: max 2 years
+    evidence_url: Optional[str] = Field(None, max_length=2000)
+    compensating_controls: Optional[str] = Field(None, max_length=2000)
+
+    @field_validator("evidence_url")
+    @classmethod
+    def validate_evidence_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        if parsed.scheme not in ("https", "http", ""):
+            raise ValueError("evidence_url must be an http or https URL")
+        return v
+
+
+class ApproveRiskAcceptanceRequest(BaseModel):
+    pass  # SEC-321: typed model prevents unbounded body ingestion
 
 
 # ── Built-in frameworks ───────────────────────────────────────────────────────
@@ -146,7 +231,7 @@ async def get_compliance_report(
 
 @router.post("/frameworks", status_code=201)
 async def create_custom_framework(
-    body: dict,
+    body: CustomFrameworkCreate,  # SEC-315
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
@@ -155,13 +240,9 @@ async def create_custom_framework(
 
     Body: { "slug": "my-policy", "name": "My Security Policy", "description": "..." }
     """
-    slug = str(body.get("slug", "")).strip().lower().replace(" ", "-")
-    name = str(body.get("name", "")).strip()
+    slug = body.slug
+    name = body.name
 
-    if not slug or not name:
-        raise HTTPException(status_code=400, detail="'slug' and 'name' are required")
-    if len(slug) > 100 or len(name) > 200:
-        raise HTTPException(status_code=400, detail="slug (max 100) and name (max 200) length exceeded")
     if slug in compliance_service.FRAMEWORKS:
         raise HTTPException(status_code=409, detail=f"'{slug}' is a reserved built-in framework ID")
 
@@ -175,7 +256,7 @@ async def create_custom_framework(
     fw = CustomFramework(
         slug=slug,
         name=name,
-        description=body.get("description", ""),
+        description=body.description or "",
         created_by=_key,
     )
     db.add(fw)
@@ -202,7 +283,7 @@ async def list_custom_controls(
 @router.post("/frameworks/{framework_id}/controls", status_code=201)
 async def add_custom_control(
     framework_id: str,
-    body: dict,
+    body: CustomControlCreate,  # SEC-316
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
@@ -219,23 +300,13 @@ async def add_custom_control(
     """
     fw = await _get_custom_framework(db, framework_id)
 
-    control_id = str(body.get("control_id", "")).strip()
-    title = str(body.get("title", "")).strip()
-    if not control_id or not title:
-        raise HTTPException(status_code=400, detail="'control_id' and 'title' are required")
-
-    cwe_ids = body.get("cwe_ids", [])
-    owasp_categories = body.get("owasp_categories", [])
-    if not isinstance(cwe_ids, list) or not isinstance(owasp_categories, list):
-        raise HTTPException(status_code=400, detail="'cwe_ids' and 'owasp_categories' must be arrays")
-
     ctrl = CustomControl(
         framework_id=fw.id,
-        control_id=control_id[:100],
-        title=title[:300],
-        description=str(body.get("description", ""))[:2000],
-        cwe_ids_json=json.dumps(cwe_ids),
-        owasp_categories_json=json.dumps(owasp_categories),
+        control_id="",
+        title=body.title,
+        description=body.description or "",
+        cwe_ids_json=json.dumps(body.cwe_ids),
+        owasp_categories_json=json.dumps(body.owasp_categories),
     )
     db.add(ctrl)
     await db.commit()
@@ -247,7 +318,7 @@ async def add_custom_control(
 async def update_custom_control(
     framework_id: str,
     control_db_id: str,
-    body: dict,
+    body: CustomControlUpdate,  # SEC-317
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
@@ -263,18 +334,14 @@ async def update_custom_control(
     if not ctrl:
         raise HTTPException(status_code=404, detail="Control not found")
 
-    if "title" in body:
-        ctrl.title = str(body["title"])[:300]
-    if "description" in body:
-        ctrl.description = str(body["description"])[:2000]
-    if "cwe_ids" in body:
-        if not isinstance(body["cwe_ids"], list):
-            raise HTTPException(status_code=400, detail="'cwe_ids' must be an array")
-        ctrl.cwe_ids_json = json.dumps(body["cwe_ids"])
-    if "owasp_categories" in body:
-        if not isinstance(body["owasp_categories"], list):
-            raise HTTPException(status_code=400, detail="'owasp_categories' must be an array")
-        ctrl.owasp_categories_json = json.dumps(body["owasp_categories"])
+    if body.title is not None:
+        ctrl.title = body.title
+    if body.description is not None:
+        ctrl.description = body.description
+    if body.cwe_ids is not None:
+        ctrl.cwe_ids_json = json.dumps(body.cwe_ids)
+    if body.owasp_categories is not None:
+        ctrl.owasp_categories_json = json.dumps(body.owasp_categories)
 
     await db.commit()
     await db.refresh(ctrl)
@@ -338,7 +405,7 @@ async def list_risk_acceptances(
 
 @router.post("/risk-acceptances", status_code=201)
 async def create_risk_acceptance(
-    body: dict,
+    body: RiskAcceptanceCreate,  # SEC-318
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
@@ -350,8 +417,7 @@ async def create_risk_acceptance(
       "business_justification": "...",
       "compensating_controls": "...",  # optional
       "evidence_url": "...",            # optional
-      "approved_by": "...",             # optional — set when formally approved
-      "expires_in_days": 180            # optional — 0 = no expiry
+      "expires_in_days": 180            # optional — 0 = no expiry, max 730 (2 years)
     }
     """
     from datetime import datetime, timezone
@@ -359,10 +425,8 @@ async def create_risk_acceptance(
     from app.models.finding import Finding
     from app.services.audit_service import log_event
 
-    finding_id = str(body.get("finding_id", "")).strip()
-    justification = str(body.get("business_justification", "")).strip()
-    if not finding_id or not justification:
-        raise HTTPException(status_code=400, detail="'finding_id' and 'business_justification' are required")
+    finding_id = body.finding_id
+    justification = body.business_justification
 
     # Verify finding exists
     finding_res = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -371,7 +435,7 @@ async def create_risk_acceptance(
         raise HTTPException(status_code=404, detail="Finding not found")
 
     now = datetime.now(timezone.utc)
-    expires_in_days = int(body.get("expires_in_days", 180))
+    expires_in_days = body.expires_in_days
     expires_at = now + timedelta(days=expires_in_days) if expires_in_days > 0 else None
 
     # SEC-218: never allow self-approval at create time — always require a separate
@@ -383,9 +447,9 @@ async def create_risk_acceptance(
         finding_id=finding_id,
         requested_by=_key,
         approved_by=None,
-        business_justification=justification[:5000],
-        compensating_controls=str(body.get("compensating_controls", ""))[:2000] or None,
-        evidence_url=str(body.get("evidence_url", ""))[:2000] or None,
+        business_justification=justification,
+        compensating_controls=body.compensating_controls,
+        evidence_url=body.evidence_url,
         expires_at=expires_at,
         approved_at=None,
         approval_status=approval_status,
@@ -409,7 +473,7 @@ async def create_risk_acceptance(
 @router.patch("/risk-acceptances/{acceptance_id}/approve")
 async def approve_risk_acceptance(
     acceptance_id: str,
-    body: dict,
+    body: ApproveRiskAcceptanceRequest,  # SEC-321
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):

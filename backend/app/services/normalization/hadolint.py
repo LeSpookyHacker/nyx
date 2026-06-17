@@ -5,10 +5,13 @@ Export from Hadolint with:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding
+
+logger = logging.getLogger(__name__)
 
 _LEVEL_MAP = {
     "error": "HIGH",
@@ -28,6 +31,7 @@ class HadolintNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_item(item))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 

@@ -5,6 +5,7 @@ import hashlib
 import hmac as hmac_mod
 import json
 import logging
+import secrets as _secrets
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -16,6 +17,11 @@ from app.models.audit_log import AuditLog
 logger = logging.getLogger("nyx.audit")
 
 _CHAIN_GENESIS = "0" * 64  # prev_hash for the very first entry
+
+# SEC-309: fallback HMAC key — generated once at import time so the audit chain
+# is at least self-consistent within a single process lifetime.
+# WARNING: chain cannot be verified across process restarts without NYX_SECRET_KEY.
+_FALLBACK_HMAC_KEY: bytes = _secrets.token_bytes(32)
 
 
 def _get_hmac_key() -> bytes:
@@ -39,18 +45,16 @@ def _get_hmac_key() -> bytes:
         raise
     except Exception:
         pass
-    # SEC-231: instead of a well-known hardcoded key, use a random per-process key.
+    # SEC-231 / SEC-309: instead of a well-known hardcoded key, use a random per-process key.
     # The chain is still tamper-evident within a single process lifetime, and
     # on restart a new random key is generated — forensically weaker than a
     # persistent secret but far better than a public constant.
-    import secrets as _sec
-    _random_fallback = _sec.token_bytes(32)
     logger.warning(
-        "NYX_SECRET_KEY not set — audit HMAC chain uses a random per-process key. "
-        "Chain integrity is valid within this process lifetime only. "
-        "Set NYX_SECRET_KEY before deploying to production."
+        "NYX_SECRET_KEY not set — audit HMAC chain uses a one-time random key. "
+        "Chain is self-consistent within this process lifetime but cannot be "
+        "verified across restarts. Set NYX_SECRET_KEY before deploying to production."
     )
-    return _random_fallback
+    return _FALLBACK_HMAC_KEY
 
 
 def _compute_entry_hash(

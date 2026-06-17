@@ -113,7 +113,7 @@ class FindingSuppressRequest(BaseModel):
 
 
 class FindingNoteUpdate(BaseModel):
-    notes: str
+    notes: str = Field(..., max_length=10000)  # SEC-329
 
 
 class FindingListParams(BaseModel):

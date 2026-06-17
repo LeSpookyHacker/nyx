@@ -22,6 +22,11 @@ from app.services.audit_service import _CHAIN_GENESIS, _compute_entry_hash, _get
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 
+def _escape_like(val: str) -> str:
+    """Escape LIKE metacharacters to prevent wildcard injection. SEC-322"""
+    return val.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def _serialize(log: AuditLog, include_hashes: bool = False) -> dict:
     d = {
         "id": log.id,
@@ -49,13 +54,16 @@ def _build_query(
 ):
     stmt = select(AuditLog).order_by(desc(AuditLog.created_at))
     if actor:
-        stmt = stmt.where(AuditLog.actor.ilike(f"%{actor}%"))
+        esc_actor = _escape_like(actor)
+        stmt = stmt.where(AuditLog.actor.ilike(f"%{esc_actor}%"))
     if action:
-        stmt = stmt.where(AuditLog.action.ilike(f"%{action}%"))
+        esc_action = _escape_like(action)
+        stmt = stmt.where(AuditLog.action.ilike(f"%{esc_action}%"))
     if resource_type:
         stmt = stmt.where(AuditLog.resource_type == resource_type)
     if search:
-        stmt = stmt.where(AuditLog.metadata_json.ilike(f"%{search}%") | AuditLog.action.ilike(f"%{search}%"))
+        esc_search = _escape_like(search)
+        stmt = stmt.where(AuditLog.metadata_json.ilike(f"%{esc_search}%") | AuditLog.action.ilike(f"%{esc_search}%"))
     if date_from:
         try:
             dt = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)

@@ -5,6 +5,7 @@ Run with: snyk test --json > results.json
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
@@ -14,6 +15,8 @@ from app.services.normalization.base import (
     cvss_to_severity,
     map_severity,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SnykNormalizer(AbstractNormalizer):
@@ -26,6 +29,7 @@ class SnykNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_webhook_issue(issue))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 
@@ -88,6 +92,7 @@ class SnykNormalizer(AbstractNormalizer):
                 try:
                     findings.append(self._normalize_vuln(vuln))
                 except Exception:
+                    logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                     continue
         return findings
 

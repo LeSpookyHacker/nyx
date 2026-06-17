@@ -4,6 +4,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { clsx } from 'clsx'
 import DOMPurify from 'dompurify'
+import { safeUrl } from '../../utils/url'
 
 interface Props {
   children: string
@@ -138,7 +139,7 @@ export default function MarkdownContent({ children, className, size = 'base' }: 
           // Links
           a: ({ href, children }) => (
             <a
-              href={href}
+              href={safeUrl(href ?? '')}  {/* SEC-333: validate href scheme before rendering */}
               target="_blank"
               rel="noopener noreferrer"
               className="text-nyx-stardust hover:text-nyx-amethyst underline underline-offset-2 transition-colors"

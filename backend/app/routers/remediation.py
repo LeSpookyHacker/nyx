@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-from typing import List
+import uuid as _uuid_module
+from typing import List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +30,28 @@ from app.services import ai_service, github_service, jira_service
 from app.services.audit_service import log_event
 
 router = APIRouter(prefix="/remediation", tags=["remediation"])
+
+
+# ─── Request models (SEC-319, SEC-320) ────────────────────────────────────────
+
+class BulkRemediationRequest(BaseModel):
+    finding_ids: List[str] = Field(..., min_length=1, max_length=20)
+    requested_by: str = Field("engineer", max_length=255)
+
+    @field_validator("finding_ids", mode="before")
+    @classmethod
+    def validate_uuids(cls, v: list) -> list:
+        for item in v:
+            try:
+                _uuid_module.UUID(str(item))
+            except ValueError:
+                raise ValueError(f"finding_ids must be valid UUIDs, got: {item!r}")
+        return [str(i) for i in v]
+
+
+class AlternativesRequest(BaseModel):
+    num_alternatives: int = Field(3, ge=1, le=5)
+    engineer_context: Optional[str] = Field(None, max_length=2000)
 
 
 async def _run_ai_fix(remediation_id: str, finding_id: str, engineer_context: str, db_session_factory) -> None:
@@ -359,19 +383,14 @@ async def regenerate_remediation(
 @limiter.limit("5/minute")
 async def bulk_request_remediation(
     request: Request,
-    body: dict,
+    body: BulkRemediationRequest,  # SEC-319
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):  # noqa: E501
     """Request AI fixes for multiple findings at once (max 20)."""
-    finding_ids = body.get("finding_ids", [])
-    requested_by = body.get("requested_by", "engineer")
-
-    if not finding_ids:
-        raise HTTPException(status_code=400, detail="finding_ids is required")
-    if len(finding_ids) > 20:
-        raise HTTPException(status_code=400, detail="Maximum 20 findings per bulk request")
+    finding_ids = body.finding_ids
+    requested_by = body.requested_by
 
     result = await db.execute(
         select(Finding).where(
@@ -810,7 +829,7 @@ async def stream_remediation(
 async def get_alternative_fixes(
     request: Request,
     remediation_id: str,
-    body: dict = None,
+    body: AlternativesRequest = AlternativesRequest(),  # SEC-320
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
@@ -844,8 +863,8 @@ async def get_alternative_fixes(
         except Exception:
             file_content = finding.code_snippet or ""
 
-    num_alternatives = min(int((body or {}).get("num_alternatives", 3)), 5)
-    engineer_context = (body or {}).get("engineer_context", rem.engineer_context or "")
+    num_alternatives = body.num_alternatives
+    engineer_context = body.engineer_context if body.engineer_context is not None else (rem.engineer_context or "")
 
     try:
         alternatives = await ai_service.generate_alternatives(

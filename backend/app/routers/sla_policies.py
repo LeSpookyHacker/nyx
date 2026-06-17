@@ -8,7 +8,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.database import get_db
 from app.models.sla_policy import SlaPolicy
 from app.services.audit_service import log_event
@@ -122,7 +122,7 @@ async def create_policy(
     request: Request,
     body: SlaPolicyCreate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-323
 ):
     p = SlaPolicy(**body.model_dump())
     db.add(p)
@@ -156,7 +156,7 @@ async def update_policy(
     policy_id: str,
     body: SlaPolicyUpdate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-323
 ):
     result = await db.execute(select(SlaPolicy).where(SlaPolicy.id == policy_id))
     p = result.scalar_one_or_none()
@@ -178,7 +178,7 @@ async def delete_policy(
     request: Request,
     policy_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-323
 ):
     result = await db.execute(select(SlaPolicy).where(SlaPolicy.id == policy_id))
     p = result.scalar_one_or_none()

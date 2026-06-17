@@ -5,10 +5,13 @@ Or via ZAP API: /JSON/core/view/alerts/
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 from app.core.constants import FindingCategory
 from app.services.normalization.base import AbstractNormalizer, NormalizedFinding, map_severity
+
+logger = logging.getLogger(__name__)
 
 _RISK_MAP = {
     "3": "HIGH",
@@ -44,6 +47,7 @@ class ZapNormalizer(AbstractNormalizer):
             try:
                 findings.append(self._normalize_alert(alert))
             except Exception:
+                logger.debug("Normalizer skipped malformed item", exc_info=True)  # SEC-314
                 continue
         return findings
 
