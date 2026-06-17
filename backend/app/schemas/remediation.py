@@ -70,5 +70,12 @@ class RemediationResponse(BaseModel):
     ci_failure_details: Optional[str] = None
     jira_issue_key: Optional[str] = None
     jira_issue_url: Optional[str] = None
+    # Auto PR Mode — distinguishes auto-triggered remediations and exposes audit/check status.
+    # audit_result is the parsed security-audit verdict (passed/risk_level/findings/summary).
+    is_auto_triggered: bool = False
+    audit_result: Optional[str] = None
+    audit_passed: Optional[bool] = None
+    check_run_id: Optional[int] = None
+    check_run_conclusion: Optional[str] = None
     created_at: datetime
     updated_at: datetime

@@ -162,6 +162,7 @@ async def generate_fix(
     engineer_context: str = "",
     test_file_contents: Optional[dict[str, str]] = None,
     dir_files: Optional[list[str]] = None,
+    model: Optional[str] = None,
 ) -> AIFixResult:
     """
     Generate an AI-powered fix for a security finding.
@@ -181,6 +182,9 @@ async def generate_fix(
     """
     if not settings.ANTHROPIC_API_KEY:
         raise AIServiceError("ANTHROPIC_API_KEY is not configured")
+
+    # Auto PR Mode overrides the model (AUTO_PR_FIX_MODEL); manual flow uses ANTHROPIC_MODEL.
+    model = model or settings.ANTHROPIC_MODEL
 
     client = _get_async_client()
 
@@ -220,7 +224,7 @@ async def generate_fix(
     for attempt in range(settings.AI_MAX_RETRIES + 1):
         try:
             diff_response = await client.messages.create(
-                model=settings.ANTHROPIC_MODEL,
+                model=model,
                 max_tokens=settings.AI_MAX_OUTPUT_TOKENS,
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": fix_prompt}],
@@ -236,7 +240,7 @@ async def generate_fix(
             # Step 2: Generate plain-English explanation (separate call)
             explain_prompt = _build_explain_prompt(finding, diff_text)
             explain_response = await client.messages.create(
-                model=settings.ANTHROPIC_MODEL,
+                model=model,
                 max_tokens=1024,
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": explain_prompt}],
@@ -254,7 +258,7 @@ async def generate_fix(
                 fix_summary=fix_summary,
                 confidence=confidence,
                 confidence_flagged=confidence_flagged,
-                model=settings.ANTHROPIC_MODEL,
+                model=model,
                 prompt_tokens=(
                     diff_response.usage.input_tokens + explain_response.usage.input_tokens
                 ),

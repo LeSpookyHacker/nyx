@@ -18,6 +18,7 @@ import {
   RefreshCw, ShieldAlert, Ticket, TrendingUp, Wand2, Webhook, X,
 } from 'lucide-react'
 import RepoTrends from '../components/charts/RepoTrends'
+import AutoPrModeCard from '../components/repositories/AutoPrModeCard'
 import { safeUrl } from '../utils/url'  // SEC-212
 import { clsx } from 'clsx'
 
@@ -732,6 +733,9 @@ export default function RepositoryDetailPage() {
         {/* Webhook secret */}
         {repo.webhook_secret && <WebhookSecretRow secret={repo.webhook_secret} />}
       </div>
+
+      {/* Auto PR Mode */}
+      <AutoPrModeCard repo={repo} />
 
       {/* Tabs */}
       <div className="border-b border-nyx-iris/10">

@@ -96,6 +96,28 @@ async def notify_pr_merged(repo: str, pr_number: int, finding_title: str) -> Non
     })
 
 
+async def notify_auto_pr_blocked(
+    finding_id: str,
+    title: str,
+    severity: str,
+    repo: str,
+    risk_level: str,
+    summary: str,
+) -> None:
+    await notify("auto_pr.blocked_by_audit", {
+        "finding_id": finding_id,
+        "title": title,
+        "severity": severity,
+        "repository": repo,
+        "risk_level": risk_level,
+        "summary": summary[:300],
+        "message": (
+            f"🛑 Auto PR blocked by security audit for [{severity}] {title} "
+            f"in {repo} (risk: {risk_level})"
+        ),
+    })
+
+
 async def notify_critical_suppression(
     finding_id: str,
     title: str,

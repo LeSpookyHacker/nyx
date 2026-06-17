@@ -11,6 +11,7 @@ Flow:
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
@@ -27,6 +28,8 @@ from app.models.repository import Repository
 from app.models.scan import Scan
 from app.services.deduplication_service import find_existing
 from app.services.normalization import get_normalizer
+
+logger = logging.getLogger("nyx.scan_worker")
 
 # Known scanner identifiers — reject payloads claiming to be unknown scanners (M7)
 _KNOWN_SCANNERS = frozenset({
@@ -294,6 +297,18 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
         await _update_repo_risk(db, scan.repository_id)
 
         await db.commit()
+
+        # Auto PR Mode — autonomously triage CRITICAL/HIGH findings into the fix pipeline.
+        # Pure addition after the COMPLETED transition; no existing logic is changed.
+        try:
+            from app.config import get_settings as _get_settings_apr
+            if _get_settings_apr().AUTO_PR_MODE_ENABLED and repo and repo.auto_pr_mode:
+                from app.workers.auto_pr_worker import enqueue_auto_pr_findings
+                queued = await enqueue_auto_pr_findings(db, repo.id, scan.id)
+                if queued:
+                    logger.info("Auto PR Mode queued %d finding(s) for repo %s", queued, repo.id)
+        except Exception:
+            logger.exception("Auto PR enqueue failed for scan %s", scan.id)
 
         # Complete GitHub Check Run if this was a PR scan
         if scan.check_run_id and scan.git_sha:

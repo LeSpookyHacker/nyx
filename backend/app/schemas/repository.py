@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # owner/repo — allow alphanumerics, hyphens, underscores, dots; no path traversal
 _FULL_NAME_RE = re.compile(r"^[a-zA-Z0-9._-]{1,100}/[a-zA-Z0-9._-]{1,100}$")
@@ -53,6 +53,14 @@ class RepositoryUpdate(BaseModel):
     enabled_scanners: Optional[List[str]] = None
     default_branch: Optional[str] = None
 
+    # Auto PR Mode configuration
+    auto_pr_mode: Optional[bool] = None
+    auto_pr_severity_threshold: Optional[str] = Field(None, pattern="^(CRITICAL|HIGH)$")
+    auto_pr_daily_token_budget: Optional[int] = Field(None, ge=1000, le=500000)
+    auto_pr_skip_low_confidence: Optional[bool] = None
+    auto_pr_require_passing_checks: Optional[bool] = None
+    auto_pr_security_audit: Optional[bool] = None
+
     @field_validator("default_branch")
     @classmethod
     def validate_branch(cls, v: Optional[str]) -> Optional[str]:
@@ -93,6 +101,14 @@ class RepositoryResponse(BaseModel):
     open_low: int
     open_info: int
     last_scan_at: Optional[datetime] = None
+    # Auto PR Mode config + live budget usage
+    auto_pr_mode: bool = False
+    auto_pr_severity_threshold: str = "HIGH"
+    auto_pr_daily_token_budget: int = 50000
+    auto_pr_tokens_used_today: int = 0
+    auto_pr_skip_low_confidence: bool = True
+    auto_pr_require_passing_checks: bool = True
+    auto_pr_security_audit: bool = True
     created_at: datetime
     updated_at: datetime
 

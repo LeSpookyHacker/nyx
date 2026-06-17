@@ -43,6 +43,19 @@ class Remediation(Base, TimestampMixin):
     # Additional context provided by engineer for re-generation
     engineer_context: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
+    # ── Auto PR Mode ──────────────────────────────────────────────────────────────
+    # True when queued autonomously by the Auto PR worker (vs. an engineer request)
+    is_auto_triggered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Second-pass security audit of the generated diff (independent Claude call)
+    audit_result: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # JSON: passed/risk_level/findings/summary
+    audit_passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    audit_token_input: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    audit_token_output: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # GitHub Actions check-run gate (the target repo's own CI on the pushed SHA).
+    # Live status reuses ci_status/ci_failure_details below.
+    check_run_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    check_run_conclusion: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     # ── PR Tracking ───────────────────────────────────────────────────────────────
     pr_number: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     pr_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

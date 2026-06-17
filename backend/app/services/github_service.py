@@ -642,10 +642,15 @@ async def create_fix_pr(
     pr_title: str,
     pr_body: str,
     base_branch: str,
+    draft: bool = False,
 ) -> Tuple[int, str]:
     """
     Create a branch with the fixed file and open a pull request.
     Returns (pr_number, pr_url).
+
+    When draft=True the PR is opened as a GitHub draft — it cannot be merged
+    until a human explicitly marks it ready for review. Auto PR Mode always
+    uses draft=True so a human owns the merge decision.
     """
     def _sync():
         g = _get_client()
@@ -674,9 +679,13 @@ async def create_fix_pr(
             body=pr_body,
             head=branch_name,
             base=base_branch,
+            draft=draft,
         )
+        labels = ["nyx-remediation", "security"]
+        if draft:
+            labels.append("nyx-auto-pr")
         try:
-            pr.add_to_labels("nyx-remediation", "security")
+            pr.add_to_labels(*labels)
         except GithubException:
             pass  # Labels may not exist; non-fatal
 
@@ -686,6 +695,92 @@ async def create_fix_pr(
         return await asyncio.to_thread(_sync)
     except GithubException as e:
         raise GitHubError(f"Failed to create fix PR for {repo_full_name}: {e}") from e
+
+
+async def get_branch_head_sha(repo_full_name: str, branch_name: str) -> Optional[str]:
+    """
+    Return the HEAD commit SHA of a branch, sourced from the GitHub API.
+
+    The Auto PR worker uses this (not any finding-supplied value) as the SHA it
+    polls check-runs against, so the polling target is always a commit Nyx created.
+    """
+    def _sync() -> Optional[str]:
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        return repo.get_branch(branch_name).commit.sha
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except GithubException:
+        return None
+
+
+async def wait_for_check_run(
+    repo_full_name: str,
+    sha: str,
+    timeout_seconds: int = 600,
+    poll_interval_seconds: int = 15,
+) -> dict:
+    """
+    Poll the target repository's own CI check-runs for a commit SHA.
+
+    Returns a dict: {
+        "found": bool,             # any check runs exist for the SHA
+        "completed": bool,         # all runs completed before the deadline
+        "conclusion": str | None,  # overall conclusion ("success" if all succeeded, else first non-success)
+        "check_run_id": int | None,
+        "details": str | None,     # names/conclusions of failing runs, for annotation
+    }
+    """
+    def _poll() -> dict:
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        commit = repo.get_commit(sha)
+        runs = list(commit.get_check_runs())
+        if not runs:
+            return {"found": False, "completed": False, "conclusion": None,
+                    "check_run_id": None, "details": None}
+        all_completed = all(r.status == "completed" for r in runs)
+        first_id = runs[0].id
+        if not all_completed:
+            return {"found": True, "completed": False, "conclusion": None,
+                    "check_run_id": first_id, "details": None}
+        failing = [r for r in runs if r.conclusion not in ("success", "neutral", "skipped")]
+        if failing:
+            details = "; ".join(f"{r.name}: {r.conclusion}" for r in failing)[:1000]
+            return {"found": True, "completed": True, "conclusion": failing[0].conclusion,
+                    "check_run_id": first_id, "details": details}
+        return {"found": True, "completed": True, "conclusion": "success",
+                "check_run_id": first_id, "details": None}
+
+    deadline = asyncio.get_event_loop().time() + timeout_seconds
+    last: dict = {"found": False, "completed": False, "conclusion": None,
+                  "check_run_id": None, "details": None}
+    while True:
+        try:
+            last = await asyncio.to_thread(_poll)
+        except GithubException as e:
+            import logging
+            logging.getLogger("nyx.github").debug("check-run poll failed: %s", e)
+        if last["completed"]:
+            return last
+        if asyncio.get_event_loop().time() >= deadline:
+            return last  # timed out — caller decides whether to block (AUTO_PR_BLOCK_ON_TIMEOUT)
+        await asyncio.sleep(poll_interval_seconds)
+
+
+async def add_pr_comment(repo_full_name: str, pr_number: int, body: str) -> bool:
+    """Post an issue comment on a PR (best-effort). Used for the Auto PR test-results annotation."""
+    def _sync() -> bool:
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        repo.get_pull(pr_number).create_issue_comment(body)
+        return True
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except GithubException:
+        return False
 
 
 async def trigger_workflow_dispatch(repo_full_name: str, workflow_file: str = "nyx-scan.yml", ref: str = "main") -> bool:
