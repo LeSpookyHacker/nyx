@@ -113,7 +113,7 @@ Matches are stored as `diff_warnings` on the remediation record and surfaced in 
 
 ## Confidence gating
 
-Every fix returns a self-reported confidence score in `[0.0, 1.0]`. Fixes below `AI_MIN_CONFIDENCE_THRESHOLD` (default `0.7`) are tagged:
+Every fix returns a self-reported confidence score in `[0.0, 1.0]`. Fixes below `AI_MIN_CONFIDENCE_THRESHOLD` (default `0.4`) are tagged:
 
 ```
 status = REVIEW_LOW_CONFIDENCE

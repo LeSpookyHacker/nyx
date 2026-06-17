@@ -3,11 +3,13 @@
 Nyx ships a full OpenAPI specification — the canonical reference is the live Swagger UI at:
 
 ```
-http://localhost:8000/docs     # dev
-https://your-nyx-url/docs      # prod
+http://localhost:8000/docs     # dev only
+http://localhost:8000/redoc    # dev only
 ```
 
-This page is a **grouped overview** of what each router exposes, so you know where to look. For parameter shapes and example requests, use the live docs.
+> **Production note:** Swagger UI and ReDoc are disabled when `ENVIRONMENT=production` (`main.py:491`). The raw spec is still available at `/openapi.json` for client generation.
+
+This page is a **grouped overview** of what each router exposes, so you know where to look. For parameter shapes and example requests, use the live docs in a dev environment.
 
 ---
 
@@ -50,8 +52,9 @@ Each router lives under `backend/app/routers/`. The path prefix is `/api/v1/<rou
 | `api_keys` | `/api-keys` | Key CRUD with scope |
 | `webhooks` | `/webhooks` | GitHub, Snyk, generic receivers |
 | `regression_alerts` | `/regression-alerts` | Auto-sort batch alerts |
-| `velocity` | `/velocity` | Finding rate metrics, MTTR breakdowns |
-| `ai_costs` | `/ai-costs` | Token usage, spend time series |
+| `saved_filters` | `/saved-filters` | Saved search filter CRUD |
+| `velocity` | `/dashboard/velocity` | Finding rate metrics, MTTR breakdowns |
+| `ai_costs` | `/dashboard/ai-costs` | Token usage, spend time series |
 
 ---
 
@@ -65,13 +68,19 @@ The one endpoint every CI pipeline hits. Requires `scanner` or `admin` scope.
 
 ### Request an AI fix
 ```
-POST /api/v1/remediation
-GET  /api/v1/remediation/{id}
-GET  /api/v1/remediation/{id}/stream          (SSE)
-POST /api/v1/remediation/{id}/alternatives
-POST /api/v1/remediation/{id}/approve
-POST /api/v1/remediation/{id}/create_pr
+POST /api/v1/remediation                        request fix
+POST /api/v1/remediation/bulk                   bulk request (up to 20 findings)
+GET  /api/v1/remediation/{id}                   get status
+GET  /api/v1/remediation/{id}/stream            SSE token stream
+GET  /api/v1/remediation/{id}/pr-status         check PR merge status
+POST /api/v1/remediation/{id}/alternatives      request alternative approaches
+POST /api/v1/remediation/{id}/approve           approve and trigger PR creation
+POST /api/v1/remediation/{id}/reject            reject fix
+POST /api/v1/remediation/{id}/regenerate        re-run AI generation
+DELETE /api/v1/remediation/{id}                 dismiss
 ```
+
+> PR creation happens automatically as a background task when `approve` is called — there is no separate `create_pr` endpoint.
 
 ### Register a repository
 ```
@@ -111,7 +120,7 @@ Returns per-integration `ok`/`error` status. Use it as your uptime probe.
 
 ## Rate limits
 
-Default: **60 requests per minute per API key**. Configurable via `RATE_LIMIT_PER_MINUTE`. Exceeding the limit returns `429 Too Many Requests` with a `Retry-After` header.
+Default: **300 requests per minute** (global cap; enforced by SlowAPI, keyed by IP or API key). Exceeding the limit returns `429 Too Many Requests`. Sensitive endpoints have tighter per-endpoint limits — e.g., `/auth/session` is capped at 5/minute, and most mutation endpoints at 10/minute.
 
 The SSE streaming endpoint is exempt — it counts as one request for the lifetime of the stream.
 
@@ -136,23 +145,24 @@ Every error response has a consistent shape:
 
 ## Pagination
 
-List endpoints use cursor pagination:
+List endpoints use offset pagination:
 
 ```
-GET /api/v1/findings?limit=50&cursor=<opaque>
+GET /api/v1/findings?page=1&page_size=50
 ```
 
 Response:
 
 ```json
 {
-  "items": [ ... ],
-  "next_cursor": "<opaque-or-null>",
-  "total": 4321
+  "findings": [ ... ],
+  "total": 4321,
+  "page": 1,
+  "page_size": 50
 }
 ```
 
-`total` is returned as a best-effort count and may be approximate for very large result sets.
+`page` starts at 1. `page_size` defaults to 50 and accepts values from 1 to 200.
 
 ---
 

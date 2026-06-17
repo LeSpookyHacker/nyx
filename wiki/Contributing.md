@@ -26,8 +26,7 @@ cd nyx
 # Backend
 cd backend && python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-alembic upgrade head
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload  # schema is created automatically via create_all on first start
 
 # Frontend (separate terminal)
 cd frontend && npm install && npm run dev
@@ -74,7 +73,7 @@ Run the full suite locally before pushing:
 
 ```bash
 cd backend && pytest
-cd ../frontend && npm test -- --run && npm run typecheck && npm run lint
+cd ../frontend && npm run lint && npm run build
 ```
 
 ---

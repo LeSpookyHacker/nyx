@@ -99,7 +99,7 @@ Two supported backends:
 - **SQLite** — default, used for local dev and evaluation. Single file under `backend/data/`.
 - **PostgreSQL** — recommended for production. Switch via `docker-compose.postgres.yml` and `DATABASE_URL`.
 
-Schema is managed by **Alembic** (`backend/alembic/`). Migrations run automatically on container start via `entrypoint.sh`.
+Schema is managed by SQLAlchemy `create_all` (`database.py:55`). The Docker entrypoint (`entrypoint.sh`) attempts `alembic upgrade head` first but falls back to `create_all` since Alembic is not configured in this repo. Adding a column to an existing table is done via the `_migrate_add_columns` helper in `database.py`.
 
 ### Background workers
 

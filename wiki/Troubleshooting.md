@@ -98,10 +98,10 @@ SQLite can't handle concurrent writers well. Either:
 - **Immediate:** restart (`./nyx.sh restart`)
 - **Permanent:** switch to PostgreSQL (see [Deployment](Deployment.md))
 
-### Migration fails on upgrade
+### Schema errors on startup
 1. Back up first: `docker compose exec postgres pg_dump -U nyx nyx > /tmp/nyx-backup.sql`
-2. Check `alembic history` for the version gap.
-3. If a migration is broken in your installation, `alembic stamp` to the last known-good revision and manually replay the changes.
+2. Check backend logs: `docker compose logs backend` — `create_all` errors will appear here.
+3. Nyx does not use Alembic migration files. Schema is created via `Base.metadata.create_all` in `database.py`. New columns are added by `_migrate_add_columns` on startup. If a column is missing, the container logs will show the error and the helper will attempt to add it.
 
 ---
 

@@ -34,11 +34,11 @@ Nyx fingerprints findings by `(repository, file, line, rule_id, cwe)` plus a con
 
 ### Priority scoring (0–100)
 Each finding gets a composite score combining:
-- **CVSS base score** (30 %)
-- **EPSS exploit probability** (25 %)
-- **Finding age** (15 %)
-- **SLA breach proximity** (20 %)
-- **Exploitability modifiers** — public internet reachability, authentication requirements (10 %)
+- **Severity weight** (35 %) — CRITICAL→1.0, HIGH→0.75, MEDIUM→0.45, LOW→0.15, INFO→0.05
+- **CVSS base score** (25 %)
+- **EPSS exploit probability** (20 %)
+- **Exploitability flag** (15 %) — whether the finding is marked exploitable
+- **Finding age** (5 %) — sigmoid growth, caps around 180 days open
 
 The dashboard sorts by priority score by default; you can override ordering on the Findings page.
 
@@ -66,7 +66,7 @@ From any finding detail page, click **Request AI Fix**. Nyx gathers:
 `POST /remediation/{id}/alternatives` requests 2–3 independently reasoned fix approaches with trade-off analysis. Useful when the first fix is correct but stylistically wrong for your codebase, or when you want to see a riskier / safer tradeoff pair.
 
 ### AI confidence gating
-Every fix comes back with a self-reported confidence score. Fixes below `AI_MIN_CONFIDENCE_THRESHOLD` (default `0.7`) are tagged `REVIEW_LOW_CONFIDENCE` and surfaced for human review before they can be turned into a PR.
+Every fix comes back with a self-reported confidence score. Fixes below `AI_MIN_CONFIDENCE_THRESHOLD` (default `0.4`) are tagged `REVIEW_LOW_CONFIDENCE` and surfaced for human review before they can be turned into a PR.
 
 ### Diff security scanning
 Before any generated diff is stored, it is scanned for dangerous patterns:

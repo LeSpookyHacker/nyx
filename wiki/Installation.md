@@ -90,8 +90,10 @@ docker compose ps
 | URL | What |
 |---|---|
 | **http://localhost:3000** | Dashboard (React SPA) |
-| **http://localhost:8000/docs** | Interactive OpenAPI docs (Swagger UI) |
-| **http://localhost:8000/redoc** | ReDoc API reference |
+| **http://localhost:8000/docs** | Interactive OpenAPI docs (Swagger UI) — dev only |
+| **http://localhost:8000/redoc** | ReDoc API reference — dev only |
+
+> `/docs` and `/redoc` are disabled when `ENVIRONMENT=production`. The raw spec at `/openapi.json` is always available for client generation.
 
 1. Open **http://localhost:3000**.
 2. Nyx redirects you to **Sign in**.

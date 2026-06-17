@@ -1,6 +1,6 @@
 # Configuration Reference
 
-> **The canonical list of every environment variable Nyx reads lives in the project [README](../README.md#configuration-reference).** It is generated against `backend/app/config.py` and is the single source of truth. This page used to duplicate that table and drifted badly — redirecting here keeps the two from falling out of sync again.
+> **The canonical list of every environment variable Nyx reads is the `Settings` class in [`backend/app/config.py`](../backend/app/config.py).** Every variable Nyx reads is declared there with its default, type, and validation. This page redirects to the right sources rather than duplicating the table, which drifted badly when it lived here.
 
 ---
 
@@ -8,7 +8,7 @@
 
 | You want to… | Go to |
 |---|---|
-| See every env var grouped by subsystem (required, database, GitHub, JIRA, AI, security, notifications, logging) | **[README → Configuration Reference](../README.md#configuration-reference)** |
+| See every env var grouped by subsystem (required, database, GitHub, JIRA, AI, security, notifications, logging) | **[`backend/app/config.py`](../backend/app/config.py)** — the `Settings` Pydantic model is the authoritative list |
 | Understand how secrets are generated and validated on first run | **[Installation → Option A](Installation.md#option-a--one-command-setup-recommended)** |
 | Know which variables are mandatory before Nyx will run at all | **[Installation → Option B (Manual setup)](Installation.md#option-b--manual-setup)** |
 | Harden an instance before pointing the internet at it | **[Security Hardening](Security.md)** |

@@ -128,15 +128,14 @@ LOG_LEVEL=INFO
 
 ## 4. Database migrations
 
-Migrations are Alembic-managed and run automatically via `entrypoint.sh`. For manual control:
+Schema is managed by SQLAlchemy `create_all` and runs automatically on every container start via `entrypoint.sh`. Alembic is not configured — there are no migration files to run. New columns on existing tables are handled by the `_migrate_add_columns` helper in `database.py`.
+
+Always back up before schema-breaking changes:
 
 ```bash
-docker compose exec backend alembic current
-docker compose exec backend alembic upgrade head
-docker compose exec backend alembic downgrade -1
+# PostgreSQL backup
+docker compose exec postgres pg_dump -U nyx nyx > nyx-backup.sql
 ```
-
-Always back up before downgrading.
 
 ---
 
