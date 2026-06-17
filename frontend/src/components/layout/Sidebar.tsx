@@ -13,6 +13,7 @@ import {
   Clock,
   ShieldAlert,
   FileText,
+  DollarSign,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -20,6 +21,7 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/findings', icon: Shield, label: 'Findings' },
   { to: '/remediation', icon: Wand2, label: 'Remediation' },
+  { to: '/ai-costs', icon: DollarSign, label: 'AI Costs' },
   { to: '/repositories', icon: GitBranch, label: 'Repositories' },
   { to: '/scans', icon: ScanLine, label: 'Scans' },
   { to: '/compliance', icon: BadgeCheck, label: 'Compliance' },

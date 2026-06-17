@@ -207,3 +207,49 @@ export interface RegressionFinding {
   github_full_name?: string
   regression_detected_at: string
 }
+
+export interface AiCostsDailyEntry {
+  date: string
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  fixes: number
+  estimated_cost_usd: number
+}
+
+export interface AiCostsTopRemediation {
+  remediation_id: string
+  finding_title: string
+  severity: Severity
+  status: string
+  confidence: number | null
+  confidence_flagged: boolean
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  estimated_cost_usd: number
+}
+
+export interface AiCostsByModel {
+  model: string
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  remediations: number
+  estimated_cost_usd: number
+}
+
+export interface AiCostsData {
+  period_days: number
+  total_remediations: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_tokens: number
+  estimated_total_cost_usd: number
+  avg_tokens_per_fix: number
+  avg_cost_per_fix_usd: number
+  pricing_note: string
+  daily: AiCostsDailyEntry[]
+  by_model: AiCostsByModel[]
+  top_remediations_by_cost: AiCostsTopRemediation[]
+}

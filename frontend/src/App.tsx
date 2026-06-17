@@ -18,6 +18,7 @@ const SbomPage = lazy(() => import('./pages/SbomPage'))
 const SchedulesPage = lazy(() => import('./pages/SchedulesPage'))
 const SlaPoliciesPage = lazy(() => import('./pages/SlaPoliciesPage'))
 const ReportsPage = lazy(() => import('./pages/ReportsPage'))
+const AiCostsPage = lazy(() => import('./pages/AiCostsPage'))
 
 export default function App() {
   return (
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="schedules" element={<SchedulesPage />} />
           <Route path="sla-policies" element={<SlaPoliciesPage />} />
           <Route path="reports" element={<ReportsPage />} />
+          <Route path="ai-costs" element={<AiCostsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

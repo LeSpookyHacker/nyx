@@ -115,6 +115,40 @@ async def get_ai_costs(
             "estimated_cost_usd": round(_estimate_cost(inp, out), 4),
         })
 
+    # By-model breakdown (ai_model populated per remediation in remediation.py:135)
+    model_stmt = (
+        select(
+            Remediation.ai_model.label("model"),
+            func.sum(Remediation.prompt_tokens).label("input_tokens"),
+            func.sum(Remediation.completion_tokens).label("output_tokens"),
+            func.count().label("remediations"),
+        )
+        .where(
+            Remediation.created_at >= since,
+            Remediation.prompt_tokens.isnot(None),
+            Remediation.ai_model.isnot(None),
+        )
+        .group_by(Remediation.ai_model)
+        .order_by(func.sum(Remediation.prompt_tokens + Remediation.completion_tokens).desc())
+    )
+    if repository_id:
+        model_stmt = model_stmt.join(Finding, Remediation.finding_id == Finding.id).where(
+            Finding.repository_id == repository_id
+        )
+    model_rows = (await db.execute(model_stmt)).all()
+    by_model = []
+    for row in model_rows:
+        inp = int(row.input_tokens or 0)
+        out = int(row.output_tokens or 0)
+        by_model.append({
+            "model": row.model or "unknown",
+            "input_tokens": inp,
+            "output_tokens": out,
+            "total_tokens": inp + out,
+            "remediations": row.remediations,
+            "estimated_cost_usd": round(_estimate_cost(inp, out), 4),
+        })
+
     # Top 10 most expensive individual remediations
     top_stmt = (
         select(Remediation, Finding.severity, Finding.title)
@@ -165,5 +199,6 @@ async def get_ai_costs(
         "avg_cost_per_fix_usd": round(avg_cost_per_fix, 4),
         "pricing_note": "Estimates based on published Claude Sonnet pricing. Check your Anthropic invoice for actuals.",
         "daily": daily,
+        "by_model": by_model,
         "top_remediations_by_cost": top_remediations,
     }
