@@ -78,10 +78,11 @@ jobs:
         env:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "TRIVY" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d  trivy-container.json \
@@ -98,10 +99,11 @@ jobs:
         env:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "TRIVY" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d  trivy-iac.json \

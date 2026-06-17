@@ -6,6 +6,7 @@ import { formatDistanceToNow } from 'date-fns'
 import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { clsx } from 'clsx'
 import MarkdownContent from '../components/common/MarkdownContent'
+import { safeUrl } from '../utils/url'
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ElementType }> = {
   PENDING:     { label: 'Pending',       color: 'text-slate-400',   icon: RefreshCw },
@@ -256,7 +257,7 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
                 </span>
               )}
             </div>
-            <a href={rem.pr_url} target="_blank" rel="noopener noreferrer"
+            <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"
               className="text-nyx-stardust flex items-center gap-1 hover:text-nyx-amethyst text-sm">
               <GitPullRequest size={14} /> PR #{rem.pr_number} <ExternalLink size={12} />
             </a>
@@ -276,7 +277,7 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
         {rem.jira_issue_key && rem.jira_issue_url && (
           <div className="nyx-card p-4">
             <p className="text-nyx-mist text-sm mb-1">JIRA Ticket</p>
-            <a href={rem.jira_issue_url} target="_blank" rel="noopener noreferrer"
+            <a href={safeUrl(rem.jira_issue_url)} target="_blank" rel="noopener noreferrer"
               className="text-nyx-stardust flex items-center gap-1 hover:text-nyx-amethyst text-sm font-mono">
               <Ticket size={14} /> {rem.jira_issue_key} <ExternalLink size={12} />
             </a>

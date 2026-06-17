@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.limiter import limiter
 from app.core.security import get_client_ip, require_api_key
 from app.core.exceptions import GitHubError
 from app.database import get_db
@@ -29,7 +30,9 @@ async def list_repositories(
 
 
 @router.post("", response_model=RepositoryResponse, status_code=201)
+@limiter.limit("5/minute")
 async def add_repository(
+    request: Request,
     body: RepositoryCreate,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_api_key),

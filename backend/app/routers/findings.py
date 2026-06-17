@@ -74,10 +74,12 @@ def _build_filter_query(
 
 
 @router.post("/generate-claude-prompt/repository/{repo_id}")
+@limiter.limit("5/minute")
 async def generate_claude_prompt_for_repo(
+    request: Request,
     repo_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Generate a Claude Code remediation prompt for all open findings in a repository."""
     from app.models.repository import Repository
@@ -222,7 +224,7 @@ async def update_finding_status(
     finding_id: str,
     body: FindingStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Update the status of a finding (e.g. OPEN -> FIXED) with audit logging."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -266,7 +268,7 @@ async def suppress_finding(
     finding_id: str,
     body: FindingSuppressRequest,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_scope("analyst")),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Suppress a finding as false positive. Learns suppression patterns for future suggestions."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -370,7 +372,7 @@ async def unsuppress_finding(
     request: Request,
     finding_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Remove suppression from a finding, reopening it."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -405,7 +407,7 @@ async def update_notes(
     finding_id: str,
     body: FindingNoteUpdate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Update engineer notes on a finding."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -432,7 +434,7 @@ async def assign_finding(
     finding_id: str,
     body: dict,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Assign a finding to an engineer (empty string to unassign)."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -461,7 +463,7 @@ async def assign_finding(
 async def get_suppression_suggestion(
     finding_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Check if a suppression pattern exists for this finding's rule."""
     result = await db.execute(select(Finding).where(Finding.id == finding_id))
@@ -513,7 +515,7 @@ async def list_suppression_patterns(
     rule_id: Optional[str] = Query(None, max_length=255),
     repository_id: Optional[str] = Query(None, max_length=36),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_READONLY, SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """List learned suppression patterns ordered by times applied."""
     stmt = select(SuppressionPattern).order_by(SuppressionPattern.times_applied.desc())
@@ -545,7 +547,7 @@ async def list_suppression_patterns(
 async def generate_claude_prompt(
     body: GeneratePromptRequest,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """
     Generate a Claude Code remediation prompt for selected findings.
@@ -732,7 +734,7 @@ async def bulk_update_status(
     request: Request,
     body: BulkStatusUpdate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Bulk update status for multiple findings at once."""
     result = await db.execute(select(Finding).where(Finding.id.in_(body.finding_ids)))

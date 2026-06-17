@@ -78,18 +78,11 @@ async def github_webhook(
             # Same response as "repo not found" to avoid confirming repo existence (M8)
             return {"status": "ignored", "reason": "webhook not accepted"}
 
-        # Verify HMAC signature using per-repo secret
-        try:
-            await verify_github_signature(request, repo.webhook_secret)
-        except HTTPException:
-            # Re-read body for verification (already consumed above, pass bytes directly)
-            signature = request.headers.get("X-Hub-Signature-256", "")
-            import hashlib, hmac as hmac_mod
-            expected = "sha256=" + hmac_mod.new(
-                repo.webhook_secret.encode(), body, hashlib.sha256
-            ).hexdigest()
-            if not hmac_mod.compare_digest(signature, expected):
-                raise HTTPException(status_code=403, detail="Invalid webhook signature")
+        # Verify HMAC signature using per-repo secret (SEC-007: removed dead
+        # try-except fallback — Starlette caches request.body() so the second
+        # call inside verify_github_signature works fine; the fallback block
+        # was never reached and added maintenance risk).
+        await verify_github_signature(request, repo.webhook_secret)
 
         event = x_github_event or ""
 

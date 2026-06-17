@@ -700,13 +700,36 @@ def verify_submission_hmac(
 # Cache the parsed ranges in memory; refresh lazily on first use.
 _GITHUB_WEBHOOK_NETS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] | None = None
 _GITHUB_NETS_FALLBACK = [
-    # Fallback hardcoded ranges if the meta API is unreachable
-    # Updated as of 2025-Q1 — should be refreshed periodically
+    # Fallback hardcoded ranges if the meta API is unreachable.
+    # Updated as of 2025-Q1 — see https://api.github.com/meta for current ranges.
     ipaddress.ip_network("192.30.252.0/22"),
     ipaddress.ip_network("185.199.108.0/22"),
     ipaddress.ip_network("140.82.112.0/20"),
     ipaddress.ip_network("143.55.64.0/20"),
 ]
+
+# SEC-009: track how many webhook checks have used the stale fallback list so
+# we can emit an operator-visible warning before the mismatch causes problems.
+_GITHUB_FALLBACK_USE_COUNT: int = 0
+_GITHUB_FALLBACK_WARN_THRESHOLD: int = 10
+
+
+def _use_github_fallback(reason: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """
+    Return the hardcoded fallback IP ranges and emit a warning once a threshold
+    is crossed so operators know the live ranges can't be fetched (SEC-009).
+    """
+    global _GITHUB_FALLBACK_USE_COUNT
+    _GITHUB_FALLBACK_USE_COUNT += 1
+    if _GITHUB_FALLBACK_USE_COUNT == _GITHUB_FALLBACK_WARN_THRESHOLD:
+        logger.warning(
+            "GitHub webhook IP allowlist: meta API unavailable for %d checks (%s). "
+            "Using stale hardcoded fallback ranges — verify they are current at "
+            "https://api.github.com/meta and update _GITHUB_NETS_FALLBACK if needed.",
+            _GITHUB_FALLBACK_USE_COUNT,
+            reason,
+        )
+    return _GITHUB_NETS_FALLBACK
 
 
 async def _load_github_webhook_ips() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
@@ -722,9 +745,9 @@ async def _load_github_webhook_ips() -> list[ipaddress.IPv4Network | ipaddress.I
                     nets.append(ipaddress.ip_network(cidr, strict=False))
                 except ValueError:
                     pass
-            return nets if nets else _GITHUB_NETS_FALLBACK
-    except Exception:
-        return _GITHUB_NETS_FALLBACK
+            return nets if nets else _use_github_fallback("meta API returned empty hooks list")
+    except Exception as exc:
+        return _use_github_fallback(str(exc))
 
 
 async def verify_github_source_ip(request: Request) -> None:

@@ -229,7 +229,9 @@ async def approve_remediation(
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Approve the AI-generated fix and trigger PR creation."""
-    result = await db.execute(select(Remediation).where(Remediation.id == remediation_id))
+    result = await db.execute(
+        select(Remediation).where(Remediation.id == remediation_id).with_for_update()
+    )
     rem = result.scalar_one_or_none()
     if not rem:
         raise HTTPException(status_code=404, detail="Remediation not found")

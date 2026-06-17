@@ -39,31 +39,68 @@ _CTRL_CHARS_RE = re.compile(
 )
 _CWE_ID_RE = re.compile(r"^CWE-\d+$")
 
-# Simple heuristic patterns that indicate a generated diff may introduce issues.
-# These are coarse checks — not a full SAST — but catch common AI blunders.
+# Heuristic patterns that indicate a generated diff may introduce issues (SEC-005).
+# These are a second line of defence against prompt-injection attacks that try
+# to coerce the model into generating malicious code.  Not a full SAST scan —
+# a compromised diff still goes through code review before being merged.
 _DIFF_SECURITY_PATTERNS = [
-    # Python
+    # Python — command execution
     (re.compile(r"^\+.*os\.system\s*\(", re.MULTILINE), "os.system() call introduced"),
     (re.compile(r"^\+.*subprocess\..*shell\s*=\s*True", re.MULTILINE), "shell=True in subprocess"),
     (re.compile(r"^\+.*eval\s*\(", re.MULTILINE), "eval() call introduced"),
     (re.compile(r"^\+.*exec\s*\(", re.MULTILINE), "exec() call introduced"),
+    (re.compile(r"^\+.*__import__\s*\(", re.MULTILINE), "__import__() call introduced"),
+    (re.compile(r"^\+.*compile\s*\(.*exec", re.MULTILINE), "compile+exec pattern introduced"),
+    # Python — credential leakage
     (re.compile(r'^\+.*password\s*=\s*["\'][^"\']{4,}["\']', re.MULTILINE | re.IGNORECASE), "hardcoded credential"),
     (re.compile(r'^\+.*secret\s*=\s*["\'][^"\']{4,}["\']', re.MULTILINE | re.IGNORECASE), "hardcoded secret"),
+    (re.compile(r'^\+.*api_?key\s*=\s*["\'][^"\']{8,}["\']', re.MULTILINE | re.IGNORECASE), "hardcoded API key"),
+    # Python — security suppression
     (re.compile(r"^\+.*# noqa.*security", re.MULTILINE | re.IGNORECASE), "security check silenced"),
-    # JavaScript / TypeScript
+    (re.compile(r"^\+.*# nosec", re.MULTILINE | re.IGNORECASE), "bandit nosec suppression introduced"),
+    # JavaScript / TypeScript — command execution
     (re.compile(r"^\+.*child_process\.exec\s*\(", re.MULTILINE), "child_process.exec() call introduced"),
     (re.compile(r"^\+.*child_process\.spawn\s*\(", re.MULTILINE), "child_process.spawn() call introduced"),
     (re.compile(r"^\+.*shell\s*:\s*true", re.MULTILINE | re.IGNORECASE), "shell: true in child_process options"),
+    (re.compile(r"^\+.*dangerouslySetInnerHTML", re.MULTILINE), "dangerouslySetInnerHTML introduced"),
+    (re.compile(r"^\+.*new\s+Function\s*\(", re.MULTILINE), "new Function() (eval-equivalent) introduced"),
+    # Cross-language: network exfiltration hints
+    (re.compile(r"^\+.*(?:curl|wget|fetch|requests\.get)\s+.*http", re.MULTILINE | re.IGNORECASE), "outbound HTTP call introduced"),
     # Cross-language: bypass TODOs in any comment style (# Python, // JS/Java/Go/C, -- SQL)
     (re.compile(r"^\+.*(?:#|//|--)\s*TODO.*bypass", re.MULTILINE | re.IGNORECASE), "bypass TODO in diff"),
+    # Prompt-injection echo-back: if the model echoes back injection trigger phrases
+    (re.compile(r"^\+.*ignore\s+(?:all\s+)?(?:previous|above)\s+instructions?", re.MULTILINE | re.IGNORECASE), "prompt-injection phrase in diff"),
 ]
+
+# Patterns that are suspicious in the untrusted scanner/user fields fed into
+# the prompt.  These are stripped before the field is included (SEC-005).
+_PROMPT_INJECTION_RE = re.compile(
+    r"(?:"
+    r"ignore\s+(?:all\s+)?(?:previous|above|prior)\s+instructions?"
+    r"|you\s+are\s+now\s+(?:in\s+)?(?:a\s+)?\w+\s+mode"
+    r"|new\s+(?:system\s+)?(?:instruction|directive|prompt)\s*:"
+    r"|disregard\s+(?:all\s+)?(?:previous|prior)"
+    r"|act\s+as\s+(?:if\s+you\s+are\s+)?(?:a\s+)?\w+"
+    r"|forget\s+(?:all\s+)?(?:previous|your)\s+(?:instructions?|training)"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _safe(value: str | None, max_len: int = 500) -> str:
-    """Sanitize a scanner-sourced field before including it in an AI prompt."""
+    """
+    Sanitize a scanner-sourced field before including it in an AI prompt.
+
+    Layers (SEC-005):
+    1. Strip ASCII control chars and Unicode bidi-override chars (Trojan Source).
+    2. Remove common natural-language prompt-injection trigger phrases.
+    3. Truncate to max_len to limit token consumption.
+    """
     if not value:
         return ""
-    return _CTRL_CHARS_RE.sub("", value)[:max_len]
+    cleaned = _CTRL_CHARS_RE.sub("", value)
+    cleaned = _PROMPT_INJECTION_RE.sub("[REDACTED]", cleaned)
+    return cleaned[:max_len]
 
 
 @dataclass
@@ -147,8 +184,10 @@ async def generate_fix(
 
     client = _get_async_client()
 
-    # Sanitize engineer_context to strip control chars that could inject prompt directives
-    safe_context = _CTRL_CHARS_RE.sub("", engineer_context)[:2000]
+    # Sanitize engineer_context: strip control chars, bidi overrides, and common
+    # natural-language prompt-injection trigger phrases (SEC-005).
+    safe_context = _CTRL_CHARS_RE.sub("", engineer_context)
+    safe_context = _PROMPT_INJECTION_RE.sub("[REDACTED]", safe_context)[:2000]
 
     # Truncate very large files to keep within token limits
     truncated_content = _truncate_file(file_content, finding.line_start, settings.AI_MAX_FILE_LINES)

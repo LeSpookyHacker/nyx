@@ -3,6 +3,7 @@ import remarkGfm from 'remark-gfm'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { clsx } from 'clsx'
+import DOMPurify from 'dompurify'
 
 interface Props {
   children: string
@@ -17,17 +18,13 @@ function isHtml(content: string): boolean {
 }
 
 /**
- * Strip dangerous tags/attributes so scanner-sourced HTML can be rendered
- * via dangerouslySetInnerHTML without XSS risk.
+ * Sanitize scanner-sourced or AI-generated HTML using DOMPurify (SEC-001).
+ * DOMPurify uses a DOM-based allowlist approach — far stronger than regex
+ * blocklisting, which has well-known bypasses (SVG events, form actions,
+ * data URIs, style-based injection, etc.).
  */
 function sanitize(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
-    .replace(/<object[\s\S]*?<\/object>/gi, '')
-    .replace(/<embed[^>]*>/gi, '')
-    .replace(/\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
-    .replace(/javascript\s*:/gi, '')
+  return DOMPurify.sanitize(html)
 }
 
 /**

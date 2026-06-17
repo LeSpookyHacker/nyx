@@ -34,6 +34,7 @@ _KNOWN_SCANNERS = frozenset({
     "SNYK", "GITLEAKS", "CODEQL", "ZAP", "CODE_SCANNING", "DEPENDABOT",
 })
 
+import posixpath as _posixpath
 import re as _re
 # Strip control characters and limit field length for stored finding data (H4)
 _CTRL_RE = _re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\u202a-\u202e\u2066-\u2069]")
@@ -48,14 +49,25 @@ def _sanitize_field(value: str | None, max_len: int = 2000) -> str | None:
 
 
 def _sanitize_path(value: str | None) -> str | None:
-    """Sanitize file paths — block absolute paths and traversal sequences (H4)."""
+    """Sanitize file paths — block absolute paths and traversal sequences (SEC-103).
+
+    Uses posixpath.normpath to collapse all traversal forms (including ....// bypass
+    sequences) before stripping the leading slash, producing a clean relative path.
+    """
     if value is None:
         return None
+    # 1. Strip control/bidi characters and length-cap
     cleaned = _CTRL_RE.sub("", value)[:500]
-    # Block absolute paths and traversal sequences
-    if cleaned.startswith("/") or cleaned.startswith("\\") or ".." in cleaned.split("/"):
-        cleaned = cleaned.lstrip("/\\").replace("../", "").replace("..\\", "")
-    return cleaned or None
+    if not cleaned:
+        return None
+    # 2. Normalize: resolves .., ./, //, and multi-dot sequences like ....//
+    normalized = _posixpath.normpath(cleaned)
+    # 3. Strip any leading slash(es) to ensure relative path
+    result = normalized.lstrip("/")
+    # 4. After normalization, ".." at start means above-root traversal — reject entirely
+    if result.startswith(".."):
+        return None
+    return result or None
 from app.services.prioritization_service import compute_priority_score, fetch_epss_score
 
 _SEMGREP_LOGIN_SENTINEL = "requires login"

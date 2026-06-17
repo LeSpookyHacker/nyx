@@ -34,9 +34,17 @@ jobs:
 
       - name: Run Gitleaks
         run: |
-          curl -sSL https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz \
-            | tar xz -C /usr/local/bin gitleaks
-          gitleaks detect \
+          # SEC-003: verify checksum before extracting — mirrors the pattern in nyx-scan.yml.
+          # Checksums file is fetched from the same release tag so it matches the binary.
+          GITLEAKS_VERSION="8.21.2"
+          GITLEAKS_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          curl -sSfL "${BASE_URL}/${GITLEAKS_ARCHIVE}" -o gitleaks.tar.gz
+          curl -sSfL "${BASE_URL}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o gitleaks_checksums.txt
+          grep "${GITLEAKS_ARCHIVE}" gitleaks_checksums.txt | sha256sum --check --status || \
+            { echo "::error::Gitleaks checksum verification FAILED — aborting"; exit 1; }
+          tar -xz -f gitleaks.tar.gz gitleaks
+          ./gitleaks detect \
             --source . \
             --report-format json \
             --report-path gitleaks.json \
@@ -47,10 +55,11 @@ jobs:
         env:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -n \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "GITLEAKS" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d  gitleaks.json \

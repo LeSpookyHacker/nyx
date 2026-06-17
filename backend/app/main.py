@@ -506,10 +506,37 @@ _MAX_BODY_BYTES = 52_428_800  # 50 MB — protects import-json and other JSON en
 
 @app.middleware("http")
 async def body_size_limit_middleware(request: Request, call_next):
+    # Fast-path: reject by Content-Length header when present
+    # (Content-Length can be spoofed or omitted with chunked encoding — see streaming check below)
     content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > _MAX_BODY_BYTES:
+    if content_length:
+        try:
+            if int(content_length) > _MAX_BODY_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body too large (max 50 MB)"})
+        except ValueError:
+            pass  # malformed Content-Length — fall through to streaming check
+
+    # SEC-105: wrap the ASGI receive callable to enforce the limit on actual bytes received,
+    # defeating chunked-encoding and spoofed Content-Length bypass vectors.
+    received: list[int] = [0]
+    original_receive = request._receive
+
+    async def limited_receive() -> dict:
+        msg = await original_receive()
+        if msg.get("type") == "http.request":
+            received[0] += len(msg.get("body", b""))
+            if received[0] > _MAX_BODY_BYTES:
+                # Truncate body so the route handler gets an empty payload
+                # (body too large — we return 413 after call_next)
+                return {"type": "http.request", "body": b"", "more_body": False}
+        return msg
+
+    request._receive = limited_receive
+    response = await call_next(request)
+
+    if received[0] > _MAX_BODY_BYTES:
         return JSONResponse(status_code=413, content={"detail": "Request body too large (max 50 MB)"})
-    return await call_next(request)
+    return response
 
 
 # ── Security headers ───────────────────────────────────────────────────────────

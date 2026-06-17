@@ -13,6 +13,7 @@ import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTria
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import MarkdownContent from '../components/common/MarkdownContent'
+import { safeUrl } from '../utils/url'
 
 const JIRA_STATUS_COLORS: Record<string, string> = {
   'To Do': 'bg-nyx-eclipse text-nyx-mist',
@@ -85,7 +86,7 @@ function JiraPanel({ findingId }: { findingId: string }) {
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <a
-              href={ticket.jira_issue_url}
+              href={safeUrl(ticket.jira_issue_url)}
               target="_blank"
               rel="noopener noreferrer"
               className="text-nyx-stardust font-mono text-sm font-bold hover:underline flex items-center gap-1"
@@ -338,7 +339,7 @@ export default function FindingDetailPage() {
                 <Globe size={14} className="text-nyx-amethyst" />
                 <span className="text-nyx-mist text-sm">Vulnerable URL</span>
               </div>
-              <a href={finding.url} target="_blank" rel="noopener noreferrer"
+              <a href={safeUrl(finding.url)} target="_blank" rel="noopener noreferrer"
                 className="text-nyx-stardust text-sm break-all flex items-center gap-1 mt-1 hover:text-nyx-amethyst">
                 {finding.url} <ExternalLink size={12} />
               </a>
@@ -498,7 +499,7 @@ export default function FindingDetailPage() {
           {finding.fix_pr_url && (
             <div className="nyx-card p-5">
               <h3 className="text-nyx-moonbeam font-semibold mb-3">Fix PR</h3>
-              <a href={finding.fix_pr_url} target="_blank" rel="noopener noreferrer"
+              <a href={safeUrl(finding.fix_pr_url)} target="_blank" rel="noopener noreferrer"
                 className="text-nyx-stardust text-sm flex items-center gap-1 hover:text-nyx-amethyst">
                 View Pull Request <ExternalLink size={12} />
               </a>

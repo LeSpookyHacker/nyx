@@ -32,7 +32,7 @@ def _is_ssrf_safe(url: str) -> bool:
     """Return True only if the URL is https and its hostname is not a raw private/loopback IP."""
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
+        if parsed.scheme != "https":
             return False
         host = parsed.hostname
         if not host:

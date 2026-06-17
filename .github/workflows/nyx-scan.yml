@@ -32,10 +32,11 @@ jobs:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
           NYX_WEBHOOK_SECRET: ${{ secrets.NYX_WEBHOOK_SECRET }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -cn \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "SEMGREP" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d semgrep.json \
@@ -71,12 +72,13 @@ jobs:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
           NYX_WEBHOOK_SECRET: ${{ secrets.NYX_WEBHOOK_SECRET }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           COUNT=$(jq 'if type == "array" then length else 0 end' gitleaks.json 2>/dev/null || echo 0)
           if [ "$COUNT" -eq 0 ]; then echo "✓ Gitleaks: no secrets found"; exit 0; fi
           NYX_URL="${NYX_URL// /}"
           jq -cn \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "GITLEAKS" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d gitleaks.json \
@@ -115,12 +117,13 @@ jobs:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
           NYX_WEBHOOK_SECRET: ${{ secrets.NYX_WEBHOOK_SECRET }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           COUNT=$(jq 'if type == "array" then length else 0 end' hadolint.json 2>/dev/null || echo 0)
           if [ "$COUNT" -eq 0 ]; then echo "✓ Hadolint: no issues found"; exit 0; fi
           NYX_URL="${NYX_URL// /}"
           jq -cn \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "HADOLINT" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d hadolint.json \
@@ -156,11 +159,12 @@ jobs:
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
           NYX_WEBHOOK_SECRET: ${{ secrets.NYX_WEBHOOK_SECRET }}
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           if [ -z "$SNYK_TOKEN" ]; then exit 0; fi
           NYX_URL="${NYX_URL// /}"
           jq -cn \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "SNYK" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d snyk.json \
@@ -219,6 +223,7 @@ jobs:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
           NYX_WEBHOOK_SECRET: ${{ secrets.NYX_WEBHOOK_SECRET }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           SITE_COUNT=$(jq '.site | length' zap.json 2>/dev/null || echo 0)
@@ -227,7 +232,7 @@ jobs:
             exit 0
           fi
           jq -cn \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "ZAP" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d zap.json \
@@ -260,10 +265,11 @@ jobs:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
           NYX_WEBHOOK_SECRET: ${{ secrets.NYX_WEBHOOK_SECRET }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -cn \
-            --arg repo    "${{ vars.NYX_REPO_ID }}" \
+            --arg repo    "$NYX_REPO_ID" \
             --arg scanner "TRIVY" \
             --arg ref     "$GITHUB_REF_NAME" \
             --slurpfile d trivy.json \
@@ -289,13 +295,14 @@ jobs:
         env:
           NYX_URL: ${{ vars.NYX_URL }}
           NYX_API_KEY: ${{ secrets.NYX_API_KEY }}
+          NYX_REPO_ID: ${{ vars.NYX_REPO_ID }}
         run: |
           NYX_URL="${NYX_URL// /}"
           jq -cn \
             --arg ref "$GITHUB_REF_NAME" \
             --slurpfile s sbom-cdx.json \
             '{"git_ref":$ref,"sbom":$s[0]}' \
-          | curl -sf -X POST "$NYX_URL/api/v1/sbom/repositories/${{ vars.NYX_REPO_ID }}/submit" \
+          | curl -sf -X POST "$NYX_URL/api/v1/sbom/repositories/$NYX_REPO_ID/submit" \
               -H "Content-Type: application/json" \
               -H "X-API-Key: $NYX_API_KEY" \
               -H "ngrok-skip-browser-warning: true" \

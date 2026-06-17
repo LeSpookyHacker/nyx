@@ -47,11 +47,15 @@ class SnykNormalizer(AbstractNormalizer):
         cve_id = (identifiers.get("CVE") or [None])[0]
 
         exploit = data.get("exploitMaturity", "No Known Exploit")
-        is_exploitable = exploit.lower() not in ("no known exploit", "unproven", "not defined")
+        # SEC-109: guard against non-string scanner data before calling .lower()
+        exploit_str = exploit if isinstance(exploit, str) else "No Known Exploit"
+        is_exploitable = exploit_str.lower() not in ("no known exploit", "unproven", "not defined")
 
         fix_in = data.get("fixedIn", [])
         pkg = issue.get("pkgName", "")
-        remediation = f"Upgrade {pkg} to {', '.join(fix_in)}" if fix_in else data.get("description", "")
+        # SEC-109: coerce elements to str to prevent TypeError if scanner sends non-string versions
+        fix_in_strs = [str(v) for v in fix_in] if isinstance(fix_in, list) else []
+        remediation = f"Upgrade {pkg} to {', '.join(fix_in_strs)}" if fix_in_strs else data.get("description", "")
 
         return NormalizedFinding(
             title=data.get("title", issue.get("id", "Snyk Vulnerability")),
