@@ -206,7 +206,9 @@ async def request_remediation(
 
 
 @router.get("/{remediation_id}", response_model=RemediationResponse)
+@limiter.limit("60/minute")  # SEC-222
 async def get_remediation(
+    request: Request,
     remediation_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
@@ -264,7 +266,9 @@ async def approve_remediation(
 
 
 @router.post("/{remediation_id}/reject", response_model=RemediationResponse)
+@limiter.limit("10/minute")  # SEC-222
 async def reject_remediation(
+    request: Request,
     remediation_id: str,
     body: RemediationReject,
     db: AsyncSession = Depends(get_db),
@@ -294,7 +298,9 @@ async def reject_remediation(
 
 
 @router.delete("/{remediation_id}", status_code=204)
+@limiter.limit("10/minute")  # SEC-222
 async def dismiss_remediation(
+    request: Request,
     remediation_id: str,
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),

@@ -12,7 +12,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -63,10 +63,28 @@ async def trigger_sbom_generation(
 
 # ── Submission ────────────────────────────────────────────────────────────────
 
+def _check_json_depth(obj: Any, max_depth: int = 20, _current: int = 0) -> None:
+    """Reject excessively nested JSON (SEC-223 — JSON bomb guard)."""
+    if _current > max_depth:
+        raise ValueError(f"JSON payload exceeds maximum nesting depth of {max_depth}")
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _check_json_depth(v, max_depth, _current + 1)
+    elif isinstance(obj, list):
+        for item in obj:
+            _check_json_depth(item, max_depth, _current + 1)
+
+
 class SbomSubmitRequest(BaseModel):
     git_ref: Optional[str] = None
     # The full SBOM JSON body is passed as a dict
     sbom: Dict[str, Any]
+
+    @field_validator("sbom")
+    @classmethod
+    def validate_depth(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        _check_json_depth(v)
+        return v
 
 
 @router.post("/repositories/{repo_id}/submit", status_code=201)

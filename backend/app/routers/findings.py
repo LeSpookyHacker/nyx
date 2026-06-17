@@ -22,6 +22,7 @@ from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.finding import Finding
 from app.models.suppression_pattern import SuppressionPattern
+from pydantic import BaseModel, Field
 from app.schemas.finding import (
     BulkStatusUpdate,
     FindingNoteUpdate,
@@ -32,6 +33,16 @@ from app.schemas.finding import (
 )
 
 router = APIRouter(prefix="/findings", tags=["findings"])
+
+
+# SEC-208: typed model replaces raw dict to enforce max_length and character allowlist
+class FindingAssignRequest(BaseModel):
+    assignee: Optional[str] = Field(
+        None,
+        max_length=255,
+        pattern=r"^[\w\s@._\-]*$",
+        description="Engineer to assign (empty string to unassign)",
+    )
 
 # Whitelist of sortable columns — prevents attribute enumeration via getattr
 _SORT_WHITELIST = frozenset({
@@ -61,7 +72,9 @@ def _build_filter_query(
     if repository_id:
         stmt = stmt.where(Finding.repository_id == repository_id)
     if search:
-        like = f"%{search}%"
+        # SEC-221: escape LIKE metacharacters to prevent wildcard DoS
+        escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
         stmt = stmt.where(
             or_(
                 Finding.title.ilike(like),
@@ -432,7 +445,7 @@ async def update_notes(
 async def assign_finding(
     request: Request,
     finding_id: str,
-    body: dict,
+    body: FindingAssignRequest,  # SEC-208: typed model with max_length + pattern
     db: AsyncSession = Depends(get_db),
     _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
@@ -442,7 +455,7 @@ async def assign_finding(
     if not finding:
         raise HTTPException(status_code=404, detail="Finding not found")
 
-    assignee = (body.get("assignee") or "").strip()
+    assignee = (body.assignee or "").strip()
     finding.assigned_to = assignee or None
     finding.assigned_at = datetime.now(timezone.utc) if assignee else None
 

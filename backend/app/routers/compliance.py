@@ -374,32 +374,30 @@ async def create_risk_acceptance(
     expires_in_days = int(body.get("expires_in_days", 180))
     expires_at = now + timedelta(days=expires_in_days) if expires_in_days > 0 else None
 
-    approved_by = body.get("approved_by", "").strip() or None
-    approval_status = "approved" if approved_by else "pending_approval"
+    # SEC-218: never allow self-approval at create time — always require a separate
+    # /approve call from a second principal. Accepting approved_by in the create body
+    # would let a single ANALYST bypass the separation-of-duties control.
+    approval_status = "pending_approval"
 
     ra = RiskAcceptance(
         finding_id=finding_id,
         requested_by=_key,
-        approved_by=approved_by,
+        approved_by=None,
         business_justification=justification[:5000],
         compensating_controls=str(body.get("compensating_controls", ""))[:2000] or None,
         evidence_url=str(body.get("evidence_url", ""))[:2000] or None,
         expires_at=expires_at,
-        approved_at=now if approved_by else None,
+        approved_at=None,
         approval_status=approval_status,
     )
     db.add(ra)
-
-    # Update finding status if approved
-    if approved_by and finding.status in ("OPEN", "IN_REMEDIATION"):
-        finding.status = "ACCEPTED_RISK"
 
     await log_event(
         db, actor=_key, action="risk_acceptance.created",
         resource_type="finding", resource_id=finding_id,
         metadata={
             "approval_status": approval_status,
-            "approved_by": approved_by,
+            "approved_by": None,  # SEC-218: always pending at create time; set by /approve
             "expires_at": expires_at.isoformat() if expires_at else None,
         },
     )

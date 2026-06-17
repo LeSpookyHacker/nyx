@@ -58,6 +58,34 @@ class SlaPolicyUpdate(BaseModel):
     max_days: Optional[int] = None
     escalation_action: Optional[str] = None
     jira_project_key: Optional[str] = None
+
+    # SEC-234: apply the same validators as SlaPolicyCreate so PATCH cannot sneak in invalid values
+    @field_validator("severity")
+    @classmethod
+    def validate_severity(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.upper()
+        if v not in _VALID_SEVERITIES:
+            raise ValueError(f"severity must be one of {sorted(_VALID_SEVERITIES)}")
+        return v
+
+    @field_validator("escalation_action")
+    @classmethod
+    def validate_action(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        v = v.upper()
+        if v not in _VALID_ACTIONS:
+            raise ValueError(f"escalation_action must be one of {sorted(_VALID_ACTIONS)}")
+        return v
+
+    @field_validator("max_days")
+    @classmethod
+    def validate_days(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and (v < 1 or v > 365):
+            raise ValueError("max_days must be between 1 and 365")
+        return v
     enabled: Optional[bool] = None
 
 

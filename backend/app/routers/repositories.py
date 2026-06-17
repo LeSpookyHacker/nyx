@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.limiter import limiter
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.core.exceptions import GitHubError
 from app.database import get_db
 from app.models.repo_risk_history import RepoRiskHistory
@@ -100,7 +100,7 @@ async def update_repository(
     repo_id: str,
     body: RepositoryUpdate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-206
 ):
     result = await db.execute(select(Repository).where(Repository.id == repo_id))
     repo = result.scalar_one_or_none()
@@ -128,7 +128,7 @@ async def update_repository(
 async def delete_repository(
     repo_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-206
 ):
     result = await db.execute(select(Repository).where(Repository.id == repo_id))
     repo = result.scalar_one_or_none()
@@ -152,7 +152,7 @@ async def sync_code_scanning(
     request: Request,
     repo_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-206
 ):
     """
     Manually trigger a GitHub Code Scanning sync for this repository.
@@ -181,7 +181,7 @@ async def refresh_webhook(
     request: Request,
     repo_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-206
 ):
     """Re-register the GitHub webhook for a repository."""
     result = await db.execute(select(Repository).where(Repository.id == repo_id))
@@ -210,7 +210,7 @@ async def refresh_webhook(
 async def push_workflow(
     repo_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-206
 ):
     """
     Push (create or update) the canonical nyx-scan.yml workflow file into the
@@ -249,7 +249,7 @@ async def detect_scanners(
     repo_id: str,
     auto_apply: bool = Query(False, description="Automatically update enabled_scanners with detected tools"),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-206
 ):
     """
     Analyse the repository's file tree on GitHub and detect which scanners

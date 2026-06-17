@@ -7,6 +7,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -32,6 +33,10 @@ class Settings(BaseSettings):
     LOG_FORMAT: str = "json"
     ENVIRONMENT: str = "development"  # Set to "production" to enable strict security checks
     HTTPS_ONLY: bool = False          # Reject non-HTTPS requests when True
+    # SEC-213: session cookie Secure flag. Defaults to True so the cookie is never
+    # transmitted over plain HTTP.  Set SESSION_COOKIE_SECURE=false only for local
+    # development environments that access Nyx over plain http://.
+    SESSION_COOKIE_SECURE: bool = True
 
     # ─── Database ────────────────────────────────────────────────────────────────
     DATABASE_URL: str = "sqlite+aiosqlite:///./data/nyx.db"
@@ -83,7 +88,10 @@ class Settings(BaseSettings):
     # When true, scan imports that omit the X-Nyx-Submission-HMAC header are rejected.
     # Set to false (default) for backward compatibility — the header is validated when
     # present but not required.
-    REQUIRE_SUBMISSION_HMAC: bool = False
+    # SEC-233: default True so scan integrity verification is opt-out, not opt-in.
+    # CI/CD workflow templates already send the HMAC header; existing deployments
+    # that omit it should set REQUIRE_SUBMISSION_HMAC=false to preserve compatibility.
+    REQUIRE_SUBMISSION_HMAC: bool = True
 
     # ─── CORS — stored as plain string, parsed via property ──────────────────────
     CORS_ORIGINS_STR: str = "http://localhost:5173,http://localhost:3000"
@@ -102,6 +110,18 @@ class Settings(BaseSettings):
     # ─── EPSS API ────────────────────────────────────────────────────────────────
     EPSS_API_ENABLED: bool = True
     EPSS_API_BASE_URL: str = "https://api.first.org/data/v1/epss"
+
+    # SEC-217: validate EPSS_API_BASE_URL uses HTTPS to prevent SSRF via env injection.
+    @field_validator("EPSS_API_BASE_URL")
+    @classmethod
+    def validate_epss_url(cls, v: str) -> str:
+        from urllib.parse import urlparse as _up
+        p = _up(v)
+        if p.scheme != "https":
+            raise ValueError(
+                f"EPSS_API_BASE_URL must use HTTPS, got scheme={p.scheme!r}"
+            )
+        return v
 
     # ─── SLA Targets (days) ──────────────────────────────────────────────────────
     SLA_CRITICAL_DAYS: int = 7

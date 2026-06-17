@@ -95,14 +95,14 @@ async def import_scan_results_json(
              -d @/tmp/nyx_payload.json
     """
     _MAX_IMPORT_BYTES = 50 * 1024 * 1024  # 50 MB
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > _MAX_IMPORT_BYTES:
-        raise HTTPException(status_code=413, detail="Payload too large (max 50 MB)")
-
-    # Read raw body first so the HMAC is computed over the exact bytes received,
-    # then parse manually — Pydantic model injection via FastAPI consumes the stream
-    # without caching in newer Starlette versions, leaving request.body() empty.
+    # SEC-209: read body then check actual byte length — the Content-Length-only check
+    # is bypassable via chunked transfer encoding (no Content-Length header). The
+    # body_size_limit_middleware in main.py enforces this at the ASGI level too, so
+    # chunked bodies exceeding the limit are already truncated before reaching here.
+    # This len() check is a defence-in-depth layer that works for all transfer modes.
     body_bytes = await request.body()
+    if len(body_bytes) > _MAX_IMPORT_BYTES:
+        raise HTTPException(status_code=413, detail="Payload too large (max 50 MB)")
     try:
         body = ScanImportJsonRequest.model_validate_json(body_bytes)
     except Exception as exc:

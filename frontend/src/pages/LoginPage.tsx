@@ -10,7 +10,12 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const navigate = useNavigate()
   const location = useLocation()
-  const redirectTo = (location.state as { from?: string } | null)?.from || '/'
+  // SEC-229: validate redirectTo is a same-origin relative path to prevent open-redirect
+  // via protocol-relative URLs like "//evil.com" that react-router passes to the history API.
+  const rawRedirect = (location.state as { from?: string } | null)?.from
+  const redirectTo = rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.startsWith('//')
+    ? rawRedirect
+    : '/'
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()

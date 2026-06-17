@@ -85,7 +85,7 @@ class TrivyNormalizer(AbstractNormalizer):
             severity=severity,
             category=category,
             file_path=target or None,
-            cwe_ids=v.get("CweIDs", []) or [],
+            cwe_ids=[str(c) for c in (v.get("CweIDs") or [])],  # SEC-238: coerce elements to str
             cve_id=v.get("VulnerabilityID") if v.get("VulnerabilityID", "").startswith("CVE") else None,
             remediation_guidance=fix_text,
             cvss_score=cvss_score,

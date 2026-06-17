@@ -817,18 +817,15 @@ async def rotate_secret_key(new_secret_key: str) -> dict:
                 # Re-encrypt with the new key by temporarily using the new key
                 from cryptography.fernet import Fernet
                 import base64
-                import hashlib as _hashlib
 
-                # Derive new Fernet key from new_secret_key
-                new_key_bytes = _hashlib.pbkdf2_hmac(
-                    "sha256",
-                    new_secret_key.encode(),
-                    b"nyx-fernet-salt",
-                    100_000,
-                    dklen=32,
-                )
+                # SEC-203: derive new Fernet key using HKDF (same KDF as EncryptedString
+                # process_result_value) to avoid a mismatch that would permanently corrupt
+                # all webhook secrets on rotation.  Store with "v2:" prefix to match the
+                # format that decrypt_secret() expects for HKDF-encrypted tokens.
+                from app.core.crypto import _derive_key_v2 as _kdf_v2, _V2_PREFIX as _V2PFX
+                new_key_bytes = _kdf_v2(new_secret_key)
                 new_fernet = Fernet(base64.urlsafe_b64encode(new_key_bytes))
-                new_encrypted = new_fernet.encrypt(current_secret.encode()).decode()
+                new_encrypted = _V2PFX + new_fernet.encrypt(current_secret.encode()).decode()
 
                 # Store raw encrypted value directly (bypass the ORM type decorator)
                 from sqlalchemy import update

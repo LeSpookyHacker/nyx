@@ -1,6 +1,7 @@
 """Executive Report router — generates print-friendly HTML security reports."""
 from __future__ import annotations
 
+import html as _html
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
@@ -179,12 +180,14 @@ async def executive_report(
         f"<tr><td>{w}</td><td>{weekly_new.get(w, 0)}</td><td>{weekly_fixed.get(w, 0)}</td></tr>"
         for w in all_weeks
     )
+    # SEC-232: html.escape() all DB-sourced values before interpolation into HTML
     vuln_html = "".join(
-        f"<tr><td>{v.title}</td><td>{v.scanner}</td><td><code>{v.rule_id}</code></td><td>{v.cnt}</td></tr>"
+        f"<tr><td>{_html.escape(v.title)}</td><td>{_html.escape(v.scanner)}</td>"
+        f"<td><code>{_html.escape(v.rule_id)}</code></td><td>{v.cnt}</td></tr>"
         for v in top_vulns
     )
     repo_html = "".join(
-        f"<tr><td>{r.github_full_name}</td>"
+        f"<tr><td>{_html.escape(r.github_full_name)}</td>"
         f"<td class='score' style='color:{'#ef4444' if r.risk_score>=70 else '#f97316' if r.risk_score>=40 else '#22c55e'}'>{round(r.risk_score)}</td>"
         f"<td style='color:#ef4444'>{r.open_critical}</td>"
         f"<td style='color:#f97316'>{r.open_high}</td>"

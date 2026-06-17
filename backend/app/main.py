@@ -17,7 +17,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.config import get_settings
 from app.core.limiter import limiter
-from app.core.security import require_api_key, warn_insecure_config
+from app.core.security import require_api_key, require_scope, warn_insecure_config, SCOPE_ADMIN
 from app.database import init_db
 from app.routers import (
     audit, api_keys, compliance, dashboard, findings, jira, remediation,
@@ -595,6 +595,7 @@ app.include_router(ai_costs.router, prefix=API_PREFIX)
 
 
 @app.post("/auth/session", tags=["auth"])
+@limiter.limit("5/minute")  # SEC-204: per-endpoint brute-force limit on the auth endpoint
 async def create_session(request: Request, response: Response):
     """
     Exchange an API key for an HTTP-only session cookie.
@@ -619,6 +620,7 @@ async def create_session(request: Request, response: Response):
         _clear_auth_failure,
         _record_auth_failure,
         _hash_session_id,
+        get_client_ip,
         SCOPE_ADMIN,
     )
     from sqlalchemy import select as _sa_select
@@ -628,7 +630,7 @@ async def create_session(request: Request, response: Response):
     from datetime import datetime, timedelta, timezone
     import secrets as _secrets
 
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)  # SEC-205: use proxy-aware helper, not raw TCP peer
     identity = "bootstrap"
     scopes = SCOPE_ADMIN
     api_key_id: str | None = None
@@ -690,7 +692,7 @@ async def create_session(request: Request, response: Response):
         value=session_token,
         httponly=True,
         samesite="strict",
-        secure=settings.HTTPS_ONLY,
+        secure=settings.SESSION_COOKIE_SECURE,  # SEC-213: defaults True; set SESSION_COOKIE_SECURE=false for plain-HTTP dev
         max_age=SESSION_COOKIE_MAX_AGE,
         path="/",
     )
@@ -734,7 +736,7 @@ async def health():
 
 
 @app.get("/health/integrations", tags=["system"])
-async def integration_health(_key: str = Depends(require_api_key)):
+async def integration_health(_key: str = Depends(require_scope(SCOPE_ADMIN))):  # SEC-214: admin only — reveals config detail
     """
     Probe each configured integration and report its connectivity status.
     Requires a valid API key — this endpoint reveals integration configuration.
@@ -752,7 +754,8 @@ async def integration_health(_key: str = Depends(require_api_key)):
             await db.execute(text("SELECT 1"))
         results["database"] = {"status": "ok"}
     except Exception as e:
-        results["database"] = {"status": "error", "detail": str(e)[:100]}
+        logger.exception("Integration health check — database error")
+        results["database"] = {"status": "error"}
 
     # ── Anthropic / Claude ────────────────────────────────────────────────────
     if not settings.ANTHROPIC_API_KEY:
@@ -769,7 +772,8 @@ async def integration_health(_key: str = Depends(require_api_key)):
             await client.models.list()
             results["anthropic"] = {"status": "ok", "model": settings.ANTHROPIC_MODEL}
         except Exception as e:
-            results["anthropic"] = {"status": "error", "detail": str(e)[:100]}
+            logger.exception("Integration health check — anthropic error")
+            results["anthropic"] = {"status": "error"}
 
     # ── GitHub ────────────────────────────────────────────────────────────────
     if not settings.GITHUB_TOKEN:
@@ -782,7 +786,8 @@ async def integration_health(_key: str = Depends(require_api_key)):
             _ = user.login  # force the API call
             results["github"] = {"status": "ok", "authenticated_as": user.login}
         except Exception as e:
-            results["github"] = {"status": "error", "detail": str(e)[:100]}
+            logger.exception("Integration health check — github error")
+            results["github"] = {"status": "error"}
 
     # ── JIRA ──────────────────────────────────────────────────────────────────
     if not settings.JIRA_URL or not settings.JIRA_API_TOKEN:
@@ -799,7 +804,8 @@ async def integration_health(_key: str = Depends(require_api_key)):
                 data = resp.json()
                 results["jira"] = {"status": "ok", "authenticated_as": data.get("displayName", "")}
         except Exception as e:
-            results["jira"] = {"status": "error", "detail": str(e)[:100]}
+            logger.exception("Integration health check — jira error")
+            results["jira"] = {"status": "error"}
 
     # ── Slack / Notification webhook ─────────────────────────────────────────
     if not settings.NOTIFICATION_WEBHOOK_URL:

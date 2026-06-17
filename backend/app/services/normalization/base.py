@@ -91,6 +91,8 @@ def map_severity(raw: str, default: str = Severity.MEDIUM.value) -> str:
         # CVSS numeric
         "none": Severity.INFO.value,
     }
+    if not isinstance(raw, str):  # SEC-226: non-string values must not reach .lower()
+        return default
     return mapping.get(raw.lower().strip(), default)
 
 

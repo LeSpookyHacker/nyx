@@ -298,7 +298,11 @@ async def generate_alternatives(
 
     client = _get_async_client()
 
-    safe_context = _CTRL_CHARS_RE.sub("", engineer_context)[:2000]
+    # SEC-225: cap num_alternatives to prevent token-cost amplification
+    num_alternatives = min(max(num_alternatives, 1), 5)
+
+    safe_context = _CTRL_CHARS_RE.sub("", engineer_context)
+    safe_context = _PROMPT_INJECTION_RE.sub("", safe_context)[:2000]  # SEC-210
     truncated_content = _truncate_file(file_content, finding.line_start, settings.AI_MAX_FILE_LINES)
 
     owasp_info = ""
@@ -347,7 +351,8 @@ async def stream_fix_generation(
         return
 
     client = _get_async_client()
-    safe_context = _CTRL_CHARS_RE.sub("", engineer_context)[:2000]
+    safe_context = _CTRL_CHARS_RE.sub("", engineer_context)
+    safe_context = _PROMPT_INJECTION_RE.sub("", safe_context)[:2000]  # SEC-211
     truncated_content = _truncate_file(file_content, finding.line_start, settings.AI_MAX_FILE_LINES)
 
     owasp_info = ""
@@ -402,7 +407,8 @@ async def stream_fix_generation(
         yield f"data: {_json.dumps({'type': 'complete', 'diff': diff_text, 'explanation': explanation, 'fix_summary': fix_summary, 'confidence': confidence, 'diff_warnings': diff_warnings})}\n\n"
 
     except Exception as e:
-        yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        logger.exception("stream_fix_generation failed: %s", e)  # SEC-239: log detail, don't leak to client
+        yield f"data: {_json.dumps({'type': 'error', 'message': 'AI generation failed — see server logs'})}\n\n"
 
 
 def _build_test_context(test_file_contents: Optional[dict[str, str]]) -> str:

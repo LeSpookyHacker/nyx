@@ -82,7 +82,9 @@ class RepositoryResponse(BaseModel):
     language: Optional[str] = None
     is_private: bool
     webhook_active: bool
-    webhook_secret: Optional[str] = None
+    # SEC-220: webhook_secret intentionally excluded — it is the HMAC signing key for
+    # GitHub webhook verification and must not be exposed in API responses. Use a
+    # dedicated admin endpoint to rotate it when needed.
     enabled_scanners: str
     risk_score: float
     open_critical: int

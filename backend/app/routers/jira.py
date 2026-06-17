@@ -10,7 +10,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.database import get_db
 from app.models.finding import Finding
 from app.models.jira_link import JiraLink
@@ -79,7 +79,7 @@ async def create_ticket(
     finding_id: str,
     body: CreateTicketRequest,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-207
 ):
     """Create a JIRA ticket for the finding and link it."""
     # Get finding
@@ -125,7 +125,7 @@ async def sync_ticket(
     request: Request,
     finding_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-207: scanner keys must not transition findings to FIXED
 ):
     """
     Pull latest status from JIRA and update the link.
@@ -171,7 +171,7 @@ async def unlink_ticket(
     request: Request,
     finding_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-207
 ):
     """Remove the JIRA link from a finding (does not delete the JIRA ticket)."""
     link_result = await db.execute(
@@ -232,7 +232,7 @@ async def bulk_create_tickets(
     repo_id: str,
     body: BulkTicketRequest,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-207
 ):
     """
     Create JIRA tickets for all open findings in a repository that

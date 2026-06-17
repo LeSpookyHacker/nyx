@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_client_ip, require_api_key
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
 from app.database import get_db
 from app.models.regression_auto_alert import RegressionAutoAlert
 from app.models.repository import Repository
@@ -66,7 +66,7 @@ async def acknowledge_alert(
 async def acknowledge_all(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # SEC-219: scanner keys must not silence all alerts
 ):
     result = await db.execute(
         select(RegressionAutoAlert).where(RegressionAutoAlert.acknowledged_at.is_(None))

@@ -41,7 +41,7 @@ class GitleaksNormalizer(AbstractNormalizer):
         if author:
             description_parts.append(f"Author: {author}")
         if tags:
-            description_parts.append(f"Tags: {', '.join(tags)}")
+            description_parts.append(f"Tags: {', '.join(str(t) for t in tags)}")  # SEC-227
 
         return NormalizedFinding(
             title=f"Secret detected: {rule_id}",

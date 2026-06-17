@@ -18,6 +18,7 @@ import {
   RefreshCw, ShieldAlert, Ticket, TrendingUp, Wand2, Webhook, X,
 } from 'lucide-react'
 import RepoTrends from '../components/charts/RepoTrends'
+import { safeUrl } from '../utils/url'  // SEC-212
 import { clsx } from 'clsx'
 
 import { SEVERITIES, STATUSES, SEV_COLORS } from '../constants/theme'
@@ -489,7 +490,7 @@ function JiraTab({ repoId }: { repoId: string }) {
                 <tr key={t.jira_issue_key} className="hover:bg-nyx-twilight/30 transition-colors">
                   <td className="px-4 py-3">
                     <a
-                      href={t.jira_issue_url}
+                      href={safeUrl(t.jira_issue_url)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-nyx-amethyst hover:text-nyx-lavender font-mono text-sm flex items-center gap-1"

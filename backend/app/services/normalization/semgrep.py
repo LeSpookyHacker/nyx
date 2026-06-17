@@ -85,7 +85,7 @@ class SemgrepNormalizer(AbstractNormalizer):
             file_path=path or None,
             line_start=start.get("line"),
             line_end=end.get("line"),
-            code_snippet=code_snippet[:2000] if code_snippet else None,
+            code_snippet=(code_snippet if isinstance(code_snippet, str) else str(code_snippet))[:2000] if code_snippet else None,  # SEC-240
             cwe_ids=cwe_ids,
             owasp_category=owasp,
             remediation_guidance=metadata.get("fix-regex") or metadata.get("fix"),

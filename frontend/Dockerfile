@@ -25,6 +25,10 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-XSS-Protection "0" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    # SEC-230: HSTS — tells browsers to always use HTTPS for this origin (1-year max-age).
+    # Remove this header or set max-age=0 only if running behind a TLS-terminating proxy
+    # that adds its own HSTS and you want to avoid double-setting it.
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
     # CSP: allow same-origin scripts/styles; data: URIs for inline SVG/images
     add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none';" always;
 

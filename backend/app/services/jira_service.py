@@ -338,8 +338,10 @@ def _validate_jira_url(url: str) -> None:
     ]
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"JIRA_URL must use http or https scheme, got: {parsed.scheme!r}")
+        # SEC-224: https-only — Jira auth uses Basic Auth (email+token) which must not
+        # be transmitted over plaintext HTTP (consistent with notification_service.py SEC-101 fix).
+        if parsed.scheme != "https":
+            raise ValueError(f"JIRA_URL must use https scheme, got: {parsed.scheme!r}")
         host = parsed.hostname
         if not host:
             raise ValueError("JIRA_URL has no hostname")

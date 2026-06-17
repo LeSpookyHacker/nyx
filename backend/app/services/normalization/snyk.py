@@ -110,7 +110,7 @@ class SnykNormalizer(AbstractNormalizer):
             cve_id = cves[0]
 
         fix_info = v.get("fixedIn", [])
-        fix_text = f"Upgrade to {', '.join(fix_info)}" if fix_info else ""
+        fix_text = f"Upgrade to {', '.join(str(item) for item in fix_info)}" if fix_info else ""  # SEC-228
         description = v.get("description", "") or v.get("title", "")
 
         return NormalizedFinding(

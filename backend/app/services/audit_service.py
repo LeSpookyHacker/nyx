@@ -39,11 +39,18 @@ def _get_hmac_key() -> bytes:
         raise
     except Exception:
         pass
+    # SEC-231: instead of a well-known hardcoded key, use a random per-process key.
+    # The chain is still tamper-evident within a single process lifetime, and
+    # on restart a new random key is generated — forensically weaker than a
+    # persistent secret but far better than a public constant.
+    import secrets as _sec
+    _random_fallback = _sec.token_bytes(32)
     logger.warning(
-        "NYX_SECRET_KEY not set — audit HMAC chain uses a weak default key. "
+        "NYX_SECRET_KEY not set — audit HMAC chain uses a random per-process key. "
+        "Chain integrity is valid within this process lifetime only. "
         "Set NYX_SECRET_KEY before deploying to production."
     )
-    return b"nyx-audit-chain-default"
+    return _random_fallback
 
 
 def _compute_entry_hash(

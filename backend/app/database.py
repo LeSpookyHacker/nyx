@@ -67,10 +67,11 @@ async def _migrate_encrypt_raw_outputs(conn) -> None:
     Raises on encryption errors so we fail fast rather than silently leaving plaintext.
     """
     import logging
-    from app.core.crypto import encrypt_secret, _get_fernet
+    from app.core.crypto import encrypt_secret, _get_fernets
 
     logger = logging.getLogger("nyx.migrate")
-    if _get_fernet() is None:
+    fernet_v2, _ = _get_fernets()
+    if fernet_v2 is None:
         logger.warning(
             "NYX_SECRET_KEY not set — raw_output encryption at rest is disabled. "
             "Set NYX_SECRET_KEY and restart to encrypt existing rows."
@@ -87,7 +88,8 @@ async def _migrate_encrypt_raw_outputs(conn) -> None:
 
     migrated = 0
     for row_id, raw in rows:
-        if not raw or raw.startswith("gAAAAA"):
+        # SEC-202: skip already-encrypted tokens — v2 tokens start with "v2:", legacy with "gAAAAA"
+        if not raw or raw.startswith("gAAAAA") or raw.startswith("v2:"):
             continue
         encrypted = encrypt_secret(raw)
         if not encrypted or encrypted == raw:

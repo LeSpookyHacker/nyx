@@ -59,6 +59,12 @@ jobs:
         env:
           SCAN_IMAGE: ${{ vars.DOCKER_IMAGE || github.event.inputs.image || 'nyx-scan-target:ci' }}
         run: |
+          # SEC-242: validate SCAN_IMAGE before passing to trivy — prevents argument injection
+          # from a workflow_dispatch input with a malformed image name.
+          echo "$SCAN_IMAGE" | grep -E '^[a-zA-Z0-9/._:@-]+$' || {
+            echo "::error::SCAN_IMAGE value contains invalid characters: $SCAN_IMAGE"
+            exit 1
+          }
           trivy image \
             --format json \
             --output trivy-container.json \

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.core.constants import FindingCategory, FindingStatus, Severity
 
@@ -107,8 +107,9 @@ class FindingStatusUpdate(BaseModel):
 
 
 class FindingSuppressRequest(BaseModel):
-    reason: str
-    expires_days: Optional[int] = None  # None = permanent
+    # SEC-235: enforce max_length and safe bounds
+    reason: str = Field(..., max_length=1000)
+    expires_days: Optional[int] = Field(None, ge=1, le=3650)  # None = permanent, max ~10 years
 
 
 class FindingNoteUpdate(BaseModel):
