@@ -30,8 +30,14 @@ After clicking **Push Workflow**, configure these in the target repository under
 | Secret | Value | Required |
 |---|---|---|
 | `NYX_API_KEY` | A **scanner-scoped** Nyx API key — create one from Nyx **Settings → API Keys** with `scanner` scope | Yes |
-| `NYX_WEBHOOK_SECRET` | The per-repo webhook secret from Nyx — find it on the repository detail page (reveal button at the bottom of the header card) | Strongly recommended |
+| `NYX_WEBHOOK_SECRET` | The **per-repo** webhook secret — find it in Nyx: **Repositories → [your repo] → Reveal NYX_WEBHOOK_SECRET** button. **This is NOT the same as `NYX_WEBHOOK_SECRET` in `.env`** — see callout below. | Strongly recommended |
 | `SNYK_TOKEN` | Snyk API token from [app.snyk.io/account](https://app.snyk.io/account) — enables the Snyk SCA step | Optional |
+
+> ⚠️ **Name collision — `NYX_WEBHOOK_SECRET` means different things in two places:**
+> - **In Nyx's `.env`:** a *global* pre-auth guard, intentionally left **empty** in standard setups
+> - **In GitHub Actions secrets:** the *per-repo* HMAC signing key for this specific repository — get it from the **Reveal NYX_WEBHOOK_SECRET** button on the repository detail page in Nyx
+>
+> Never copy the value from `.env` into GitHub Actions, and never set the `.env` value to the per-repo secret. They serve different purposes. See [`.env.example`](../.env.example) for the full explanation.
 
 > **Never use an admin-scope key in CI.** A `scanner`-scoped key can submit scans but cannot suppress findings, manage keys, or access audit exports — limiting blast radius if a CI secret is ever compromised.
 

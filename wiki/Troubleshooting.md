@@ -58,6 +58,31 @@ Your PAT is missing the **Workflows** permission. Edit the token, add the scope,
 - Token cannot see the repo — check fine-grained PAT repo access.
 - Repo name typo — it must be `owner/name`, case-sensitive.
 
+### Multiple webhooks / `401` signature always fails
+
+If you've added and removed a repository multiple times (or clicked **Add** while debugging), GitHub may have accumulated several Nyx webhooks for the same repo. Only the most recently registered one matches Nyx's stored per-repo secret — older ones will always return `401 invalid signature`.
+
+**Fix:**
+1. Go to **GitHub → your repo → Settings → Webhooks**
+2. Delete **all** Nyx webhooks except the most recently created one
+3. Verify the remaining webhook's URL ends in `/api/v1/webhooks/github` and matches your current `GITHUB_WEBHOOK_ENDPOINT`
+4. Trigger a test delivery (click the webhook → **Recent Deliveries** → **Redeliver** the ping) and confirm it returns `200`
+
+> After re-adding a repo in Nyx, always check GitHub's webhook list to make sure only one remains.
+
+### Config changes not taking effect after editing `.env`
+
+Nyx reads environment variables once at container startup and caches them via `@lru_cache`. Editing `.env` while containers are running has **no effect** until you recreate the containers.
+
+**To apply `.env` changes:**
+```bash
+docker compose up -d   # stops, recreates, and restarts containers with the new env
+```
+
+`docker compose restart` alone does **NOT** re-read `.env` — it only bounces the process inside the existing container, which still has the old environment baked in.
+
+**Common symptom:** You updated `GITHUB_WEBHOOK_ENDPOINT` in `.env`, re-added a repo in Nyx, but the newly registered webhook on GitHub still points to the old URL. The new webhook was created using the cached (stale) value from before your edit. Fix: run `docker compose up -d`, then delete the stale webhook on GitHub and re-add the repo.
+
 ---
 
 ## AI remediation

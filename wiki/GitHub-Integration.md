@@ -66,7 +66,7 @@ A GitHub App gives you higher rate limits, per-installation scoping, and cleaner
 2. Name: `Nyx Security Platform`
 3. Homepage URL: your Nyx dashboard URL
 4. Webhook URL: `https://your-nyx-url/api/v1/webhooks/github`
-5. Webhook secret: the value of `NYX_WEBHOOK_SECRET` from your `.env`
+5. Webhook secret: **leave blank** — Nyx registers per-repo secrets automatically when you add repositories. (Only set this if you want a shared App-level secret that matches `NYX_WEBHOOK_SECRET` in `.env` for advanced hardening.)
 6. **Repository permissions:** the same list as the PAT above.
 7. **Subscribe to events:** `push`, `pull_request`, `check_suite`, `workflow_run`, `security_advisory`, `code_scanning_alert`.
 8. Install it on your org or specific repos.
@@ -107,6 +107,20 @@ Restart:
 
 ---
 
+## Secrets — what goes where
+
+There are three separate "secrets" involved in the GitHub integration. They have similar names but serve completely different purposes:
+
+| Secret | Where it lives | What it's for |
+|---|---|---|
+| **Per-repo `webhook_secret`** | Nyx DB — auto-generated when you add a repo | GitHub signs every webhook delivery with this. Nyx verifies it. You never set it manually. For CI scan signing, copy it from **Repositories → [repo] → Reveal NYX_WEBHOOK_SECRET** button. |
+| **`NYX_WEBHOOK_SECRET` in `.env`** | Your Nyx `.env` file | Optional global pre-auth guard. **Leave empty** in standard setups. Auto-generating this breaks all webhooks. |
+| **`NYX_API_KEY` in GitHub Actions** | GitHub repo → Settings → Secrets | Allows CI to submit scans. Create a **scanner-scoped** key from Nyx **Settings → API Keys** — do NOT reuse your admin bootstrap key. |
+
+> ⚠️ **Name collision:** The GitHub Actions secret is also called `NYX_WEBHOOK_SECRET` but it holds the **per-repo** value from Nyx's DB — not the global `.env` value. They are different things. See [CI/CD Integration](CICD-Integration.md) for details.
+
+---
+
 ## Expose the webhook endpoint
 
 GitHub must be able to reach Nyx's `/api/v1/webhooks/github` over the public internet. Pick one:
@@ -115,12 +129,18 @@ GitHub must be able to reach Nyx's `/api/v1/webhooks/github` over the public int
 
 ```bash
 ngrok http 8000
-# → https://abc123.ngrok.io
+# → https://abc123.ngrok-free.app
 ```
 
-Set `GITHUB_WEBHOOK_ENDPOINT=https://abc123.ngrok.io` in `.env` and restart.
+Set `GITHUB_WEBHOOK_ENDPOINT=https://abc123.ngrok-free.app/api/v1/webhooks/github` in `.env`.
 
-> Free ngrok URLs change on restart. Pay for a static domain if you rely on this.
+> **Port:** Always point ngrok to `8000` (the backend API). Do NOT use `3000` (frontend) or `80` (nothing listens there).
+>
+> **Full path required:** The `/api/v1/webhooks/github` suffix is mandatory — Nyx uses this value verbatim and does not append any path automatically.
+>
+> **After editing `.env`:** Run `docker compose up -d` (not `docker compose restart`) so the backend picks up the new value. `restart` does NOT re-read `.env`.
+>
+> **Free ngrok URLs change on restart.** Get a free static domain at ngrok.com so you don't need to update `.env` every time.
 
 ### B — Cloudflare Tunnel (free, persistent)
 
@@ -148,6 +168,18 @@ Any Nginx/Caddy/Traefik reverse proxy with a real TLS cert works. See **[Product
 4. **Add Repository**
 
 Nyx will install the webhook automatically.
+
+### Verify webhook installation
+
+After adding a repo, confirm the webhook registered correctly:
+
+1. Go to **GitHub → your repo → Settings → Webhooks**
+2. You should see exactly **one** Nyx webhook pointing to your `GITHUB_WEBHOOK_ENDPOINT`
+3. Click it → **Recent Deliveries** — a ping delivery should show `200`
+
+If you see multiple webhooks from past add/remove attempts, delete all the stale ones. Only the most recently registered one matches Nyx's stored secret — older ones will always 401.
+
+> **Tip:** If you re-add a repository, also delete the old webhooks from GitHub's settings page. Nyx creates a new webhook (and a new secret) each time — it cannot clean up the old ones itself if the previous webhook registration succeeded.
 
 ### Via the API
 
@@ -256,7 +288,7 @@ curl -I -X POST https://your-nyx-url/api/v1/webhooks/github
 |---|---|---|
 | `403` when pushing workflow | Missing **Workflows** permission on PAT | Edit token, add Workflows scope |
 | Webhooks not firing | `GITHUB_WEBHOOK_ENDPOINT` unset or unreachable | Check tunnel/reverse proxy |
-| `401 signature mismatch` on webhooks | Secret drift between GitHub and `NYX_WEBHOOK_SECRET` | Reinstall webhook from the repo page |
+| `401 signature mismatch` on webhooks | Stale webhook — GitHub is using an old secret that no longer matches Nyx's DB | Delete stale webhooks on GitHub (Settings → Webhooks), then re-add the repo in Nyx to register a fresh webhook |
 | PR annotations missing | Repo is not registered in Nyx or **Checks** permission missing | Register repo, re-scope token |
 | Rate limit errors | Using a PAT at org scale | Switch to a GitHub App |
 

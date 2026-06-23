@@ -58,15 +58,48 @@ docker compose exec backend python scripts/seed_demo_data.py --wipe
 
 ---
 
+## Step 3.5 — Expose Nyx to the internet (required for GitHub webhooks)
+
+GitHub must be able to POST scan results and webhook events to Nyx. For a local install, use ngrok to create a temporary public tunnel:
+
+```bash
+# One-off tunnel (URL changes on restart):
+ngrok http 8000
+
+# With a free static domain (URL stays the same):
+ngrok http --url=<your-static-domain> 8000
+```
+
+Copy the URL ngrok prints (e.g. `https://abc123.ngrok-free.app`), then update `.env`:
+
+```bash
+GITHUB_WEBHOOK_ENDPOINT=https://abc123.ngrok-free.app/api/v1/webhooks/github
+```
+
+Restart the backend to pick up the new value:
+
+```bash
+docker compose up -d   # ← this recreates containers and re-reads .env
+# NOT: docker compose restart  ← this does NOT re-read .env
+```
+
+> **Port:** Always use `8000` — that's the Nyx backend API. Do NOT use `3000` (frontend) or `80` (nothing listens there).
+>
+> **Free static domains:** Sign up at [ngrok.com](https://ngrok.com) to get a persistent subdomain so you don't need to update `.env` on every ngrok restart.
+
+---
+
 ## Step 4 — Register your first real repository
 
 Dashboard → **Repositories** → **Add Repository**.
 
 Enter a repo you have push access to, e.g. `your-username/sample-app`. Enable Semgrep (fastest to try) plus anything else you want to experiment with. Click **Add**.
 
-Nyx installs a GitHub webhook on the repository automatically. If you don't have a public URL yet, scans can still be pushed manually — see step 6.
+Nyx installs a GitHub webhook on the repository automatically.
 
-> If this fails with 404 or 403, your GitHub token is missing permissions. Head to [GitHub Integration](GitHub-Integration.md) and come back.
+After adding, verify it worked: go to **GitHub → your repo → Settings → Webhooks** and confirm there's exactly one webhook pointing to your `GITHUB_WEBHOOK_ENDPOINT`, with a successful ping delivery (200).
+
+> If the repo add fails with 404 or 403, your GitHub token is missing permissions. Head to [GitHub Integration](GitHub-Integration.md) and come back.
 
 ---
 
@@ -82,15 +115,16 @@ The pushed workflow needs to know where to send results. Go to your GitHub repos
 
 **Secrets:**
 
-| Secret | Value |
+| Secret | How to get it |
 |---|---|
-| `NYX_API_KEY` | Create a `scanner`-scoped key in Nyx **Settings → API Keys** and paste it here |
+| `NYX_API_KEY` | Nyx **Settings → API Keys → New Key** — choose **scanner** scope. Do NOT use the admin bootstrap key from setup.sh. |
+| `NYX_WEBHOOK_SECRET` | Nyx **Repositories → [your repo] → Reveal NYX_WEBHOOK_SECRET** button. This is the per-repo signing key — it is NOT the same as `NYX_WEBHOOK_SECRET` in `.env`. |
 
 **Variables:**
 
 | Variable | Value |
 |---|---|
-| `NYX_URL` | The public URL of your Nyx instance — e.g. `https://abc123.ngrok.io` or `https://nyx.example.com` |
+| `NYX_URL` | The public URL of your Nyx instance, no trailing slash — e.g. `https://abc123.ngrok-free.app` or `https://nyx.example.com` |
 | `NYX_ZAP_TARGET` | *(Optional)* URL of your deployed app — e.g. `https://myapp.com`. Enables DAST scanning. |
 
 > You do **not** need to set `NYX_REPO_ID` — the repository UUID is already embedded in the workflow file when Nyx pushes it.

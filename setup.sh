@@ -10,7 +10,7 @@
 # What it does:
 #   1. Checks dependencies (docker, docker compose, python3, curl)
 #   2. Creates .env from .env.example (if it doesn't exist)
-#   3. Generates cryptographic secrets (NYX_SECRET_KEY, NYX_API_KEY, NYX_WEBHOOK_SECRET)
+#   3. Generates cryptographic secrets (NYX_SECRET_KEY, NYX_API_KEY)
 #   4. Prompts for GitHub token & Anthropic key (interactive mode)
 #   5. Validates credentials via API
 #   6. Builds and starts Docker containers
@@ -140,7 +140,33 @@ _generate_if_missing() {
 
 _generate_if_missing "NYX_SECRET_KEY"    "" "NYX_SECRET_KEY (audit HMAC, webhook + raw_output encryption)"  "import secrets; print(secrets.token_hex(32))"
 _generate_if_missing "NYX_API_KEY"       "nyx-your-secret-key-here" "NYX_API_KEY (your login key)"  "import secrets; print('nyx-' + secrets.token_urlsafe(24))"
-_generate_if_missing "NYX_WEBHOOK_SECRET" "" "NYX_WEBHOOK_SECRET (webhook auth)"         "import secrets; print(secrets.token_hex(32))"
+# NYX_WEBHOOK_SECRET is intentionally NOT auto-generated.
+# It is an optional global pre-auth guard for production hardening.
+# In the default setup, Nyx uses per-repo secrets (auto-generated on repo add).
+# Setting NYX_WEBHOOK_SECRET here would break ALL webhook deliveries unless you
+# also configure the same value in every GitHub webhook config manually.
+# Leave it empty (the default) — per-repo secrets handle auth automatically.
+dim "  NYX_WEBHOOK_SECRET left empty (correct for standard setups — see .env.example for details)."
+
+# ── Validate GITHUB_WEBHOOK_ENDPOINT ────────────────────────────────────────
+_validate_webhook_endpoint() {
+  local val
+  val=$(_env_get "GITHUB_WEBHOOK_ENDPOINT")
+  if _is_placeholder "$val" "https://your-nyx-instance.example.com/api/v1/webhooks/github" || [[ -z "$val" ]]; then
+    yellow "  ⚠️  GITHUB_WEBHOOK_ENDPOINT is still the placeholder."
+    yellow "     For GitHub webhooks to reach Nyx, set this to your public URL:"
+    yellow "     e.g. https://abc123.ngrok-free.app/api/v1/webhooks/github"
+    yellow "     See: https://github.com/LeSpookyHacker/nyx/wiki/GitHub-Integration"
+  elif [[ "$val" != */api/v1/webhooks/github ]]; then
+    yellow "  ⚠️  GITHUB_WEBHOOK_ENDPOINT doesn't end with /api/v1/webhooks/github"
+    yellow "     The full path is required — Nyx uses this value verbatim, no path is appended."
+    yellow "     Current:    $val"
+    yellow "     Should be:  ${val%/}/api/v1/webhooks/github"
+  else
+    green "  GITHUB_WEBHOOK_ENDPOINT looks good."
+  fi
+}
+_validate_webhook_endpoint
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Step 4: Prompt for integration keys (interactive only)
@@ -331,9 +357,19 @@ dim   "  Copy the key above, open http://localhost:3000, and paste it into"
 dim   "  the Sign in page. Mint additional scoped keys from Settings > API Keys."
 echo ""
 bold  "  What next?"
-dim   "  1. Add a GitHub repo:  Repositories > Add Repository"
-dim   "  2. Push the scan workflow to it (one click)"
-dim   "  3. Push a commit — Nyx will ingest the scan results automatically"
+dim   "  1. Expose Nyx to the internet (required for GitHub webhooks):"
+dim   "     ngrok http 8000   (or ngrok http --url=<static-domain> 8000)"
+dim   "     Then update GITHUB_WEBHOOK_ENDPOINT in .env to:"
+dim   "       https://<your-ngrok-url>/api/v1/webhooks/github"
+dim   "     IMPORTANT: Always point ngrok to port 8000 (not 3000 or 80)."
+dim   "     After editing .env, run: docker compose up -d"
+dim   "     (NOT 'docker compose restart' — that does NOT re-read .env)"
+dim   ""
+dim   "  2. Add a GitHub repo:  Repositories > Add Repository"
+dim   "  3. Push the scan workflow to it (one click)"
+dim   "  4. Set the per-repo NYX_WEBHOOK_SECRET in GitHub Actions secrets:"
+dim   "     Find it in Nyx: Repositories > [your repo] > Reveal NYX_WEBHOOK_SECRET"
+dim   "  5. Push a commit — Nyx will ingest the scan results automatically"
 echo ""
 dim   "  Useful commands:"
 dim   "    ./nyx.sh status     Show running services and open findings"
