@@ -168,6 +168,16 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
     for finding in findings:
         if finding.id in already_active:
             continue
+        if not finding.file_path:
+            # Auto PR requires a specific file to patch. Findings without a file_path
+            # (e.g. dependency vulnerabilities, configuration issues) cannot be
+            # auto-committed — skip them now to avoid a misleading "Error None" failure
+            # caused by PyGitHub asserting the path is a non-None string.
+            logger.debug(
+                "Skipping finding %s (severity=%s) — no file_path; auto PR requires a file-specific vulnerability",
+                finding.id, finding.severity,
+            )
+            continue
         rem = Remediation(
             finding_id=finding.id,
             requested_by=_AUTO_PR_ACTOR,
@@ -393,6 +403,16 @@ async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Reposit
                            file_content: str):
     """Apply the diff and open a draft PR on nyx/auto-fix/<short-id>. Returns (number, url, branch)."""
     from app.routers.remediation import _validate_diff_scope
+
+    # Guard: auto PR needs a file path to commit the fix. Findings without one
+    # (e.g. dependency vulnerabilities, config/infra issues) cannot be auto-patched.
+    # This should have been caught at enqueue time, but we re-check here for defence-in-depth.
+    if not finding.file_path:
+        raise ValueError(
+            "Cannot create auto PR: finding has no file path. "
+            "This vulnerability may require a non-code fix (config, infrastructure, or dependency update). "
+            "Handle it manually."
+        )
 
     # Integrity + scope checks (mirror the manual flow)
     if rem.ai_diff_sha256:
@@ -655,6 +675,15 @@ async def trigger_auto_pr_now(db, repository_id: str) -> int:
     queued_ids: list[str] = []
     for finding in findings:
         if finding.id in already_active:
+            continue
+        if not finding.file_path:
+            # Auto PR requires a specific file to patch. Findings without a file_path
+            # (e.g. dependency vulnerabilities, configuration issues) cannot be
+            # auto-committed — skip them now to avoid a misleading "Error None" failure.
+            logger.debug(
+                "Skipping finding %s (severity=%s) — no file_path; auto PR requires a file-specific vulnerability",
+                finding.id, finding.severity,
+            )
             continue
         rem = Remediation(
             finding_id=finding.id,
