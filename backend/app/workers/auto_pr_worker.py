@@ -67,10 +67,11 @@ def _get_semaphore() -> asyncio.Semaphore:
 
 
 def _severities_for_threshold(threshold: str) -> list[str]:
-    """CRITICAL always; HIGH added when threshold is 'HIGH'."""
-    if (threshold or "HIGH").upper() == "CRITICAL":
-        return [Severity.CRITICAL.value]
-    return [Severity.CRITICAL.value, Severity.HIGH.value]
+    """Parse a comma-separated severity list. Falls back to CRITICAL,HIGH if empty/invalid."""
+    valid = {s.value for s in Severity}
+    parts = [p.strip().upper() for p in (threshold or "").split(",") if p.strip()]
+    result = [p for p in parts if p in valid]
+    return result or [Severity.CRITICAL.value, Severity.HIGH.value]
 
 
 async def _deduct_tokens_and_check_budget(db, repository_id: str, tokens: int) -> bool:
@@ -133,6 +134,10 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
         return 0
 
     severities = _severities_for_threshold(repo.auto_pr_severity_threshold)
+
+    # Heal any findings from this scan that are stuck in IN_REMEDIATION before querying for OPEN ones
+    await _heal_stuck_findings(db, repository_id, severities, scan_id=scan_id)
+
     findings_result = await db.execute(
         select(Finding)
         .where(
@@ -199,7 +204,13 @@ async def _run_with_semaphore(remediation_id: str, repository_id: str) -> None:
 async def _finalize(db, rem: Remediation, finding: Optional[Finding], status: str,
                     action: str, metadata: dict, *, reopen_finding: bool = False,
                     error: Optional[str] = None) -> None:
-    """Set a terminal/intermediate state, write the audit event, and commit — one consistent exit."""
+    """Set a terminal/intermediate state, write the audit event, and commit — one consistent exit.
+
+    The commit is wrapped in a best-effort try/except: if it fails (DB connection drop,
+    timeout, etc.) the finding may be transiently stuck in IN_REMEDIATION, but
+    _heal_stuck_findings will detect and recover it on the next trigger run.
+    We never re-raise here so a _finalize failure cannot itself crash the pipeline.
+    """
     rem.status = status
     if error:
         rem.error_message = error
@@ -207,7 +218,18 @@ async def _finalize(db, rem: Remediation, finding: Optional[Finding], status: st
         finding.status = FindingStatus.OPEN.value
     await log_event(db, actor=_AUTO_PR_ACTOR, action=action,
                     resource_type="remediation", resource_id=rem.id, metadata=metadata)
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        logger.exception(
+            "_finalize commit failed for remediation %s (status=%s reopen_finding=%s) — "
+            "finding may be transiently stuck; _heal_stuck_findings will recover it on next trigger",
+            rem.id, status, reopen_finding,
+        )
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> None:
@@ -514,6 +536,149 @@ async def _notify_audit_failure(finding: Finding, repo: Repository, audit: dict)
         )
     except Exception:  # noqa: BLE001
         logger.debug("Auto PR audit-failure notification skipped", exc_info=True)
+
+
+async def _heal_stuck_findings(
+    db,
+    repository_id: str,
+    severities: list[str],
+    scan_id: Optional[str] = None,
+) -> None:
+    """
+    Reset any IN_REMEDIATION findings to OPEN when every one of their auto-triggered
+    remediations has reached a terminal failure state.
+
+    This can happen when a crash or unexpected error leaves a finding stuck:
+    the pipeline's except-handler sets reopen_finding=True, but if _finalize's own
+    db.commit() fails (e.g. a DB connection drop) the reset never lands.
+    Calling this before enqueueing makes both trigger paths self-healing.
+
+    Pass scan_id to scope healing to a specific scan (used by enqueue_auto_pr_findings);
+    omit it to heal all stuck findings for the repository (used by trigger_auto_pr_now).
+    """
+    filters = [
+        Finding.repository_id == repository_id,
+        Finding.status == FindingStatus.IN_REMEDIATION.value,
+        Finding.severity.in_(severities),
+    ]
+    if scan_id is not None:
+        filters.append(Finding.scan_id == scan_id)
+
+    stuck_result = await db.execute(
+        select(Finding).where(*filters)
+    )
+    stuck = stuck_result.scalars().all()
+    if not stuck:
+        return
+
+    rem_result = await db.execute(
+        select(Remediation.finding_id, Remediation.status).where(
+            Remediation.finding_id.in_([f.id for f in stuck]),
+            Remediation.is_auto_triggered.is_(True),
+        )
+    )
+    rem_statuses: dict[str, list[str]] = {}
+    for fid, status in rem_result.all():
+        rem_statuses.setdefault(fid, []).append(status)
+
+    healed = 0
+    for finding in stuck:
+        statuses = rem_statuses.get(finding.id, [])
+        # All auto-remediations in terminal failure → finding is stuck, safe to reopen
+        if statuses and all(s in _TERMINAL_FAILURE_STATES for s in statuses):
+            logger.info("Healing stuck finding %s (was IN_REMEDIATION, all auto-PRs failed) → OPEN", finding.id)
+            finding.status = FindingStatus.OPEN.value
+            healed += 1
+
+    if healed:
+        await db.commit()
+
+
+async def trigger_auto_pr_now(db, repository_id: str) -> int:
+    """
+    On-demand trigger: queue all eligible OPEN findings for a repository immediately.
+
+    Unlike enqueue_auto_pr_findings this is not scan-scoped — it picks up every
+    existing OPEN finding that matches the repo's severity list.  Called when the
+    user explicitly enables Auto PR Mode from the UI so new findings are acted on
+    right away rather than waiting for the next scan.
+
+    Also auto-heals findings stuck in IN_REMEDIATION whose auto-remediations all failed,
+    so a previous crash never permanently blocks a finding from being retried.
+    """
+    repo_result = await db.execute(select(Repository).where(Repository.id == repository_id))
+    repo = repo_result.scalar_one_or_none()
+    if not repo or not repo.auto_pr_mode:
+        return 0
+
+    # Hard budget gate
+    if repo.auto_pr_tokens_used_today >= repo.auto_pr_daily_token_budget:
+        await log_event(
+            db, actor=_AUTO_PR_ACTOR, action="auto_pr.budget_exceeded",
+            resource_type="repository", resource_id=repository_id,
+            metadata={"trigger": "manual", "tokens_used_today": repo.auto_pr_tokens_used_today,
+                      "daily_budget": repo.auto_pr_daily_token_budget},
+        )
+        await db.commit()
+        return 0
+
+    severities = _severities_for_threshold(repo.auto_pr_severity_threshold)
+
+    # Self-heal any findings stuck in IN_REMEDIATION before querying for OPEN ones
+    await _heal_stuck_findings(db, repository_id, severities)
+
+    findings_result = await db.execute(
+        select(Finding)
+        .where(
+            Finding.repository_id == repository_id,
+            Finding.status == FindingStatus.OPEN.value,
+            Finding.severity.in_(severities),
+        )
+        .order_by(Finding.priority_score.desc())
+    )
+    findings = findings_result.scalars().all()
+    if not findings:
+        return 0
+
+    # Dedup: skip findings already being handled by a non-terminal auto remediation
+    existing_result = await db.execute(
+        select(Remediation.finding_id, Remediation.status).where(
+            Remediation.finding_id.in_([f.id for f in findings]),
+            Remediation.is_auto_triggered.is_(True),
+        )
+    )
+    already_active = {
+        fid for fid, status in existing_result.all()
+        if status not in _TERMINAL_FAILURE_STATES
+    }
+
+    queued_ids: list[str] = []
+    for finding in findings:
+        if finding.id in already_active:
+            continue
+        rem = Remediation(
+            finding_id=finding.id,
+            requested_by=_AUTO_PR_ACTOR,
+            status=RemediationStatus.AUTO_TRIGGERED.value,
+            is_auto_triggered=True,
+        )
+        db.add(rem)
+        finding.status = FindingStatus.IN_REMEDIATION.value
+        await db.flush()
+        await log_event(
+            db, actor=_AUTO_PR_ACTOR, action="auto_pr.queued",
+            resource_type="remediation", resource_id=rem.id,
+            metadata={"finding_id": finding.id, "severity": finding.severity,
+                      "repository_id": repository_id, "trigger": "manual"},
+        )
+        queued_ids.append(rem.id)
+
+    await db.commit()
+
+    for rem_id in queued_ids:
+        asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+
+    return len(queued_ids)
 
 
 async def reset_auto_pr_budgets(db) -> None:

@@ -139,7 +139,7 @@ export default function MarkdownContent({ children, className, size = 'base' }: 
           // Links
           a: ({ href, children }) => (
             <a
-              href={safeUrl(href ?? '')}  {/* SEC-333: validate href scheme before rendering */}
+              href={safeUrl(href ?? '')} // SEC-333: validate href scheme before rendering
               target="_blank"
               rel="noopener noreferrer"
               className="text-nyx-stardust hover:text-nyx-amethyst underline underline-offset-2 transition-colors"

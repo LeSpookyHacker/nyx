@@ -118,7 +118,7 @@ async def _migrate_add_columns(conn) -> None:
         ("remediations", "diff_warnings",      "TEXT"),
         # Auto PR Mode — repositories config
         ("repositories", "auto_pr_mode",                   "BOOLEAN NOT NULL DEFAULT 0"),
-        ("repositories", "auto_pr_severity_threshold",     "VARCHAR(20) NOT NULL DEFAULT 'HIGH'"),
+        ("repositories", "auto_pr_severity_threshold",     "VARCHAR(100) NOT NULL DEFAULT 'CRITICAL,HIGH'"),
         ("repositories", "auto_pr_daily_token_budget",     "INTEGER NOT NULL DEFAULT 50000"),
         ("repositories", "auto_pr_tokens_used_today",      "INTEGER NOT NULL DEFAULT 0"),
         ("repositories", "auto_pr_last_budget_reset",      "DATETIME"),

@@ -71,7 +71,7 @@ export interface Repository {
   last_scan_at?: string
   // Auto PR Mode config + live budget usage
   auto_pr_mode: boolean
-  auto_pr_severity_threshold: 'CRITICAL' | 'HIGH'
+  auto_pr_severity_threshold: string  // comma-separated, e.g. "CRITICAL,HIGH" or "CRITICAL,HIGH,MEDIUM"
   auto_pr_daily_token_budget: number
   auto_pr_tokens_used_today: number
   auto_pr_skip_low_confidence: boolean

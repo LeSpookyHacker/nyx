@@ -55,11 +55,25 @@ class RepositoryUpdate(BaseModel):
 
     # Auto PR Mode configuration
     auto_pr_mode: Optional[bool] = None
-    auto_pr_severity_threshold: Optional[str] = Field(None, pattern="^(CRITICAL|HIGH)$")
+    auto_pr_severity_threshold: Optional[str] = None
     auto_pr_daily_token_budget: Optional[int] = Field(None, ge=1000, le=500000)
     auto_pr_skip_low_confidence: Optional[bool] = None
     auto_pr_require_passing_checks: Optional[bool] = None
     auto_pr_security_audit: Optional[bool] = None
+
+    @field_validator("auto_pr_severity_threshold")
+    @classmethod
+    def validate_severity_threshold(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        _VALID_SEVERITIES = {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO"}
+        parts = [p.strip().upper() for p in v.split(",") if p.strip()]
+        if not parts:
+            raise ValueError("at least one severity must be selected")
+        invalid = [p for p in parts if p not in _VALID_SEVERITIES]
+        if invalid:
+            raise ValueError(f"invalid severity values: {', '.join(invalid)}")
+        return ",".join(parts)
 
     @field_validator("default_branch")
     @classmethod
@@ -103,7 +117,7 @@ class RepositoryResponse(BaseModel):
     last_scan_at: Optional[datetime] = None
     # Auto PR Mode config + live budget usage
     auto_pr_mode: bool = False
-    auto_pr_severity_threshold: str = "HIGH"
+    auto_pr_severity_threshold: str = "CRITICAL,HIGH"
     auto_pr_daily_token_budget: int = 50000
     auto_pr_tokens_used_today: int = 0
     auto_pr_skip_low_confidence: bool = True

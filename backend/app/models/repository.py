@@ -46,8 +46,8 @@ class Repository(Base, TimestampMixin):
 
     # Auto PR Mode — autonomous triage/fix/draft-PR pipeline (off by default; power feature)
     auto_pr_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    # "CRITICAL" = only critical; "HIGH" = critical + high (default)
-    auto_pr_severity_threshold: Mapped[str] = mapped_column(String(20), default="HIGH", nullable=False)
+    # Comma-separated severity list, e.g. "CRITICAL,HIGH" or "CRITICAL,HIGH,MEDIUM,LOW,INFO"
+    auto_pr_severity_threshold: Mapped[str] = mapped_column(String(100), default="CRITICAL,HIGH", nullable=False)
     # Daily token cap (input + output, fix + audit) across auto-triggered remediations; resets midnight UTC
     auto_pr_daily_token_budget: Mapped[int] = mapped_column(Integer, default=50000, nullable=False)
     auto_pr_tokens_used_today: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

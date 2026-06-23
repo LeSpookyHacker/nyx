@@ -956,6 +956,7 @@ def apply_unified_diff(original: str, diff: str) -> Optional[str]:
         import unidiff
         patch = unidiff.PatchSet(_fix_hunk_headers(diff))
         lines = original.splitlines(keepends=True)
+        result_lines = list(lines)  # safe default: empty/unparseable patch returns original
 
         for patched_file in patch:
             result_lines = list(lines)

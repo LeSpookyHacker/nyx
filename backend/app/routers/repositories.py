@@ -167,6 +167,40 @@ async def set_auto_pr_mode(
     return repo
 
 
+@router.post("/{repo_id}/run-auto-pr")
+async def run_auto_pr_now(
+    request: Request,
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
+):
+    """
+    Immediately queue all eligible OPEN findings for the Auto PR pipeline.
+
+    Called after the user enables Auto PR Mode from the UI so existing findings
+    are picked up right away rather than waiting for the next scan to complete.
+    Requires Auto PR Mode to already be enabled on the repository.
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not repo.auto_pr_mode:
+        raise HTTPException(status_code=400, detail="Auto PR Mode is not enabled for this repository")
+
+    from app.workers.auto_pr_worker import trigger_auto_pr_now
+    queued = await trigger_auto_pr_now(db, repo_id)
+
+    await log_event(
+        db, actor=_key, action="auto_pr.manual_trigger",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name, "queued": queued},
+        ip_address=get_client_ip(request),
+    )
+    await db.commit()
+    return {"queued": queued, "repository_id": repo_id}
+
+
 @router.get("/{repo_id}/auto-pr-budget")
 async def get_auto_pr_budget(
     repo_id: str,
@@ -270,6 +304,38 @@ async def refresh_webhook(
     await db.commit()
     await db.refresh(repo)
     return repo
+
+
+@router.get("/{repo_id}/webhook-secret")
+async def get_webhook_secret(
+    request: Request,
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    actor: str = Depends(require_scope(SCOPE_ADMIN)),
+):
+    """
+    Return the per-repository webhook HMAC secret for CI/CD configuration.
+
+    This secret must be set as NYX_WEBHOOK_SECRET in your GitHub Actions repository
+    secrets so the pushed nyx-scan.yml workflow can sign scan submissions.
+
+    Access is restricted to admin-scoped keys and every reveal is audit-logged.
+    The secret is never included in the standard repository response (SEC-220).
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not repo.webhook_secret:
+        raise HTTPException(status_code=404, detail="No webhook secret configured — re-register the webhook first")
+
+    await log_event(db, actor=actor, action="repository.webhook_secret_revealed",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name},
+        ip_address=get_client_ip(request))
+    await db.commit()
+
+    return {"webhook_secret": repo.webhook_secret}
 
 
 @router.post("/{repo_id}/push-workflow")

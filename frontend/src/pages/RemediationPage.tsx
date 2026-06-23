@@ -80,8 +80,9 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: s
           <ShieldCheck size={11} /> Security audit {rem.audit_passed ? 'passed' : 'failed'}
         </span>
       )}
+      {/* SEC-332: validate pr_url scheme */}
       {rem.pr_url && (
-        <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"  {/* SEC-332 */}
+        <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"
           className="text-nyx-stardust text-xs flex items-center gap-1 mt-2 hover:text-nyx-amethyst"
           onClick={e => e.stopPropagation()}>
           <GitPullRequest size={11} />
