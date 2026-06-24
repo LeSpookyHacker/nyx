@@ -127,6 +127,16 @@ class AIAlternativeFix:
     trade_offs: str     # Pros/cons relative to other approaches
 
 
+@dataclass
+class AdvisoryGuidanceResult:
+    """Result of generate_advisory_guidance() — a full remediation write-up for findings without a file."""
+    guidance_markdown: str   # Full Markdown remediation plan (risk summary, steps, verification, refs)
+    summary: str             # One-line human-readable summary for the GitHub Issue title
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    model: str = ""
+
+
 def _get_async_client() -> anthropic.AsyncAnthropic:
     """Return a configured async Anthropic client with a per-call timeout."""
     import httpx
@@ -765,3 +775,128 @@ def _truncate_file(content: str, focus_line: Optional[int], max_lines: int) -> s
         return window_note + "".join(lines[start:end])
 
     return "".join(lines[:max_lines])
+
+
+_ADVISORY_SYSTEM_PROMPT = """You are Nyx, an expert security engineer. Your role is to write clear,
+actionable remediation guidance for security findings that cannot be auto-fixed with a code patch.
+
+Your guidance will be posted as a GitHub Issue so engineers can track and resolve the issue manually.
+Write for a senior engineer who needs to act quickly — be precise, concrete, and avoid vague advice.
+
+Rules:
+- Tailor your remediation steps to the specific finding category (SCA, CONTAINER, IAC, etc.)
+- Include concrete commands where applicable (e.g., pip install --upgrade X==Y, docker build, etc.)
+- Never recommend suppressing or ignoring the vulnerability
+- Do not include filler sentences or generic security advice unrelated to this specific finding
+"""
+
+
+async def generate_advisory_guidance(finding: Finding, model: Optional[str] = None) -> AdvisoryGuidanceResult:
+    """
+    Generate a full AI-written remediation plan for a finding that has no file_path
+    (e.g. SCA dependency CVEs, container image vulns, IAC configuration issues).
+
+    Returns an AdvisoryGuidanceResult with a Markdown guidance document and a one-line summary.
+    Uses the cheaper audit model (Haiku) since no diff generation is needed.
+
+    Raises:
+        AIServiceError: If AI generation fails
+    """
+    if not settings.ANTHROPIC_API_KEY:
+        raise AIServiceError("ANTHROPIC_API_KEY is not configured")
+
+    client = _get_async_client()
+    use_model = model or settings.AUTO_PR_AUDIT_MODEL
+
+    # Build sanitized finding metadata for the prompt
+    try:
+        cwe_list = json.loads(finding.cwe_ids or "[]")
+        cwe_str = ", ".join(c for c in cwe_list if isinstance(c, str)) or "n/a"
+    except Exception:
+        cwe_str = "n/a"
+
+    exploitable_str = "Yes — actively exploitable" if finding.is_exploitable else "No known active exploitation"
+
+    category_hints = {
+        "SCA": "This is a Software Composition Analysis (SCA) finding — a vulnerability in a third-party dependency.",
+        "CONTAINER": "This is a container image finding — a vulnerability in the base image or OS packages.",
+        "IAC": "This is an Infrastructure-as-Code finding — a misconfiguration in Terraform, CloudFormation, or similar.",
+        "DAST": "This is a Dynamic Analysis finding — a runtime vulnerability detected in the running application.",
+        "SECRETS": "This is a secrets finding — a credential or API key that has been exposed.",
+    }
+    category_hint = category_hints.get(finding.category, "")
+
+    prompt = f"""You are generating a GitHub Issue to help engineers remediate a security finding that cannot be auto-fixed with a code diff.
+
+## Finding Details
+
+- **Title**: {_safe(finding.title, 300)}
+- **Category**: {_safe(finding.category, 30)} — {category_hint}
+- **Severity**: {_safe(finding.severity, 20)}
+- **Scanner**: {_safe(finding.scanner, 50)}
+- **Rule / ID**: {_safe(finding.rule_id, 100)}
+- **CVE**: {_safe(finding.cve_id, 50) if finding.cve_id else "n/a"}
+- **CVSS Score**: {finding.cvss_score if finding.cvss_score is not None else "n/a"}
+- **EPSS Score**: {finding.epss_score if finding.epss_score is not None else "n/a"}
+- **CWE**: {cwe_str}
+- **OWASP**: {_safe(finding.owasp_category, 100) if finding.owasp_category else "n/a"}
+- **Exploitable**: {exploitable_str}
+
+## Scanner Description
+{_safe(finding.description, 1000)}
+
+## Scanner Remediation Guidance
+{_safe(finding.remediation_guidance, 800) if finding.remediation_guidance else "No scanner guidance available."}
+
+---
+
+Write a **Markdown remediation plan** for this finding with exactly these four sections:
+
+### Risk Summary
+One paragraph explaining what this vulnerability is, why it matters, and the potential blast radius if exploited.
+
+### Step-by-Step Remediation
+Numbered list of concrete steps an engineer must take to fix this. Include exact commands where applicable.
+For SCA findings: include the package update command, lockfile regeneration, and dependency verification.
+For CONTAINER findings: include the Dockerfile change, rebuild command, and push steps.
+For IAC findings: include the configuration change with a before/after code snippet.
+
+### Verification
+How to confirm the fix was applied successfully (e.g., run `pip audit`, re-scan with the same tool, check the version).
+
+### References
+Relevant links: CVE advisory page, NVD entry, upstream fix commit, documentation. Only include links you are confident exist.
+
+After the four sections, add one final line in this exact format (no Markdown, plain text):
+SUMMARY: <one sentence describing what must be done to fix this>
+"""
+
+    response = await client.messages.create(
+        model=use_model,
+        max_tokens=1500,
+        system=_ADVISORY_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw = response.content[0].text if response.content else ""
+    prompt_tokens = response.usage.input_tokens if response.usage else 0
+    completion_tokens = response.usage.output_tokens if response.usage else 0
+
+    # Extract the one-line summary from the last line
+    lines = raw.strip().splitlines()
+    summary = finding.title  # fallback
+    guidance_lines = []
+    for line in lines:
+        if line.startswith("SUMMARY:"):
+            summary = line[len("SUMMARY:"):].strip()
+        else:
+            guidance_lines.append(line)
+    guidance_markdown = "\n".join(guidance_lines).strip()
+
+    return AdvisoryGuidanceResult(
+        guidance_markdown=guidance_markdown,
+        summary=summary[:200],
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        model=use_model,
+    )

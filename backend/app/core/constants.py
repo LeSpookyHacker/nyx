@@ -99,6 +99,7 @@ class RemediationStatus(str, enum.Enum):
     TEST_FAILED = "TEST_FAILED"              # check run returned failure; not committed
     COMMITTED = "COMMITTED"                  # committed to branch, draft PR open
     BUDGET_EXCEEDED = "BUDGET_EXCEEDED"      # skipped: daily token budget exhausted
+    ADVISORY_OPENED = "ADVISORY_OPENED"      # GitHub Issue opened with AI remediation guidance; no code fix
 
 
 # OWASP Top 10 2021 mapping

@@ -8,6 +8,7 @@ export type RemediationStatus =
   // Auto PR Mode pipeline states
   | 'AUTO_TRIGGERED' | 'AUDIT_IN_PROGRESS' | 'AUDIT_FAILED'
   | 'TEST_IN_PROGRESS' | 'TEST_FAILED' | 'COMMITTED' | 'BUDGET_EXCEEDED'
+  | 'ADVISORY_OPENED'  // GitHub Issue opened for findings without a code fix
 
 export interface Finding {
   id: string
@@ -40,6 +41,7 @@ export interface Finding {
   last_seen_at: string
   resolved_at?: string
   fix_pr_url?: string
+  advisory_issue_url?: string
   notes?: string
   suppression_reason?: string
   assigned_to?: string

@@ -165,18 +165,30 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
     }
 
     queued_ids: list[str] = []
+    advisory_queued_ids: list[str] = []
     for finding in findings:
         if finding.id in already_active:
             continue
         if not finding.file_path:
-            # Auto PR requires a specific file to patch. Findings without a file_path
-            # (e.g. dependency vulnerabilities, configuration issues) cannot be
-            # auto-committed — skip them now to avoid a misleading "Error None" failure
-            # caused by PyGitHub asserting the path is a non-None string.
-            logger.debug(
-                "Skipping finding %s (severity=%s) — no file_path; auto PR requires a file-specific vulnerability",
-                finding.id, finding.severity,
+            # No file to patch — route to advisory issue pipeline instead.
+            # This generates AI-written remediation guidance and opens a GitHub Issue.
+            advisory_rem = Remediation(
+                finding_id=finding.id,
+                requested_by=_AUTO_PR_ACTOR,
+                status=RemediationStatus.AUTO_TRIGGERED.value,
+                is_auto_triggered=True,
             )
+            db.add(advisory_rem)
+            finding.status = FindingStatus.IN_REMEDIATION.value
+            await db.flush()
+            await log_event(
+                db, actor=_AUTO_PR_ACTOR, action="auto_pr.advisory_queued",
+                resource_type="remediation", resource_id=advisory_rem.id,
+                metadata={"finding_id": finding.id, "severity": finding.severity,
+                          "category": finding.category, "repository_id": repository_id,
+                          "scan_id": scan_id},
+            )
+            advisory_queued_ids.append(advisory_rem.id)
             continue
         rem = Remediation(
             finding_id=finding.id,
@@ -199,8 +211,10 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
 
     for rem_id in queued_ids:
         asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+    for rem_id in advisory_queued_ids:
+        asyncio.create_task(_run_advisory_with_semaphore(rem_id, repository_id))
 
-    return len(queued_ids)
+    return len(queued_ids) + len(advisory_queued_ids)
 
 
 async def _run_with_semaphore(remediation_id: str, repository_id: str) -> None:
@@ -209,6 +223,14 @@ async def _run_with_semaphore(remediation_id: str, repository_id: str) -> None:
             await process_auto_pr_finding(remediation_id, repository_id)
         except Exception:  # noqa: BLE001 — a single failure must not crash the worker
             logger.exception("Auto PR pipeline crashed for remediation %s", remediation_id)
+
+
+async def _run_advisory_with_semaphore(remediation_id: str, repository_id: str) -> None:
+    async with _get_semaphore():
+        try:
+            await process_advisory_finding(remediation_id, repository_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("Advisory pipeline crashed for remediation %s", remediation_id)
 
 
 async def _finalize(db, rem: Remediation, finding: Optional[Finding], status: str,
@@ -467,8 +489,9 @@ async def _run_check_gate(db, rem: Remediation, repo: Repository, branch_name: s
     rem.ci_failure_details = result.get("details")
 
     if not result["found"]:
-        # No workflow runs on nyx/* — leave the draft PR COMMITTED, just note it.
+        # No workflow runs on nyx/* — the PR is committed; move out of TEST_IN_PROGRESS.
         logger.info("No check runs found for %s@%s; skipping test gate", repo.github_full_name, sha[:8])
+        rem.status = RemediationStatus.COMMITTED.value
         await db.commit()
         return
 
@@ -673,17 +696,29 @@ async def trigger_auto_pr_now(db, repository_id: str) -> int:
     }
 
     queued_ids: list[str] = []
+    advisory_queued_ids: list[str] = []
     for finding in findings:
         if finding.id in already_active:
             continue
         if not finding.file_path:
-            # Auto PR requires a specific file to patch. Findings without a file_path
-            # (e.g. dependency vulnerabilities, configuration issues) cannot be
-            # auto-committed — skip them now to avoid a misleading "Error None" failure.
-            logger.debug(
-                "Skipping finding %s (severity=%s) — no file_path; auto PR requires a file-specific vulnerability",
-                finding.id, finding.severity,
+            # No file to patch — route to advisory issue pipeline instead.
+            advisory_rem = Remediation(
+                finding_id=finding.id,
+                requested_by=_AUTO_PR_ACTOR,
+                status=RemediationStatus.AUTO_TRIGGERED.value,
+                is_auto_triggered=True,
             )
+            db.add(advisory_rem)
+            finding.status = FindingStatus.IN_REMEDIATION.value
+            await db.flush()
+            await log_event(
+                db, actor=_AUTO_PR_ACTOR, action="auto_pr.advisory_queued",
+                resource_type="remediation", resource_id=advisory_rem.id,
+                metadata={"finding_id": finding.id, "severity": finding.severity,
+                          "category": finding.category, "repository_id": repository_id,
+                          "trigger": "manual"},
+            )
+            advisory_queued_ids.append(advisory_rem.id)
             continue
         rem = Remediation(
             finding_id=finding.id,
@@ -706,8 +741,132 @@ async def trigger_auto_pr_now(db, repository_id: str) -> int:
 
     for rem_id in queued_ids:
         asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+    for rem_id in advisory_queued_ids:
+        asyncio.create_task(_run_advisory_with_semaphore(rem_id, repository_id))
 
-    return len(queued_ids)
+    return len(queued_ids) + len(advisory_queued_ids)
+
+
+def _build_advisory_issue_body(finding: Finding, guidance_markdown: str) -> str:
+    """GitHub Issue body for a finding that has no file path and cannot be auto-fixed with a diff."""
+    from app.routers.remediation import _sanitize_md
+
+    try:
+        cwe_list = json.loads(finding.cwe_ids or "[]")
+        cwe_str = " ".join(c for c in cwe_list if isinstance(c, str))
+    except Exception:
+        cwe_str = ""
+
+    return f"""## 🔍 Nyx Advisory — {_sanitize_md(finding.category, 20)} Finding Requires Manual Remediation
+
+> ⚠️ This issue was automatically generated by **Nyx Auto PR Mode**.
+> A code-diff fix could not be generated for this finding — manual action is required.
+
+### Vulnerability Details
+
+| Field | Value |
+|-------|-------|
+| **Title** | {_sanitize_md(finding.title, 200)} |
+| **Severity** | {_sanitize_md(finding.severity, 20)} |
+| **Category** | {_sanitize_md(finding.category, 30)} |
+| **Scanner** | {_sanitize_md(finding.scanner, 50)} |
+| **Rule / ID** | {_sanitize_md(finding.rule_id, 100)} |
+| **CVE** | {_sanitize_md(finding.cve_id, 50) if finding.cve_id else 'n/a'} |
+| **CVSS** | {finding.cvss_score if finding.cvss_score is not None else 'n/a'} |
+| **EPSS** | {finding.epss_score if finding.epss_score is not None else 'n/a'} |
+
+### AI-Generated Remediation Plan
+
+{guidance_markdown}
+
+---
+Generated by Nyx Auto PR Mode. Finding ID: `{finding.id}`.
+Close this issue once the remediation has been applied and verified.
+"""
+
+
+async def process_advisory_finding(remediation_id: str, repository_id: str) -> None:
+    """
+    Advisory pipeline: generate AI remediation guidance and open a GitHub Issue for a finding
+    that has no file_path (e.g. SCA dependency CVEs, container image vulns).
+
+    This is the advisory counterpart to process_auto_pr_finding(). It follows the same
+    budget-gate and audit-log conventions but creates a GitHub Issue instead of a PR.
+    """
+    async with AsyncSessionLocal() as db:
+        rem = (await db.execute(
+            select(Remediation).where(Remediation.id == remediation_id)
+        )).scalar_one_or_none()
+        if not rem:
+            return
+        finding = (await db.execute(
+            select(Finding).where(Finding.id == rem.finding_id)
+        )).scalar_one_or_none()
+        repo = (await db.execute(
+            select(Repository).where(Repository.id == repository_id)
+        )).scalar_one_or_none()
+        if not finding or not repo:
+            await _finalize(db, rem, finding, RemediationStatus.FAILED.value,
+                            "auto_pr.advisory_failed",
+                            {"reason": "finding or repository missing"},
+                            error="Finding or repository not found")
+            return
+
+        # Budget re-check (race guard between enqueue and execution)
+        if repo.auto_pr_tokens_used_today >= repo.auto_pr_daily_token_budget:
+            await _finalize(db, rem, finding, RemediationStatus.BUDGET_EXCEEDED.value,
+                            "auto_pr.budget_exceeded",
+                            {"finding_id": finding.id, "daily_budget": repo.auto_pr_daily_token_budget,
+                             "pipeline": "advisory"},
+                            reopen_finding=True)
+            return
+
+        try:
+            rem.status = RemediationStatus.GENERATING.value
+            await db.commit()
+
+            # Generate AI remediation guidance (single call, Haiku model)
+            result = await ai_service.generate_advisory_guidance(
+                finding, model=settings.AUTO_PR_AUDIT_MODEL
+            )
+
+            # Atomic token deduction
+            await _deduct_tokens_and_check_budget(
+                db, repo.id, result.prompt_tokens + result.completion_tokens
+            )
+            await db.refresh(rem)
+            await db.refresh(finding)
+
+            # Build and create the GitHub Issue
+            issue_title = f"[Nyx Advisory] {finding.severity}: {finding.title[:150]}"
+            issue_body = _build_advisory_issue_body(finding, result.guidance_markdown)
+            issue_number, issue_url = await github_service.create_advisory_issue(
+                repo.github_full_name, issue_title, issue_body,
+                labels=["nyx-advisory", "security"],
+            )
+
+            # Persist results
+            rem.ai_explanation = result.guidance_markdown
+            rem.ai_fix_summary = result.summary
+            rem.ai_model = result.model
+            rem.prompt_tokens = result.prompt_tokens
+            rem.completion_tokens = result.completion_tokens
+            rem.pr_url = issue_url       # reuse pr_url as the "action URL"
+            rem.pr_number = issue_number
+            finding.advisory_issue_url = issue_url
+
+            await _finalize(db, rem, finding, RemediationStatus.ADVISORY_OPENED.value,
+                            "auto_pr.advisory_opened",
+                            {"finding_id": finding.id, "issue_number": issue_number,
+                             "issue_url": issue_url, "model": result.model,
+                             "prompt_tokens": result.prompt_tokens,
+                             "completion_tokens": result.completion_tokens})
+
+        except Exception as e:  # noqa: BLE001
+            await _finalize(db, rem, finding, RemediationStatus.FAILED.value,
+                            "auto_pr.advisory_failed",
+                            {"finding_id": finding.id if finding else None},
+                            reopen_finding=True, error=str(e))
 
 
 async def reset_auto_pr_budgets(db) -> None:

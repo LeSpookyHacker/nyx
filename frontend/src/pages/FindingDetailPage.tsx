@@ -9,7 +9,7 @@ import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow, format } from 'date-fns'
-import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw, GitBranch, ClipboardCopy, Check, X } from 'lucide-react'
+import { ArrowLeft, CheckCircle, ExternalLink, FileCode, Globe, Wand2, AlertTriangle, ShieldAlert, Ticket, RefreshCw, Unlink, UserCheck, RotateCcw, GitBranch, ClipboardCopy, Check, X, BookOpen } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import MarkdownContent from '../components/common/MarkdownContent'
@@ -502,6 +502,17 @@ export default function FindingDetailPage() {
               <a href={safeUrl(finding.fix_pr_url)} target="_blank" rel="noopener noreferrer"
                 className="text-nyx-stardust text-sm flex items-center gap-1 hover:text-nyx-amethyst">
                 View Pull Request <ExternalLink size={12} />
+              </a>
+            </div>
+          )}
+
+          {/* Advisory Issue Link */}
+          {finding.advisory_issue_url && (
+            <div className="nyx-card p-5">
+              <h3 className="text-nyx-moonbeam font-semibold mb-3">Advisory Issue</h3>
+              <a href={safeUrl(finding.advisory_issue_url)} target="_blank" rel="noopener noreferrer"
+                className="text-nyx-stardust text-sm flex items-center gap-1 hover:text-nyx-amethyst">
+                <BookOpen size={12} /> View Advisory Issue <ExternalLink size={12} />
               </a>
             </div>
           )}

@@ -70,6 +70,7 @@ class FindingResponse(BaseModel):
     last_seen_at: datetime
     resolved_at: Optional[datetime] = None
     fix_pr_url: Optional[str] = None
+    advisory_issue_url: Optional[str] = None
     notes: Optional[str] = None
     suppression_reason: Optional[str] = None
     suppressed_by: Optional[str] = None

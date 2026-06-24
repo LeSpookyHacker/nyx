@@ -133,6 +133,8 @@ async def _migrate_add_columns(conn) -> None:
         ("remediations", "audit_token_output",   "INTEGER"),
         ("remediations", "check_run_id",         "INTEGER"),
         ("remediations", "check_run_conclusion", "VARCHAR(50)"),
+        # Advisory issue tracking (findings without a file_path → GitHub Issue instead of PR)
+        ("findings", "advisory_issue_url",       "TEXT"),
     ]
     for table, column, definition in additions:
         try:

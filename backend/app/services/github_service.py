@@ -697,6 +697,36 @@ async def create_fix_pr(
         raise GitHubError(f"Failed to create fix PR for {repo_full_name}: {e}") from e
 
 
+async def create_advisory_issue(
+    repo_full_name: str,
+    title: str,
+    body: str,
+    labels: Optional[List[str]] = None,
+) -> Tuple[int, str]:
+    """
+    Create a GitHub Issue to track a security finding that cannot be auto-fixed with a code diff.
+    Returns (issue_number, issue_url).
+
+    Used by Auto PR Mode for SCA / CONTAINER / IAC findings that have no file_path.
+    The issue body contains AI-generated step-by-step remediation guidance.
+    """
+    def _sync() -> Tuple[int, str]:
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        issue_labels = labels or ["nyx-advisory", "security"]
+        issue = repo.create_issue(title=title, body=body)
+        try:
+            issue.add_to_labels(*issue_labels)
+        except GithubException:
+            pass  # Labels may not exist — non-fatal
+        return issue.number, issue.html_url
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except GithubException as e:
+        raise GitHubError(f"Failed to create advisory issue for {repo_full_name}: {e}") from e
+
+
 async def get_branch_head_sha(repo_full_name: str, branch_name: str) -> Optional[str]:
     """
     Return the HEAD commit SHA of a branch, sourced from the GitHub API.

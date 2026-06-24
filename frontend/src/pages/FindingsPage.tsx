@@ -130,7 +130,11 @@ export default function FindingsPage() {
   const autoFindingIds = useMemo(
     () => new Set(
       remediationsData
-        .filter(r => r.is_auto_triggered && (r.status === 'AUTO_TRIGGERED' || r.status === 'COMMITTED'))
+        .filter(r => r.is_auto_triggered && (
+          r.status === 'AUTO_TRIGGERED' ||
+          r.status === 'COMMITTED' ||
+          r.status === 'ADVISORY_OPENED'
+        ))
         .map(r => r.finding_id),
     ),
     [remediationsData],
