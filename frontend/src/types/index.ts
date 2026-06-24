@@ -282,3 +282,48 @@ export interface AiCostsData {
   by_model: AiCostsByModel[]
   top_remediations_by_cost: AiCostsTopRemediation[]
 }
+
+// ── Auto PR Daily Digest ──────────────────────────────────────────────────────
+
+export interface DigestSeverityBucket {
+  processed: number
+  prs: number
+  advisories: number
+  skipped: number
+  failed: number
+}
+
+export interface DigestRepoRow {
+  repo: string
+  total: number
+  prs: number
+  advisories: number
+  skipped: number
+  failed: number
+}
+
+export interface DigestItem {
+  finding_id: string
+  title: string
+  severity: Severity
+  repo: string
+  type: 'pr' | 'advisory' | 'skipped' | 'failed' | 'in_progress'
+  url: string | null
+  status: RemediationStatus
+  created_at: string
+}
+
+export interface AutoPrDigest {
+  date: string
+  totals: {
+    processed: number
+    prs_created: number
+    advisories: number
+    skipped: number
+    failed: number
+  }
+  by_severity: Partial<Record<Severity, DigestSeverityBucket>>
+  by_repo: DigestRepoRow[]
+  items: DigestItem[]
+  total_count: number
+}
