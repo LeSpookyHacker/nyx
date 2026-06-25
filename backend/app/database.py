@@ -116,6 +116,25 @@ async def _migrate_add_columns(conn) -> None:
     additions = [
         ("remediations", "confidence_flagged", "BOOLEAN NOT NULL DEFAULT 0"),
         ("remediations", "diff_warnings",      "TEXT"),
+        # Auto PR Mode — repositories config
+        ("repositories", "auto_pr_mode",                   "BOOLEAN NOT NULL DEFAULT 0"),
+        ("repositories", "auto_pr_severity_threshold",     "VARCHAR(100) NOT NULL DEFAULT 'CRITICAL,HIGH'"),
+        ("repositories", "auto_pr_daily_token_budget",     "INTEGER NOT NULL DEFAULT 50000"),
+        ("repositories", "auto_pr_tokens_used_today",      "INTEGER NOT NULL DEFAULT 0"),
+        ("repositories", "auto_pr_last_budget_reset",      "DATETIME"),
+        ("repositories", "auto_pr_skip_low_confidence",    "BOOLEAN NOT NULL DEFAULT 1"),
+        ("repositories", "auto_pr_require_passing_checks", "BOOLEAN NOT NULL DEFAULT 1"),
+        ("repositories", "auto_pr_security_audit",         "BOOLEAN NOT NULL DEFAULT 1"),
+        # Auto PR Mode — remediation audit/check tracking
+        ("remediations", "is_auto_triggered",    "BOOLEAN NOT NULL DEFAULT 0"),
+        ("remediations", "audit_result",         "TEXT"),
+        ("remediations", "audit_passed",         "BOOLEAN"),
+        ("remediations", "audit_token_input",    "INTEGER"),
+        ("remediations", "audit_token_output",   "INTEGER"),
+        ("remediations", "check_run_id",         "INTEGER"),
+        ("remediations", "check_run_conclusion", "VARCHAR(50)"),
+        # Advisory issue tracking (findings without a file_path → GitHub Issue instead of PR)
+        ("findings", "advisory_issue_url",       "TEXT"),
     ]
     for table, column, definition in additions:
         try:

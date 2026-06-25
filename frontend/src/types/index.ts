@@ -2,7 +2,13 @@ export type Severity = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' | 'INFO'
 export type FindingStatus = 'OPEN' | 'IN_REMEDIATION' | 'FIXED' | 'SUPPRESSED' | 'ACCEPTED_RISK'
 export type ScannerType = 'SEMGREP' | 'ZAP' | 'SNYK' | 'TRIVY' | 'BANDIT' | 'GRYPE' | 'CHECKOV'
 export type FindingCategory = 'SAST' | 'DAST' | 'SCA' | 'CONTAINER' | 'IAC' | 'SECRETS'
-export type RemediationStatus = 'PENDING' | 'GENERATING' | 'REVIEW' | 'PR_CREATING' | 'PR_OPEN' | 'MERGED' | 'FAILED' | 'REJECTED'
+export type RemediationStatus =
+  | 'PENDING' | 'GENERATING' | 'REVIEW' | 'REVIEW_LOW_CONFIDENCE'
+  | 'PR_CREATING' | 'PR_OPEN' | 'MERGED' | 'FAILED' | 'REJECTED'
+  // Auto PR Mode pipeline states
+  | 'AUTO_TRIGGERED' | 'AUDIT_IN_PROGRESS' | 'AUDIT_FAILED'
+  | 'TEST_IN_PROGRESS' | 'TEST_FAILED' | 'COMMITTED' | 'BUDGET_EXCEEDED'
+  | 'ADVISORY_OPENED'  // GitHub Issue opened for findings without a code fix
 
 export interface Finding {
   id: string
@@ -35,6 +41,7 @@ export interface Finding {
   last_seen_at: string
   resolved_at?: string
   fix_pr_url?: string
+  advisory_issue_url?: string
   notes?: string
   suppression_reason?: string
   assigned_to?: string
@@ -64,6 +71,14 @@ export interface Repository {
   open_low: number
   open_info: number
   last_scan_at?: string
+  // Auto PR Mode config + live budget usage
+  auto_pr_mode: boolean
+  auto_pr_severity_threshold: string  // comma-separated, e.g. "CRITICAL,HIGH" or "CRITICAL,HIGH,MEDIUM"
+  auto_pr_daily_token_budget: number
+  auto_pr_tokens_used_today: number
+  auto_pr_skip_low_confidence: boolean
+  auto_pr_require_passing_checks: boolean
+  auto_pr_security_audit: boolean
   created_at: string
   updated_at: string
 }
@@ -107,8 +122,25 @@ export interface Remediation {
   ci_failure_details?: string | null
   jira_issue_key?: string
   jira_issue_url?: string
+  // Auto PR Mode
+  is_auto_triggered?: boolean
+  audit_result?: string | null
+  audit_passed?: boolean | null
+  check_run_id?: number | null
+  check_run_conclusion?: string | null
+  // Confidence / diff-warning gating — explains REVIEW_LOW_CONFIDENCE in the UI
+  confidence_flagged?: boolean
+  diff_warnings?: string | null
   created_at: string
   updated_at: string
+}
+
+export interface AutoPrBudget {
+  daily_budget: number
+  tokens_used_today: number
+  tokens_remaining: number
+  last_reset?: string | null
+  pct_used: number
 }
 
 export interface DashboardSummary {
@@ -252,4 +284,49 @@ export interface AiCostsData {
   daily: AiCostsDailyEntry[]
   by_model: AiCostsByModel[]
   top_remediations_by_cost: AiCostsTopRemediation[]
+}
+
+// ── Auto PR Daily Digest ──────────────────────────────────────────────────────
+
+export interface DigestSeverityBucket {
+  processed: number
+  prs: number
+  advisories: number
+  skipped: number
+  failed: number
+}
+
+export interface DigestRepoRow {
+  repo: string
+  total: number
+  prs: number
+  advisories: number
+  skipped: number
+  failed: number
+}
+
+export interface DigestItem {
+  finding_id: string
+  title: string
+  severity: Severity
+  repo: string
+  type: 'pr' | 'advisory' | 'skipped' | 'failed' | 'in_progress'
+  url: string | null
+  status: RemediationStatus
+  created_at: string
+}
+
+export interface AutoPrDigest {
+  date: string
+  totals: {
+    processed: number
+    prs_created: number
+    advisories: number
+    skipped: number
+    failed: number
+  }
+  by_severity: Partial<Record<Severity, DigestSeverityBucket>>
+  by_repo: DigestRepoRow[]
+  items: DigestItem[]
+  total_count: number
 }

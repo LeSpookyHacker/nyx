@@ -83,6 +83,9 @@ Select up to 20 findings on the Findings page and click **Bulk AI Fix**. Each fi
 ### Claude Code prompt generator
 For fixes you want to hand-edit, Nyx can produce a structured, copy-ready prompt for **Claude Code** (the CLI). Select findings → **Generate Claude Code Prompt** → copy → paste into your terminal. The prompt is grouped by scanner category and includes code context, CVE data, and a completion-report template.
 
+### Auto PR Mode
+A per-repository toggle that runs the remediation pipeline autonomously. When a scan completes, Nyx triages new CRITICAL/HIGH findings, generates a fix, runs a **second-pass security audit** of the diff, and opens a **draft** pull request on `nyx/auto-fix/<id>` — never auto-merged, never ready-for-review, so a human still owns the merge. Guardrails: per-repo daily token budget, confidence and diff-warning gates, an optional GitHub Actions check-run gate, global concurrency limit, and an `auto_pr.*` audit-log trail for every action. Off by default at both the operator (`AUTO_PR_MODE_ENABLED`) and per-repository level. See [AI Remediation → Auto PR Mode](AI-Remediation.md#auto-pr-mode).
+
 ---
 
 ## 3. Workflow and integrations

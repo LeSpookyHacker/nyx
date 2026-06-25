@@ -119,6 +119,22 @@ async def _risk_history_snapshot_loop() -> None:
         await asyncio.sleep(DAILY_INTERVAL_SECONDS)
 
 
+async def _auto_pr_budget_reset_loop() -> None:
+    """Reset per-repository Auto PR Mode daily token budgets (runs daily)."""
+    import asyncio
+    from app.database import AsyncSessionLocal
+    from app.workers.auto_pr_worker import reset_auto_pr_budgets
+
+    await asyncio.sleep(STARTUP_DELAY_SECONDS)
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                await reset_auto_pr_budgets(db)
+        except Exception:
+            logger.exception("Error in auto PR budget reset loop")
+        await asyncio.sleep(DAILY_INTERVAL_SECONDS)
+
+
 async def _sla_breach_check_loop() -> None:
     """Hourly: find SLA-breached findings and escalate per policy."""
     import asyncio
@@ -445,6 +461,11 @@ async def lifespan(app: FastAPI):
 
     # Risk history snapshots — daily snapshot of per-repo risk scores
     tasks.append(asyncio.create_task(_risk_history_snapshot_loop()))
+
+    # Auto PR Mode — daily reset of per-repo token budgets (gated by master switch)
+    if settings.AUTO_PR_MODE_ENABLED:
+        tasks.append(asyncio.create_task(_auto_pr_budget_reset_loop()))
+        logger.info("Auto PR Mode enabled — budget reset loop started")
 
     # SLA breach escalation — hourly check and escalate breached findings
     if settings.SLA_CHECK_ENABLED:

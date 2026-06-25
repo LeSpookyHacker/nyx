@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,6 +116,20 @@ async def update_repository(
         repo.default_branch = body.default_branch
         changes["default_branch"] = body.default_branch
 
+    # Auto PR Mode config — validated by the schema (severity pattern, budget bounds)
+    for field in (
+        "auto_pr_mode",
+        "auto_pr_severity_threshold",
+        "auto_pr_daily_token_budget",
+        "auto_pr_skip_low_confidence",
+        "auto_pr_require_passing_checks",
+        "auto_pr_security_audit",
+    ):
+        value = getattr(body, field)
+        if value is not None:
+            setattr(repo, field, value)
+            changes[field] = value
+
     await log_event(db, actor=_key, action="repository.updated", resource_type="repository",
         resource_id=repo_id,
         metadata={"github_full_name": repo.github_full_name, "changes": changes},
@@ -122,6 +137,91 @@ async def update_repository(
     await db.commit()
     await db.refresh(repo)
     return repo
+
+
+class AutoPrToggle(BaseModel):
+    enabled: bool
+
+
+@router.patch("/{repo_id}/auto-pr-mode", response_model=RepositoryResponse)
+async def set_auto_pr_mode(
+    request: Request,
+    repo_id: str,
+    body: AutoPrToggle,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
+):
+    """Convenience toggle for Auto PR Mode. Full config is via PATCH /repositories/{id}."""
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    repo.auto_pr_mode = body.enabled
+    await log_event(db, actor=_key, action="repository.auto_pr_mode_toggled",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name, "enabled": body.enabled},
+        ip_address=get_client_ip(request))
+    await db.commit()
+    await db.refresh(repo)
+    return repo
+
+
+@router.post("/{repo_id}/run-auto-pr")
+async def run_auto_pr_now(
+    request: Request,
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
+):
+    """
+    Immediately queue all eligible OPEN findings for the Auto PR pipeline.
+
+    Called after the user enables Auto PR Mode from the UI so existing findings
+    are picked up right away rather than waiting for the next scan to complete.
+    Requires Auto PR Mode to already be enabled on the repository.
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not repo.auto_pr_mode:
+        raise HTTPException(status_code=400, detail="Auto PR Mode is not enabled for this repository")
+
+    from app.workers.auto_pr_worker import trigger_auto_pr_now
+    queued = await trigger_auto_pr_now(db, repo_id)
+
+    await log_event(
+        db, actor=_key, action="auto_pr.manual_trigger",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name, "queued": queued},
+        ip_address=get_client_ip(request),
+    )
+    await db.commit()
+    return {"queued": queued, "repository_id": repo_id}
+
+
+@router.get("/{repo_id}/auto-pr-budget")
+async def get_auto_pr_budget(
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    _key: str = Depends(require_api_key),
+):
+    """Current daily token-budget usage for Auto PR Mode."""
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+
+    budget = repo.auto_pr_daily_token_budget
+    used = repo.auto_pr_tokens_used_today
+    return {
+        "daily_budget": budget,
+        "tokens_used_today": used,
+        "tokens_remaining": max(budget - used, 0),
+        "last_reset": repo.auto_pr_last_budget_reset,
+        "pct_used": round(100.0 * used / budget, 1) if budget > 0 else 0.0,
+    }
 
 
 @router.delete("/{repo_id}", status_code=204)
@@ -204,6 +304,38 @@ async def refresh_webhook(
     await db.commit()
     await db.refresh(repo)
     return repo
+
+
+@router.get("/{repo_id}/webhook-secret")
+async def get_webhook_secret(
+    request: Request,
+    repo_id: str,
+    db: AsyncSession = Depends(get_db),
+    actor: str = Depends(require_scope(SCOPE_ADMIN)),
+):
+    """
+    Return the per-repository webhook HMAC secret for CI/CD configuration.
+
+    This secret must be set as NYX_WEBHOOK_SECRET in your GitHub Actions repository
+    secrets so the pushed nyx-scan.yml workflow can sign scan submissions.
+
+    Access is restricted to admin-scoped keys and every reveal is audit-logged.
+    The secret is never included in the standard repository response (SEC-220).
+    """
+    result = await db.execute(select(Repository).where(Repository.id == repo_id))
+    repo = result.scalar_one_or_none()
+    if not repo:
+        raise HTTPException(status_code=404, detail="Repository not found")
+    if not repo.webhook_secret:
+        raise HTTPException(status_code=404, detail="No webhook secret configured — re-register the webhook first")
+
+    await log_event(db, actor=actor, action="repository.webhook_secret_revealed",
+        resource_type="repository", resource_id=repo_id,
+        metadata={"github_full_name": repo.github_full_name},
+        ip_address=get_client_ip(request))
+    await db.commit()
+
+    return {"webhook_secret": repo.webhook_secret}
 
 
 @router.post("/{repo_id}/push-workflow")

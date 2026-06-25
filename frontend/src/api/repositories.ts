@@ -1,5 +1,16 @@
-import type { Repository, Scan } from '../types'
+import type { AutoPrBudget, Repository, Scan } from '../types'
 import client from './client'
+
+export interface RepositoryUpdatePayload {
+  enabled_scanners?: string[]
+  default_branch?: string
+  auto_pr_mode?: boolean
+  auto_pr_severity_threshold?: string  // comma-separated severity list
+  auto_pr_daily_token_budget?: number
+  auto_pr_skip_low_confidence?: boolean
+  auto_pr_require_passing_checks?: boolean
+  auto_pr_security_audit?: boolean
+}
 
 export const repositoriesApi = {
   list: async (): Promise<Repository[]> => {
@@ -20,8 +31,23 @@ export const repositoriesApi = {
     return response.data
   },
 
-  update: async (id: string, data: { enabled_scanners?: string[]; default_branch?: string }): Promise<Repository> => {
+  update: async (id: string, data: RepositoryUpdatePayload): Promise<Repository> => {
     const response = await client.patch(`/repositories/${id}`, data)
+    return response.data
+  },
+
+  setAutoPrMode: async (id: string, enabled: boolean): Promise<Repository> => {
+    const response = await client.patch(`/repositories/${id}/auto-pr-mode`, { enabled })
+    return response.data
+  },
+
+  getAutoPrBudget: async (id: string): Promise<AutoPrBudget> => {
+    const response = await client.get(`/repositories/${id}/auto-pr-budget`)
+    return response.data
+  },
+
+  runAutoPr: async (id: string): Promise<{ queued: number; repository_id: string }> => {
+    const response = await client.post(`/repositories/${id}/run-auto-pr`)
     return response.data
   },
 
@@ -31,6 +57,11 @@ export const repositoriesApi = {
 
   refreshWebhook: async (id: string): Promise<Repository> => {
     const response = await client.post(`/repositories/${id}/webhook`)
+    return response.data
+  },
+
+  revealWebhookSecret: async (id: string): Promise<{ webhook_secret: string }> => {
+    const response = await client.get(`/repositories/${id}/webhook-secret`)
     return response.data
   },
 

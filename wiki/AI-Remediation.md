@@ -174,6 +174,40 @@ Cap the per-fix output budget via `AI_MAX_OUTPUT_TOKENS` in `.env` and raise `AI
 
 ---
 
+## Auto PR Mode
+
+Auto PR Mode is a per-repository toggle that runs the remediation pipeline **autonomously**:
+when a scan completes, Nyx triages new CRITICAL/HIGH findings, generates a fix, security-audits
+it, and opens a **draft** pull request — never auto-merged and never marked ready-for-review.
+A human still owns the merge decision.
+
+**Enabling it.** Off by default at two levels: the operator master switch `AUTO_PR_MODE_ENABLED`
+(env), and a per-repository toggle in the repository's settings (Repositories → repo → *Auto PR Mode*).
+Both must be on. The repo settings also control: severity threshold (CRITICAL only, or CRITICAL+HIGH),
+a daily token budget, and three behavior flags (skip low-confidence fixes, require passing CI checks,
+run a security audit before committing).
+
+**Pipeline.** For each eligible finding (ordered by priority score):
+
+1. Budget check — pre-call token estimate; skip with `BUDGET_EXCEEDED` if it would exceed the daily cap.
+2. Generate the fix with `AUTO_PR_FIX_MODEL` (default Sonnet); deduct tokens atomically.
+3. Confidence gate — below `AI_MIN_CONFIDENCE_THRESHOLD` → `REVIEW_LOW_CONFIDENCE` (skipped if the flag is on).
+4. Diff heuristic scan — any warning routes to review rather than committing.
+5. **Security audit** — a second, independent Claude pass (`AUTO_PR_AUDIT_MODEL`, default Haiku) reviews
+   the diff for introduced vulnerabilities. A fail → `AUDIT_FAILED`, no commit, optional Slack/Teams alert.
+6. Open a **draft PR** on `nyx/auto-fix/<finding-id>` → `COMMITTED`.
+7. Optional CI gate — poll the target repo's GitHub Actions check-runs on the pushed commit; a failure → `TEST_FAILED`.
+   The draft PR is annotated with the result either way.
+
+**Budgets** reset daily (00:05 UTC). Concurrency is capped globally by `AUTO_PR_MAX_CONCURRENT`.
+Every state transition is written to the [audit log](Features.md#audit-log-with-hmac-hash-chain) as an
+`auto_pr.*` event. See [Configuration](Configuration.md) for the `AUTO_PR_*` variables.
+
+**Auto-mode statuses:** `AUTO_TRIGGERED` (queued) · `AUDIT_IN_PROGRESS` · `AUDIT_FAILED` ·
+`TEST_IN_PROGRESS` · `TEST_FAILED` · `COMMITTED` (draft PR open) · `BUDGET_EXCEEDED`.
+
+---
+
 ## Failure modes and what they mean
 
 | Status | Meaning | What to do |

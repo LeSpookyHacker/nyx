@@ -91,6 +91,15 @@ class RemediationStatus(str, enum.Enum):
     MERGED = "MERGED"
     FAILED = "FAILED"
     REJECTED = "REJECTED"
+    # ── Auto PR Mode pipeline states ──────────────────────────────────────────
+    AUTO_TRIGGERED = "AUTO_TRIGGERED"        # queued by the auto PR worker, not yet started
+    AUDIT_IN_PROGRESS = "AUDIT_IN_PROGRESS"  # security audit pass running
+    AUDIT_FAILED = "AUDIT_FAILED"            # security audit found issues; not committed
+    TEST_IN_PROGRESS = "TEST_IN_PROGRESS"    # waiting for GitHub Actions check run
+    TEST_FAILED = "TEST_FAILED"              # check run returned failure; not committed
+    COMMITTED = "COMMITTED"                  # committed to branch, draft PR open
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"      # skipped: daily token budget exhausted
+    ADVISORY_OPENED = "ADVISORY_OPENED"      # GitHub Issue opened with AI remediation guidance; no code fix
 
 
 # OWASP Top 10 2021 mapping

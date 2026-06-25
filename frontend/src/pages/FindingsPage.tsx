@@ -3,11 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { findingsApi } from '../api/findings'
 import { repositoriesApi } from '../api/repositories'
+import { remediationApi } from '../api/remediation'
 import { savedFiltersApi, type SavedFilter, type FindingFilterState } from '../api/savedFilters'
 import type { Finding, Repository } from '../types'
 import SeverityBadge from '../components/findings/SeverityBadge'
 import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
+import AutoPrBadge from '../components/findings/AutoPrBadge'
 import { formatDistanceToNow } from 'date-fns'
 import { Bookmark, CheckCircle, ChevronDown, ChevronUp, Check, ClipboardCopy, Download, Filter, RotateCcw, Save, ShieldAlert, Trash2, Wand2, X } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -119,6 +121,24 @@ export default function FindingsPage() {
     queryFn: repositoriesApi.list,
   })
   const repos = reposData as Repository[]
+
+  // Findings that Auto PR Mode has queued or committed a fix for — drives the AUTO badge.
+  const { data: remediationsData = [] } = useQuery({
+    queryKey: ['remediations'],
+    queryFn: remediationApi.list,
+  })
+  const autoFindingIds = useMemo(
+    () => new Set(
+      remediationsData
+        .filter(r => r.is_auto_triggered && (
+          r.status === 'AUTO_TRIGGERED' ||
+          r.status === 'COMMITTED' ||
+          r.status === 'ADVISORY_OPENED'
+        ))
+        .map(r => r.finding_id),
+    ),
+    [remediationsData],
+  )
 
   const { data, isLoading } = useQuery({
     queryKey: ['findings', { severity, scanner, status, search, page, sortBy, sortDesc, repositoryId, isRegressionOnly }],
@@ -479,6 +499,7 @@ export default function FindingsPage() {
                           REGRESSION
                         </span>
                       )}
+                      {autoFindingIds.has(f.id) && <AutoPrBadge />}
                     </div>
                     <p className="text-nyx-moonbeam font-medium truncate max-w-xs">{f.title}</p>
                     {f.cve_id && <p className="text-nyx-mist text-xs">{f.cve_id}</p>}

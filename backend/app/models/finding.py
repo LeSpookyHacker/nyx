@@ -70,6 +70,7 @@ class Finding(Base, TimestampMixin):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     fix_pr_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    advisory_issue_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # GitHub Issue for non-code findings
 
     # Suppression fields (denormalized for query performance)
     suppression_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

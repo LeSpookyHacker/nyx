@@ -3,20 +3,30 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { remediationApi } from '../api/remediation'
 import type { Remediation } from '../types'
 import { formatDistanceToNow } from 'date-fns'
-import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { CheckCircle, ExternalLink, RefreshCw, XCircle, GitPullRequest, Wand2, AlertCircle, Ticket, Trash2, ShieldAlert, ShieldCheck, Zap, BookOpen } from 'lucide-react'
 import { clsx } from 'clsx'
 import MarkdownContent from '../components/common/MarkdownContent'
 import { safeUrl } from '../utils/url'
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ElementType }> = {
   PENDING:     { label: 'Pending',       color: 'text-slate-400',   icon: RefreshCw },
-  GENERATING:  { label: 'Generating...',  color: 'text-purple-400',  icon: Wand2 },
+  GENERATING:  { label: 'Generating fix', color: 'text-blue-400',  icon: Wand2 },
   REVIEW:      { label: 'Ready for Review', color: 'text-yellow-400', icon: AlertCircle },
+  REVIEW_LOW_CONFIDENCE: { label: 'Low confidence', color: 'text-amber-400', icon: AlertCircle },
   PR_CREATING: { label: 'Creating PR...',  color: 'text-blue-400',   icon: GitPullRequest },
   PR_OPEN:     { label: 'PR Open',         color: 'text-indigo-400',  icon: GitPullRequest },
   MERGED:      { label: 'Merged',          color: 'text-green-400',   icon: CheckCircle },
   FAILED:      { label: 'Failed',          color: 'text-red-400',     icon: XCircle },
   REJECTED:    { label: 'Rejected',        color: 'text-slate-400',   icon: XCircle },
+  // Auto PR Mode pipeline
+  AUTO_TRIGGERED:    { label: 'Queued',          color: 'text-slate-400',  icon: RefreshCw },
+  AUDIT_IN_PROGRESS: { label: 'Security audit',  color: 'text-blue-400',   icon: ShieldAlert },
+  AUDIT_FAILED:      { label: 'Blocked by audit', color: 'text-red-400',   icon: ShieldAlert },
+  TEST_IN_PROGRESS:  { label: 'Awaiting CI',     color: 'text-amber-400',  icon: RefreshCw },
+  TEST_FAILED:       { label: 'CI failed',       color: 'text-red-400',    icon: XCircle },
+  COMMITTED:         { label: 'Draft PR open',   color: 'text-green-400',  icon: GitPullRequest },
+  BUDGET_EXCEEDED:   { label: 'Budget cap reached', color: 'text-amber-400', icon: AlertCircle },
+  ADVISORY_OPENED:   { label: 'Advisory issue open', color: 'text-blue-400',  icon: BookOpen },
 }
 
 function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: string) => void }) {
@@ -35,9 +45,16 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: s
       onClick={() => onSelect(rem.id)}
     >
       <div className="flex items-center justify-between mb-2">
-        <span className={clsx('flex items-center gap-1.5 text-xs font-medium', cfg.color)}>
-          <Icon size={12} className={rem.status === 'GENERATING' ? 'animate-spin' : ''} />
-          {cfg.label}
+        <span className="flex items-center gap-1.5">
+          <span className={clsx('flex items-center gap-1.5 text-xs font-medium', cfg.color)}>
+            <Icon size={12} className={rem.status === 'GENERATING' ? 'animate-spin' : ''} />
+            {cfg.label}
+          </span>
+          {rem.is_auto_triggered && (
+            <span className="nyx-badge bg-amber-900/30 text-amber-400 border border-amber-800/30" title="Generated automatically by Auto PR Mode">
+              <Zap size={10} /> AUTO
+            </span>
+          )}
         </span>
         <div className="flex items-center gap-1">
           <span className="text-nyx-mist text-xs">{formatDistanceToNow(new Date(rem.created_at))} ago</span>
@@ -58,11 +75,21 @@ function RemediationCard({ rem, onSelect }: { rem: Remediation; onSelect: (id: s
       {rem.ai_confidence !== undefined && rem.ai_confidence !== null && (
         <p className="text-nyx-mist text-xs">AI Confidence: {(rem.ai_confidence * 100).toFixed(0)}%</p>
       )}
+      {rem.audit_passed !== undefined && rem.audit_passed !== null && (
+        <span className={clsx('flex items-center gap-1 mt-1.5 text-xs font-medium',
+          rem.audit_passed ? 'text-green-400' : 'text-red-400')}>
+          <ShieldCheck size={11} /> Security audit {rem.audit_passed ? 'passed' : 'failed'}
+        </span>
+      )}
+      {/* SEC-332: validate pr_url scheme */}
       {rem.pr_url && (
-        <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"  {/* SEC-332 */}
+        <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"
           className="text-nyx-stardust text-xs flex items-center gap-1 mt-2 hover:text-nyx-amethyst"
           onClick={e => e.stopPropagation()}>
-          <GitPullRequest size={11} /> View PR <ExternalLink size={10} />
+          {rem.status === 'ADVISORY_OPENED'
+            ? <><BookOpen size={11} />View Advisory Issue<ExternalLink size={10} /></>
+            : <><GitPullRequest size={11} />{rem.is_auto_triggered ? 'Draft — review required' : 'View PR'}<ExternalLink size={10} /></>
+          }
         </a>
       )}
       {rem.ci_status === 'fail' && (
@@ -111,11 +138,26 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
   return (
     <div className="fixed inset-y-0 right-0 w-[600px] bg-nyx-midnight border-l border-nyx-iris/20 shadow-2xl z-50 overflow-y-auto">
       <div className="sticky top-0 bg-nyx-midnight/95 backdrop-blur border-b border-nyx-iris/10 px-5 py-4 flex items-center justify-between">
-        <h2 className="text-nyx-moonbeam font-bold">AI Fix Review</h2>
+        <h2 className="text-nyx-moonbeam font-bold">
+          {rem.status === 'ADVISORY_OPENED' ? 'Advisory Guidance' : 'AI Fix Review'}
+        </h2>
         <button onClick={onClose} className="nyx-btn-ghost p-2"><XCircle size={16} /></button>
       </div>
 
       <div className="p-5 space-y-4">
+        {/* Advisory callout */}
+        {rem.status === 'ADVISORY_OPENED' && (
+          <div className="nyx-card p-4 border border-blue-800/40">
+            <h3 className="text-blue-400 font-semibold mb-2 text-sm flex items-center gap-2">
+              <BookOpen size={14} /> Advisory Issue Created
+            </h3>
+            <p className="text-nyx-mist text-xs leading-relaxed">
+              No code fix could be generated automatically for this finding. Nyx has opened a GitHub Issue
+              with an AI-generated remediation plan. Assign it to the right team and follow the guidance below.
+            </p>
+          </div>
+        )}
+
         {/* Explanation */}
         {rem.ai_explanation && (
           <div className="nyx-card p-4">
@@ -240,7 +282,9 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
         {rem.pr_url && (
           <div className="nyx-card p-4">
             <div className="flex items-center justify-between mb-1">
-              <p className="text-nyx-mist text-sm">Pull Request</p>
+              <p className="text-nyx-mist text-sm">
+                {rem.status === 'ADVISORY_OPENED' ? 'Advisory Issue' : 'Pull Request'}
+              </p>
               {rem.ci_status === 'fail' && (
                 <span className="flex items-center gap-1 text-xs text-red-400 font-medium">
                   <ShieldAlert size={12} /> CI failed
@@ -259,7 +303,10 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
             </div>
             <a href={safeUrl(rem.pr_url)} target="_blank" rel="noopener noreferrer"
               className="text-nyx-stardust flex items-center gap-1 hover:text-nyx-amethyst text-sm">
-              <GitPullRequest size={14} /> PR #{rem.pr_number} <ExternalLink size={12} />
+              {rem.status === 'ADVISORY_OPENED'
+                ? <><BookOpen size={14} /> Issue #{rem.pr_number} <ExternalLink size={12} /></>
+                : <><GitPullRequest size={14} /> PR #{rem.pr_number} <ExternalLink size={12} /></>
+              }
             </a>
           </div>
         )}
@@ -291,11 +338,14 @@ function RemediationPanel({ rem, onClose }: { rem: Remediation; onClose: () => v
 const ACTIVE_STATUSES = ['PENDING', 'GENERATING', 'REVIEW', 'PR_CREATING', 'PR_OPEN', 'FAILED']
 const ALL_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'MERGED', 'FAILED']
 const ACTIVE_COLUMNS = ['PENDING', 'GENERATING', 'REVIEW', 'PR_OPEN', 'FAILED']
+const AUTO_COLUMNS = ['AUTO_TRIGGERED', 'GENERATING', 'ADVISORY_OPENED', 'AUDIT_IN_PROGRESS', 'TEST_IN_PROGRESS', 'COMMITTED', 'AUDIT_FAILED']
 
 /** AI-driven remediation queue showing fix requests, diffs, and approval workflow. */
 export default function RemediationPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [showAll, setShowAll] = useState(false)
+  const [view, setView] = useState<'active' | 'all' | 'auto'>(
+    () => (new URLSearchParams(window.location.search).get('filter') === 'auto' ? 'auto' : 'active')
+  )
 
   const { data: remediations = [], isLoading } = useQuery({
     queryKey: ['remediations'],
@@ -313,11 +363,12 @@ export default function RemediationPage() {
       .map(r => r.finding_id)
   )
 
-  const COLUMNS = showAll ? ALL_COLUMNS : ACTIVE_COLUMNS
+  const COLUMNS = view === 'auto' ? AUTO_COLUMNS : view === 'all' ? ALL_COLUMNS : ACTIVE_COLUMNS
 
   const visibleRemediations = remediations.filter(r => {
+    if (view === 'auto') return r.is_auto_triggered === true
     if (r.status === 'FAILED' && succeededFindingIds.has(r.finding_id)) return false
-    if (!showAll && !ACTIVE_STATUSES.includes(r.status)) return false
+    if (view === 'active' && !ACTIVE_STATUSES.includes(r.status)) return false
     return true
   })
 
@@ -336,20 +387,28 @@ export default function RemediationPage() {
         <p className="text-nyx-mist text-sm">{activeCount} active · {remediations.length} total</p>
         <div className="flex gap-1 text-sm">
           <button
-            onClick={() => setShowAll(false)}
+            onClick={() => setView('active')}
             className={clsx('px-3 py-1.5 rounded transition-colors',
-              !showAll ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium' : 'text-nyx-mist hover:text-nyx-moonbeam'
+              view === 'active' ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium' : 'text-nyx-mist hover:text-nyx-moonbeam'
             )}
           >
             Active
           </button>
           <button
-            onClick={() => setShowAll(true)}
+            onClick={() => setView('all')}
             className={clsx('px-3 py-1.5 rounded transition-colors',
-              showAll ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium' : 'text-nyx-mist hover:text-nyx-moonbeam'
+              view === 'all' ? 'text-nyx-moonbeam border-b-2 border-nyx-amethyst font-medium' : 'text-nyx-mist hover:text-nyx-moonbeam'
             )}
           >
             All
+          </button>
+          <button
+            onClick={() => setView('auto')}
+            className={clsx('px-3 py-1.5 rounded transition-colors flex items-center gap-1',
+              view === 'auto' ? 'text-amber-300 border-b-2 border-amber-400 font-medium' : 'text-nyx-mist hover:text-amber-300'
+            )}
+          >
+            <Zap size={12} /> Auto PR
           </button>
         </div>
       </div>
@@ -363,7 +422,8 @@ export default function RemediationPage() {
       )}
 
       {remediations.length > 0 && (
-        <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4"
+             style={{ gridTemplateColumns: `repeat(${COLUMNS.length}, minmax(140px, 1fr))` }}>
           {COLUMNS.map(col => {
             const cfg = STATUS_CONFIG[col]
             const Icon = cfg.icon

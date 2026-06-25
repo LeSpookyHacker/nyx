@@ -14,10 +14,11 @@ import ScannerBadge from '../components/findings/ScannerBadge'
 import StatusBadge from '../components/findings/StatusBadge'
 import { formatDistanceToNow } from 'date-fns'
 import {
-  ArrowLeft, Check, CheckCircle, ChevronDown, ChevronUp, ClipboardCopy, ExternalLink, Globe, Lock,
+  ArrowLeft, Check, CheckCircle, ChevronDown, ChevronUp, ClipboardCopy, Eye, EyeOff, ExternalLink, Globe, Lock,
   RefreshCw, ShieldAlert, Ticket, TrendingUp, Wand2, Webhook, X,
 } from 'lucide-react'
 import RepoTrends from '../components/charts/RepoTrends'
+import AutoPrModeCard from '../components/repositories/AutoPrModeCard'
 import { safeUrl } from '../utils/url'  // SEC-212
 import { clsx } from 'clsx'
 
@@ -40,34 +41,90 @@ const JIRA_STATUS_COLORS: Record<string, string> = {
 
 type Tab = 'findings' | 'scans' | 'jira' | 'trends' | 'risk'
 
-function WebhookSecretRow({ secret }: { secret: string }) {
+function WebhookSecretRow({ repoId }: { repoId: string }) {
+  const [secret, setSecret] = useState<string | null>(null)
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const reveal = async () => {
+    if (secret) {
+      setRevealed(r => !r)
+      return
+    }
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await repositoriesApi.revealWebhookSecret(repoId)
+      setSecret(data.webhook_secret)
+      setRevealed(true)
+    } catch {
+      setError('Failed to fetch secret — admin key required')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   const copy = async () => {
+    if (!secret) return
     await navigator.clipboard.writeText(secret)
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
 
   return (
-    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-nyx-iris/10">
-      <span className="text-nyx-mist/60 text-xs shrink-0">NYX_WEBHOOK_SECRET:</span>
-      <code className="text-xs font-mono text-nyx-lavender flex-1 truncate">
-        {revealed ? secret : '•'.repeat(32)}
-      </code>
-      <button
-        onClick={() => setRevealed(r => !r)}
-        className="nyx-btn-ghost text-xs py-1 px-2 shrink-0"
-      >
-        {revealed ? 'Hide' : 'Reveal'}
-      </button>
-      <button
-        onClick={copy}
-        className="nyx-btn-ghost text-xs py-1 px-2 gap-1 shrink-0"
-      >
-        {copied ? <><Check size={11} className="text-green-400" /> Copied</> : <><ClipboardCopy size={11} /> Copy</>}
-      </button>
+    <div className="mt-3 pt-3 border-t border-nyx-iris/10 space-y-2">
+      {/* Secret row */}
+      <div className="flex items-center gap-2">
+        <Webhook size={12} className="text-nyx-mist/50 shrink-0" />
+        <span className="text-nyx-mist/60 text-xs shrink-0">NYX_WEBHOOK_SECRET</span>
+        <code className="text-xs font-mono text-nyx-lavender flex-1 truncate">
+          {revealed && secret ? secret : '•'.repeat(32)}
+        </code>
+        <button
+          onClick={reveal}
+          disabled={loading}
+          className="nyx-btn-ghost text-xs py-1 px-2 gap-1 shrink-0 flex items-center"
+        >
+          {loading
+            ? <RefreshCw size={11} className="animate-spin" />
+            : revealed
+              ? <><EyeOff size={11} /> Hide</>
+              : <><Eye size={11} /> Reveal</>
+          }
+        </button>
+        {secret && (
+          <button
+            onClick={copy}
+            disabled={!revealed}
+            className="nyx-btn-ghost text-xs py-1 px-2 gap-1 shrink-0 flex items-center disabled:opacity-40"
+          >
+            {copied
+              ? <><Check size={11} className="text-green-400" /> Copied</>
+              : <><ClipboardCopy size={11} /> Copy</>
+            }
+          </button>
+        )}
+      </div>
+
+      {/* Error */}
+      {error && <p className="text-red-400 text-xs pl-1">{error}</p>}
+
+      {/* Instructions — shown once revealed */}
+      {revealed && secret && (
+        <div className="rounded-md bg-nyx-dusk/60 border border-nyx-iris/15 p-3 space-y-1.5 text-xs text-nyx-mist/80">
+          <p className="font-medium text-nyx-moonbeam">How to use this secret</p>
+          <p>Set it as a GitHub Actions secret on this repository so the pushed <code className="text-nyx-lavender">nyx-scan.yml</code> workflow can sign scan submissions:</p>
+          <ol className="list-decimal list-inside space-y-1 pl-1">
+            <li>Go to <span className="text-nyx-lavender">GitHub → this repo → Settings → Secrets and variables → Actions</span></li>
+            <li>Click <span className="text-nyx-lavender">New repository secret</span></li>
+            <li>Name: <code className="text-nyx-lavender">NYX_WEBHOOK_SECRET</code></li>
+            <li>Value: the secret shown above</li>
+          </ol>
+          <p className="text-nyx-mist/50 pt-0.5">Every reveal is recorded in the audit log. Rotate via the Refresh Webhook button if compromised.</p>
+        </div>
+      )}
     </div>
   )
 }
@@ -730,8 +787,11 @@ export default function RepositoryDetailPage() {
         </div>
 
         {/* Webhook secret */}
-        {repo.webhook_secret && <WebhookSecretRow secret={repo.webhook_secret} />}
+        {repo.webhook_active && <WebhookSecretRow repoId={repo.id} />}
       </div>
+
+      {/* Auto PR Mode */}
+      <AutoPrModeCard repo={repo} />
 
       {/* Tabs */}
       <div className="border-b border-nyx-iris/10">

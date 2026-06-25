@@ -10,6 +10,7 @@ import { AlertOctagon, Clock, Shield, TrendingUp, Flame, RotateCcw, AlertTriangl
 import { formatDistanceToNow } from 'date-fns'
 import { SEVERITY_COLORS, SCANNER_COLORS } from '../constants/theme'
 import LoadingSkeleton from '../components/ui/LoadingSkeleton'
+import AutoPrActivityCard from '../components/dashboard/AutoPrActivityCard'
 
 function KpiCard({ label, value, icon: Icon, color, onClick }: {
   label: string; value: string | number; icon: React.ElementType; color: string; onClick?: () => void
@@ -189,6 +190,9 @@ export default function DashboardPage() {
           onClick={() => navigate('/findings?is_regression=true')}
         />
       </div>
+
+      {/* Auto PR Mode activity — only renders if a repo has Auto PR Mode enabled */}
+      <AutoPrActivityCard />
 
       {/* Charts Row */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">

@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # Fixes below this threshold are placed in REVIEW_LOW_CONFIDENCE status.
     AI_MIN_CONFIDENCE_THRESHOLD: float = 0.4
 
+    # ─── Auto PR Mode ──────────────────────────────────────────────────────────
+    # Master gate: enables the auto-triage worker and the daily budget-reset loop.
+    # Per-repository opt-in is still required via repository.auto_pr_mode.
+    AUTO_PR_MODE_ENABLED: bool = False
+    AUTO_PR_MAX_CONCURRENT: int = 3        # max parallel auto PR pipelines (global semaphore)
+    AUTO_PR_CHECK_TIMEOUT: int = 600       # seconds to wait for a GitHub check run
+    AUTO_PR_BLOCK_ON_TIMEOUT: bool = False # if True, a check-run timeout blocks the commit
+    AUTO_PR_FIX_MODEL: str = "claude-sonnet-4-6"   # model for fix generation in auto mode
+    AUTO_PR_AUDIT_MODEL: str = "claude-haiku-4-5"  # cheaper model for the security audit pass
+
     # ─── Nyx API Auth ────────────────────────────────────────────────────────────
     NYX_API_KEY: str = ""
 

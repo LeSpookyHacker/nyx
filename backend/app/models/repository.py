@@ -44,6 +44,19 @@ class Repository(Base, TimestampMixin):
     open_info: Mapped[int] = mapped_column(Integer, default=0)
     last_scan_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Auto PR Mode — autonomous triage/fix/draft-PR pipeline (off by default; power feature)
+    auto_pr_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Comma-separated severity list, e.g. "CRITICAL,HIGH" or "CRITICAL,HIGH,MEDIUM,LOW,INFO"
+    auto_pr_severity_threshold: Mapped[str] = mapped_column(String(100), default="CRITICAL,HIGH", nullable=False)
+    # Daily token cap (input + output, fix + audit) across auto-triggered remediations; resets midnight UTC
+    auto_pr_daily_token_budget: Mapped[int] = mapped_column(Integer, default=50000, nullable=False)
+    auto_pr_tokens_used_today: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    auto_pr_last_budget_reset: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Behavior flags
+    auto_pr_skip_low_confidence: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    auto_pr_require_passing_checks: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    auto_pr_security_audit: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
     # Relationships
     scans: Mapped[List["Scan"]] = relationship("Scan", back_populates="repository", cascade="all, delete-orphan")
     findings: Mapped[List["Finding"]] = relationship("Finding", back_populates="repository", cascade="all, delete-orphan")
