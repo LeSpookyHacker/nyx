@@ -39,11 +39,11 @@ jobs:
           GITLEAKS_VERSION="8.21.2"
           GITLEAKS_ARCHIVE="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
           BASE_URL="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
-          curl -sSfL "${BASE_URL}/${GITLEAKS_ARCHIVE}" -o gitleaks.tar.gz
+          curl -sSfL "${BASE_URL}/${GITLEAKS_ARCHIVE}" -o "${GITLEAKS_ARCHIVE}"
           curl -sSfL "${BASE_URL}/gitleaks_${GITLEAKS_VERSION}_checksums.txt" -o gitleaks_checksums.txt
           grep "${GITLEAKS_ARCHIVE}" gitleaks_checksums.txt | sha256sum --check --status || \
             { echo "::error::Gitleaks checksum verification FAILED — aborting"; exit 1; }
-          tar -xz -f gitleaks.tar.gz gitleaks
+          tar -xz -f "${GITLEAKS_ARCHIVE}" gitleaks
           ./gitleaks detect \
             --source . \
             --report-format json \
