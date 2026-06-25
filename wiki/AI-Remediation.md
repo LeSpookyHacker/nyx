@@ -204,7 +204,25 @@ Every state transition is written to the [audit log](Features.md#audit-log-with-
 `auto_pr.*` event. See [Configuration](Configuration.md) for the `AUTO_PR_*` variables.
 
 **Auto-mode statuses:** `AUTO_TRIGGERED` (queued) · `AUDIT_IN_PROGRESS` · `AUDIT_FAILED` ·
-`TEST_IN_PROGRESS` · `TEST_FAILED` · `COMMITTED` (draft PR open) · `BUDGET_EXCEEDED`.
+`TEST_IN_PROGRESS` · `TEST_FAILED` · `COMMITTED` (draft PR open) · `BUDGET_EXCEEDED` ·
+`ADVISORY_OPENED` (GitHub Issue created — see below).
+
+### Advisory pipeline (findings without a patchable file)
+
+Findings that have no `file_path` — SCA dependency CVEs, container image vulnerabilities, IaC policy
+failures — cannot be patched in-place. Instead of being silently skipped, they are routed through the
+**advisory sub-pipeline**:
+
+1. Budget check (same daily cap as the fix pipeline).
+2. Claude Haiku (`AUTO_PR_AUDIT_MODEL`) generates structured remediation guidance: root cause, recommended
+   upgrade or mitigation steps, and references.
+3. Nyx opens a **GitHub Issue** on the target repository titled `[Nyx Advisory] <SEVERITY>: <title>`,
+   tagged with the `nyx-advisory` and `security` labels.
+4. The finding's `advisory_issue_url` field is populated with the Issue URL; the Remediation record's
+   status is set to `ADVISORY_OPENED`.
+
+Advisory findings appear in the Remediation page alongside regular fixes, with a distinct **"Advisory
+Issue"** label and a link to the GitHub Issue. They are counted separately in the Daily Digest report.
 
 ---
 

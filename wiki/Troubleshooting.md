@@ -85,6 +85,39 @@ docker compose up -d   # stops, recreates, and restarts containers with the new 
 
 ---
 
+## Auto PR Mode
+
+### Auto PR budget never resets / constant `BUDGET_EXCEEDED`
+
+**Cause:** The daily budget-reset loop (`_auto_pr_budget_reset_loop` in `main.py`) only starts when
+`AUTO_PR_MODE_ENABLED=true` in the environment. If the master switch is off, per-repo
+`auto_pr_mode=true` settings still allow the pipeline to run — but tokens accumulate and never roll
+over, causing every subsequent finding to hit `BUDGET_EXCEEDED`.
+
+**Fix:** Set `AUTO_PR_MODE_ENABLED=true` in `.env` and recreate the containers:
+```bash
+docker compose up -d
+```
+
+If the budget is already exhausted mid-day and you need an immediate reset, run directly against the database:
+```sql
+-- SQLite
+UPDATE repositories SET auto_pr_tokens_used_today = 0 WHERE auto_pr_mode = 1;
+-- PostgreSQL
+UPDATE repositories SET auto_pr_tokens_used_today = 0 WHERE auto_pr_mode = true;
+```
+
+### Auto PR pipeline triggers but no PRs are opened
+
+1. Confirm `AUTO_PR_MODE_ENABLED=true` (master switch).
+2. Confirm the per-repo toggle is on: Repositories → repo → Auto PR Mode.
+3. Confirm `GITHUB_TOKEN` has `repo` and `workflow` scopes — the PR and branch creation require both.
+4. Check the Remediation page for the finding: the status column will show which gate blocked it
+   (`AUDIT_FAILED`, `TEST_FAILED`, `REVIEW_LOW_CONFIDENCE`, `BUDGET_EXCEEDED`).
+5. Check backend logs: `docker compose logs backend | grep auto_pr` for the audit events.
+
+---
+
 ## AI remediation
 
 ### Every fix returns `REVIEW_LOW_CONFIDENCE`

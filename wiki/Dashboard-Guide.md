@@ -26,6 +26,7 @@ The landing page after login. Shows the numbers that matter at a glance:
 - **Hot repos** — top repositories by new-finding velocity this week
 - **Integration health chips** — green/red chips for each integration
 - **Daily AI cost** — today's token spend at a glance
+- **Auto PR activity card** — today's autonomous pipeline summary: PRs created, advisories opened, and any blocked findings with the gate that stopped them (audit / CI / low confidence). Only visible when `AUTO_PR_MODE_ENABLED=true` and at least one repository has the per-repo toggle on.
 
 On a brand-new install with zero repositories, the dashboard replaces the above cards with an **"Add your first repository"** onboarding card that links directly to `/repositories/new`. The top bar also has a **sun/moon** theme toggle that flips between the dark and light palettes; the choice is persisted in `localStorage` and applied synchronously on next load to avoid flashes.
 
@@ -160,6 +161,7 @@ Per-repo software bill of materials, latest vs previous, with a diff view for ad
 - **Velocity** — net-new vs fixed per day, burndown projection, MTTR breakdown
 - **AI cost** — Claude token spend, daily trend, top-10 most expensive remediations
 - **Risk over time** — per repo and org-wide
+- **Auto PR Daily Digest** — today's autonomous pipeline KPIs (processed, PRs created, advisories opened, failed, skipped), broken down by severity and repository, with an activity feed and PDF export. Auto-refreshes every 5 minutes.
 
 <!-- IMAGE: Reports page with the executive PDF preview rendered.
      File: wiki/images/reports-exec.png -->

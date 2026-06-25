@@ -35,7 +35,12 @@
 | `NYX_API_KEY` | Dashboard login | _(generated)_ | Auto-generated bootstrap key is admin-scoped. Create scanner-scoped keys for CI. |
 | `NYX_WEBHOOK_SECRET` | Global webhook pre-check | _(empty)_ | **Leave empty** in standard setups. See [`.env.example`](../.env.example) for when to set it. |
 | `DATABASE_URL` | Everything | `sqlite+aiosqlite:///./data/nyx.db` | Switch to PostgreSQL for production. |
-| `AUTO_PR_MODE_ENABLED` | Auto PR Mode | `false` | Master switch — per-repo opt-in also required via UI toggle. |
+| `AUTO_PR_MODE_ENABLED` | Auto PR Mode | `false` | Master switch — per-repo opt-in also required via UI toggle. Also gates the daily budget-reset loop; must be `true` or per-repo budgets never reset. |
+| `AUTO_PR_MAX_CONCURRENT` | Auto PR concurrency | `3` | Global semaphore: max parallel auto-PR pipelines across all repos. |
+| `AUTO_PR_CHECK_TIMEOUT` | CI check wait | `600` | Seconds to wait for a GitHub Actions check run before timing out. |
+| `AUTO_PR_BLOCK_ON_TIMEOUT` | CI timeout behavior | `false` | When `true`, a check-run timeout blocks the commit; when `false`, the PR is opened regardless. |
+| `AUTO_PR_FIX_MODEL` | Fix generation model | `claude-sonnet-4-6` | Model used by the Auto PR fix-generation pass. |
+| `AUTO_PR_AUDIT_MODEL` | Security audit model | `claude-haiku-4-5` | Cheaper model for the independent security-audit pass and advisory guidance. |
 | `ANTHROPIC_MODEL` | AI fixes, Auto PR | `claude-sonnet-4-6` | |
 | `LOG_LEVEL` | Logging | `INFO` | |
 | `ENVIRONMENT` | Security hardening | `development` | Set to `production` to disable API docs, enforce HTTPS cookies. |

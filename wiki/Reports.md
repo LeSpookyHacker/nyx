@@ -104,6 +104,41 @@ Swagger UI at `/docs` documents every endpoint with parameters and example respo
 
 ---
 
+---
+
+## Auto PR Daily Digest
+
+A per-day summary of everything the Auto PR pipeline did. Access from **Reports → Auto PR Daily Digest** or via the API.
+
+### KPI cards
+
+| Card | What it counts |
+|---|---|
+| **Processed** | Total findings the pipeline touched today |
+| **PRs Created** | Findings that reached `COMMITTED` status (draft PR opened) |
+| **Advisories** | Findings routed to the advisory sub-pipeline (`ADVISORY_OPENED`) |
+| **Failed** | Findings that hit `AUDIT_FAILED`, `TEST_FAILED`, `BUDGET_EXCEEDED`, or `FAILED` |
+| **Skipped** | Findings blocked at the confidence gate (`REVIEW_LOW_CONFIDENCE`) |
+
+### Breakdown tables
+
+- **By severity** — CRITICAL / HIGH / MEDIUM / LOW / INFO with PR, advisory, failed, and skipped counts per row.
+- **By repository** — same columns, sorted by total volume descending.
+
+### Activity feed
+
+Chronological list of every pipeline event today: finding title, severity, repository, outcome type (PR / advisory / skipped / failed), and a link to the GitHub PR or Issue when one was created. Capped at 50 entries by default (`limit` query param, max 200).
+
+The page auto-refreshes every 5 minutes while open.
+
+### PDF export
+
+`GET /api/v1/reports/auto-pr-digest/export` returns a print-ready HTML page. Open it in a browser tab and print (Cmd+P / Ctrl+P) to save as PDF.
+
+> Auto PR Daily Digest data is only meaningful when `AUTO_PR_MODE_ENABLED=true` and at least one repository has the per-repo toggle on. See [Configuration](Configuration.md) and [AI Remediation → Auto PR Mode](AI-Remediation.md#auto-pr-mode) for setup.
+
+---
+
 ## What next
 
 - **Compliance-focused reporting →** [Compliance](Compliance.md)

@@ -51,6 +51,7 @@ Check out the blogpost! [Nyx Blog Post](https://wanderersgrimoire.com/posts/nyx-
 - 🧠 **Intelligent deduplication** across overlapping tools with cross-scanner fingerprinting
 - 📊 **Priority scoring** combining CVSS, EPSS, fix age, and SLA breach factors
 - 🤖 **AI remediation** — Claude generates fix PRs with explanations, tests, and confidence gating
+- 🚀 **Autonomous fix PRs** — Auto PR Mode triages CRITICAL/HIGH findings, audits the generated diff, and opens draft PRs without manual initiation; non-patchable findings (SCA/IaC) get AI-authored GitHub Issues instead
 - ⏱️ **SLA policy engine** with per-severity, per-repo deadlines and auto-escalation
 - 🎫 **JIRA + GitHub integrations** — bidirectional ticket sync, PR merge detection, Check Runs
 - 📋 **Compliance mapping** — PCI DSS, SOC 2, NIST 800-53, CIS, OWASP Top 10 + custom frameworks
@@ -93,6 +94,8 @@ Check out the blogpost! [Nyx Blog Post](https://wanderersgrimoire.com/posts/nyx-
                    │  │  Scan Schedules (5 min)    │ │
                    │  │ Suppression Expiry(hourly) │ │
                    │  │ Key Expiry Warnings(daily) │ │
+                   │  │  Auto PR Worker (on scan)  │ │
+                   │  │  Budget Reset   (daily)    │ │
                    │  └───────────────┬────────────┘ │
                    │                  │              │
                    │  ┌───────────────▼────────────┐ │

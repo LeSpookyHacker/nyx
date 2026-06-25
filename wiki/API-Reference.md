@@ -93,6 +93,23 @@ POST   /api/v1/repositories/{id}/push-workflow
 POST   /api/v1/repositories/{id}/detect-scanners
 ```
 
+### Auto PR Mode (per-repository)
+```
+PATCH /api/v1/repositories/{id}/auto-pr-mode      convenience toggle (body: {"enabled": true/false})
+POST  /api/v1/repositories/{id}/run-auto-pr        immediately queue all eligible open findings
+GET   /api/v1/repositories/{id}/auto-pr-budget     daily token budget status
+```
+
+`run-auto-pr` requires Auto PR Mode to already be enabled on the repository; returns `{"queued": N, "repository_id": "..."}`. `auto-pr-budget` returns `daily_budget`, `tokens_used_today`, `tokens_remaining`, `pct_used`, and `last_reset`.
+
+### Auto PR Daily Digest
+```
+GET /api/v1/reports/auto-pr-digest           JSON summary (KPIs, by-severity, by-repo, feed)
+GET /api/v1/reports/auto-pr-digest/export    print-ready HTML for PDF export
+```
+
+Both accept an optional `digest_date` query param (ISO date, defaults to today UTC). The JSON endpoint also accepts `limit` (1–200, default 50) for the activity feed.
+
 ### Search findings
 ```
 GET    /api/v1/findings
