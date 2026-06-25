@@ -128,6 +128,9 @@ export interface Remediation {
   audit_passed?: boolean | null
   check_run_id?: number | null
   check_run_conclusion?: string | null
+  // Confidence / diff-warning gating — explains REVIEW_LOW_CONFIDENCE in the UI
+  confidence_flagged?: boolean
+  diff_warnings?: string | null
   created_at: string
   updated_at: string
 }

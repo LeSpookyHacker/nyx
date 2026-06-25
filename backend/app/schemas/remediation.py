@@ -77,5 +77,9 @@ class RemediationResponse(BaseModel):
     audit_passed: Optional[bool] = None
     check_run_id: Optional[int] = None
     check_run_conclusion: Optional[str] = None
+    # Confidence / diff-warning gating — exposed so the UI can explain why a fix landed in
+    # REVIEW_LOW_CONFIDENCE instead of showing a generic "blocked" label.
+    confidence_flagged: bool = False
+    diff_warnings: Optional[str] = None
     created_at: datetime
     updated_at: datetime
