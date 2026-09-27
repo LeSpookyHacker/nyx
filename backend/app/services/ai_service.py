@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -705,18 +706,43 @@ def _strip_json_markdown(text: str) -> str:
     return text
 
 
+def _parse_confidence(value) -> float:
+    """
+    Coerce a model-reported confidence into [0.0, 1.0].
+
+    Anything unusable (null, non-numeric, NaN, ±Infinity — all valid JSON to Python's
+    parser) maps to 0.0 so the fix is flagged low-confidence: NaN in particular would
+    otherwise slip past every `confidence < threshold` gate, since NaN compares False.
+    """
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        conf = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(conf):
+        return 0.0
+    return min(max(conf, 0.0), 1.0)
+
+
 def _parse_explanation(text: str) -> tuple[str, str, float]:
-    """Parse the explanation JSON response from Claude."""
+    """Parse the explanation JSON response from Claude. Never raises."""
+    fallback_summary = "fix: address security vulnerability"
     try:
         data = json.loads(_strip_json_markdown(text))
-        explanation = data.get("explanation", "")
-        fix_summary = data.get("fix_summary", "fix: address security vulnerability")
-        confidence = float(data.get("confidence", 0.7))
-        return explanation, fix_summary, confidence
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        # Fallback: return raw text as explanation — cap length (M2)
-        truncated = text[:2000] if len(text) > 2000 else text
-        return truncated, "fix: address security vulnerability", 0.5
+    except (json.JSONDecodeError, TypeError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        # Not a JSON object (unparseable, or valid JSON such as [] / "…" / 42) — return the
+        # raw text as the explanation, capped (M2), instead of crashing and discarding the fix.
+        return text[:2000], fallback_summary, 0.5
+
+    explanation = data.get("explanation", "")
+    fix_summary = data.get("fix_summary", fallback_summary)
+    explanation = explanation if isinstance(explanation, str) else json.dumps(explanation)
+    fix_summary = fix_summary if isinstance(fix_summary, str) else fallback_summary
+    confidence = _parse_confidence(data.get("confidence", 0.7))
+    return explanation, fix_summary, confidence
 
 
 def _parse_alternatives(text: str, file_path: str) -> list[AIAlternativeFix]:
