@@ -209,6 +209,8 @@ async def snyk_webhook(
             status=ScanStatus.RUNNING.value,
             git_ref=repo.default_branch,
             started_at=datetime.now(timezone.utc),
+            # verify_snyk_signature() above only skips verification when no secret is set
+            submission_verified=bool(settings.SNYK_WEBHOOK_SECRET),
         )
         db.add(scan)
         await db.flush()
@@ -267,9 +269,17 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
 
     now = datetime.now(timezone.utc)
 
-    # 1. Close remediations that tracked this PR number
+    # 1. Close remediations that tracked this PR number — in THIS repository only.
+    #    PR numbers are per-repo (NYX-2026-09-04), and advisory remediations store a GitHub
+    #    *issue* number in pr_number, so they are never closed by a PR merge.
     rem_result = await db.execute(
-        select(Remediation).where(Remediation.pr_number == pr_number)
+        select(Remediation)
+        .join(Finding, Remediation.finding_id == Finding.id)
+        .where(
+            Finding.repository_id == repo.id,
+            Remediation.pr_number == pr_number,
+            Remediation.status != RemediationStatus.ADVISORY_OPENED.value,
+        )
     )
     remediations = rem_result.scalars().all()
     fixed_finding_ids = set()
@@ -282,7 +292,10 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
     # 2. Also fix any findings directly linked via fix_pr_url (manual PRs)
     if pr_url:
         manual_result = await db.execute(
-            select(Finding).where(Finding.fix_pr_url == pr_url)
+            select(Finding).where(
+                Finding.repository_id == repo.id,
+                Finding.fix_pr_url == pr_url,
+            )
         )
         for finding in manual_result.scalars().all():
             fixed_finding_ids.add(finding.id)

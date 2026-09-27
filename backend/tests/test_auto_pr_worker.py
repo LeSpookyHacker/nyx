@@ -266,6 +266,45 @@ def test_pipeline_commits_draft_pr(monkeypatch):
     assert "auto_pr.audit_started" in actions
 
 
+def test_pipeline_audits_the_committed_change_not_the_model_diff(monkeypatch):
+    """NYX-2026-09-03: the audit must review the exact content Nyx commits."""
+    repo = run(_make_repo(auto_pr_security_audit=True, auto_pr_require_passing_checks=False))
+    f = run(_make_finding(repo.id, "CRITICAL"))
+    _patch_common(monkeypatch, fix=_fix_result(), audit_passed=True)
+
+    seen = {}
+    async def _audit(finding, original, diff, model):
+        seen["diff"] = diff
+        return {"passed": True, "risk_level": "LOW", "findings": [], "summary": "ok",
+                "token_input": 1, "token_output": 1}
+    monkeypatch.setattr(auto_pr_worker, "audit_generated_diff", _audit)
+    # The applier yields content that differs from what the model's diff text claims.
+    monkeypatch.setattr(github_service, "apply_unified_diff", lambda *_a, **_kw: "actually_committed\n")
+
+    rem_id = run(_seed_auto_remediation(f.id))
+    run(auto_pr_worker.process_auto_pr_finding(rem_id, repo.id))
+    assert "+actually_committed" in seen["diff"]
+    assert "-bad" in seen["diff"]
+    assert "+good" not in seen["diff"]
+
+
+def test_pipeline_fails_before_audit_when_diff_does_not_apply(monkeypatch):
+    repo = run(_make_repo(auto_pr_security_audit=True))
+    f = run(_make_finding(repo.id, "CRITICAL"))
+    _patch_common(monkeypatch, fix=_fix_result(), audit_passed=True)
+    audited = []
+    async def _audit(*a, **k):
+        audited.append(1)
+        return {"passed": True, "risk_level": "LOW", "findings": [], "summary": "", "token_input": 0, "token_output": 0}
+    monkeypatch.setattr(auto_pr_worker, "audit_generated_diff", _audit)
+    monkeypatch.setattr(github_service, "apply_unified_diff", lambda *_a, **_kw: None)
+
+    rem_id = run(_seed_auto_remediation(f.id))
+    run(auto_pr_worker.process_auto_pr_finding(rem_id, repo.id))
+    assert run(_get_remediation(rem_id)).status == RemediationStatus.FAILED.value
+    assert audited == []
+
+
 # ── budget tests ────────────────────────────────────────────────────────────────
 
 def test_budget_deduction_is_atomic():

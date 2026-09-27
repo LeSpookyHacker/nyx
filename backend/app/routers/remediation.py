@@ -477,11 +477,27 @@ def _validate_diff_scope(diff: str, expected_file_path: str) -> None:
     Blocks diffs that touch CI configuration, dependency files, or secrets files.
     Raises ValueError if the diff scope is outside allowed bounds.
     """
-    import re as _re
     if not diff:
         return
-    # Extract filenames from diff headers (--- a/path and +++ b/path)
-    touched = set(_re.findall(r"^(?:---|\+\+\+) [ab]/(.+)$", diff, _re.MULTILINE))
+    # Extract filenames from EVERY diff header line — with or without the a/ b/ prefix
+    # (NYX-2026-09-03: un-prefixed headers previously escaped the check entirely).
+    # A header is a "--- " line immediately followed by a "+++ " line; this keeps a removed
+    # "-- sql comment" line inside a hunk (rendered "--- ...") from being read as a header.
+    lines = diff.splitlines()
+    header_paths: list[str] = []
+    for i in range(len(lines) - 1):
+        if lines[i].startswith("--- ") and lines[i + 1].startswith("+++ "):
+            header_paths += [lines[i][4:], lines[i + 1][4:]]
+    touched: set[str] = set()
+    for raw in header_paths:
+        path = raw.split("\t", 1)[0].strip()   # drop optional "\t<timestamp>"
+        if path == "/dev/null":
+            continue
+        if path.startswith(("a/", "b/")):
+            path = path[2:]
+        touched.add(path)
+    if not touched:
+        raise ValueError("AI-generated diff has no file headers. Aborting PR creation.")
     for path in touched:
         path_lower = path.lower()
         # Block path traversal sequences (M4)

@@ -299,10 +299,18 @@ async def process_scan_results(scan_id: str, raw_data: Dict[str, Any] | List[Any
         await db.commit()
 
         # Auto PR Mode — autonomously triage CRITICAL/HIGH findings into the fix pipeline.
-        # Pure addition after the COMPLETED transition; no existing logic is changed.
+        # NYX-2026-09-01: only scans with verified provenance may drive autonomous GitHub
+        # writes — HMAC-verified CI imports / signed webhooks, or scans Nyx pulled from
+        # GitHub itself (scheduled/manual Code Scanning & Dependabot syncs).
         try:
             from app.config import get_settings as _get_settings_apr
-            if _get_settings_apr().AUTO_PR_MODE_ENABLED and repo and repo.auto_pr_mode:
+            from app.core.constants import ScanTrigger as _ScanTrigger
+            _trusted_scan = scan.submission_verified or scan.trigger in (
+                _ScanTrigger.SCHEDULED.value, _ScanTrigger.MANUAL.value,
+            )
+            if not _trusted_scan and repo and repo.auto_pr_mode:
+                logger.info("Auto PR skipped for unverified scan %s (trigger=%s)", scan.id, scan.trigger)
+            elif _get_settings_apr().AUTO_PR_MODE_ENABLED and repo and repo.auto_pr_mode:
                 from app.workers.auto_pr_worker import enqueue_auto_pr_findings
                 queued = await enqueue_auto_pr_findings(db, repo.id, scan.id)
                 if queued:

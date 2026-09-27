@@ -974,57 +974,65 @@ def _fix_hunk_headers(diff: str) -> str:
 
 def apply_unified_diff(original: str, diff: str) -> Optional[str]:
     """
-    Apply a unified diff string to original file content.
+    Apply a single-file unified diff string to original file content.
     Returns the modified content, or None if patch cannot be applied cleanly.
 
     Uses fuzzy line matching (±FUZZ lines) so minor offsets between the diff
-    and the actual file do not cause a hard failure.
+    and the actual file do not cause a hard failure — but every hunk's removed
+    and context lines must match the file exactly at the located position.
+    A hunk that cannot be located is a failure, never a blind overwrite
+    (NYX-2026-09-03): otherwise the committed change could differ from the diff
+    that was reviewed and audited.
     """
     FUZZ = 10  # lines of tolerance around the expected hunk position
 
     try:
         import unidiff
         patch = unidiff.PatchSet(_fix_hunk_headers(diff))
-        lines = original.splitlines(keepends=True)
-        result_lines = list(lines)  # safe default: empty/unparseable patch returns original
+        if len(patch) != 1:
+            # Nyx only ever commits one file; a multi-file (or empty) patch is out of scope.
+            return None
 
-        for patched_file in patch:
-            result_lines = list(lines)
-            offset = 0
-            for hunk in patched_file:
-                # Context lines at the start of the hunk used to locate position
-                context_lines = [
-                    line.value for line in hunk if line.line_type == " "
-                ]
-                source_lines = [
-                    line.value for line in hunk if line.line_type in (" ", "-")
-                ]
+        result_lines = original.splitlines(keepends=True)
+        offset = 0
+        for hunk in patch[0]:
+            source_lines = [
+                line.value for line in hunk if line.line_type in (" ", "-")
+            ]
+            new_lines = [
+                line.value for line in hunk if line.line_type in (" ", "+")
+            ]
 
-                expected_start = hunk.source_start - 1 + offset
-                actual_start = expected_start  # default: trust the diff
+            # unidiff reports source_start=0 for a pure insertion at the top of the file.
+            expected_start = max(hunk.source_start - 1, 0) + offset
+            if not source_lines and hunk.source_length == 0:
+                # Pure insertion: unified diff places it *after* line source_start.
+                expected_start = hunk.source_start + offset
 
-                # Fuzzy search: look for the source lines near the expected position
-                if context_lines:
-                    search_start = max(0, expected_start - FUZZ)
-                    search_end = min(len(result_lines), expected_start + FUZZ + len(source_lines))
-                    for candidate in range(search_start, search_end):
-                        window = [
-                            l for l in result_lines[candidate: candidate + len(source_lines)]
-                        ]
-                        if window == source_lines:
-                            actual_start = candidate
-                            break
+            if source_lines:
+                search_start = max(0, expected_start - FUZZ)
+                search_end = min(len(result_lines), expected_start + FUZZ + 1)
+                candidates = sorted(
+                    range(search_start, search_end),
+                    key=lambda c: abs(c - expected_start),  # prefer the closest match
+                )
+                # Compare content exactly, ignoring only line terminators (CRLF files,
+                # or a final line with no trailing newline).
+                wanted = [l.rstrip("\r\n") for l in source_lines]
+                actual_start = next(
+                    (c for c in candidates
+                     if [l.rstrip("\r\n") for l in result_lines[c: c + len(source_lines)]] == wanted),
+                    None,
+                )
+                if actual_start is None:
+                    return None
+            else:
+                if expected_start > len(result_lines):
+                    return None
+                actual_start = expected_start
 
-                new_lines = []
-                for line in hunk:
-                    if line.line_type == "+":
-                        new_lines.append(line.value)
-                    elif line.line_type == " ":
-                        new_lines.append(line.value)
-                    # "-" lines are dropped
-
-                result_lines[actual_start: actual_start + len(source_lines)] = new_lines
-                offset += len(new_lines) - len(source_lines)
+            result_lines[actual_start: actual_start + len(source_lines)] = new_lines
+            offset += len(new_lines) - len(source_lines)
 
         return "".join(result_lines)
     except (unidiff.errors.UnidiffParseError, IndexError, ValueError) as exc:

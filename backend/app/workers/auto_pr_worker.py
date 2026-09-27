@@ -22,6 +22,7 @@ Auto PR worker — autonomous triage → fix → audit → draft-PR pipeline.
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
@@ -360,6 +361,11 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                                 reopen_finding=True)
                 return
 
+            # 6b. Integrity + scope checks and diff application happen BEFORE the audit, so the
+            #     audit reviews the exact change that will be committed (NYX-2026-09-03).
+            fixed_content = _prepare_fixed_content(rem, finding, file_content)
+            committed_diff = _render_committed_diff(finding.file_path, file_content, fixed_content)
+
             # 7. Security audit pass (NEW)
             if repo.auto_pr_security_audit:
                 rem.status = RemediationStatus.AUDIT_IN_PROGRESS.value
@@ -367,7 +373,7 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                                 resource_type="remediation", resource_id=rem.id, metadata={})
                 await db.commit()
 
-                audit = await audit_generated_diff(finding, file_content, fix.fix_diff,
+                audit = await audit_generated_diff(finding, file_content, committed_diff,
                                                    settings.AUTO_PR_AUDIT_MODEL)
                 rem.audit_result = json.dumps(audit)
                 rem.audit_passed = audit["passed"]
@@ -389,7 +395,9 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                     return
 
             # 8. Commit to branch + open DRAFT PR
-            pr_number, pr_url, branch_name = await _create_draft_pr(db, rem, finding, repo, file_content)
+            pr_number, pr_url, branch_name = await _create_draft_pr(
+                db, rem, finding, repo, file_content, fixed_content,
+            )
             rem.pr_number = pr_number
             rem.pr_url = pr_url
             rem.pr_branch = branch_name
@@ -421,9 +429,8 @@ async def _maybe_fetch_tests(repo: Repository, finding: Finding) -> dict[str, st
         return {}
 
 
-async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Repository,
-                           file_content: str):
-    """Apply the diff and open a draft PR on nyx/auto-fix/<short-id>. Returns (number, url, branch)."""
+def _prepare_fixed_content(rem: Remediation, finding: Finding, file_content: str) -> str:
+    """Verify the stored diff (integrity + scope) and apply it. Raises ValueError on any failure."""
     from app.routers.remediation import _validate_diff_scope
 
     # Guard: auto PR needs a file path to commit the fix. Findings without one
@@ -446,7 +453,22 @@ async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Reposit
     fixed_content = github_service.apply_unified_diff(file_content, rem.ai_fix_diff)
     if fixed_content is None:
         raise ValueError("Could not apply diff cleanly — the file may have changed.")
+    return fixed_content
 
+
+def _render_committed_diff(file_path: str, original: str, fixed: str) -> str:
+    """Unified diff of the content Nyx will actually commit (not the model-authored diff text)."""
+    return "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        fixed.splitlines(keepends=True),
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+    ))
+
+
+async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Repository,
+                           file_content: str, fixed_content: str):
+    """Open a draft PR with the already-verified fixed content. Returns (number, url, branch)."""
     branch_name = f"nyx/auto-fix/{finding.id[:8]}"
     pr_title = (rem.ai_fix_summary or finding.title or f"Nyx auto-fix {rem.id[:8]}")[:120]
     pr_title = f"[Nyx Auto] {pr_title}"
