@@ -183,19 +183,26 @@ A human still owns the merge decision.
 
 **Enabling it.** Off by default at two levels: the operator master switch `AUTO_PR_MODE_ENABLED`
 (env), and a per-repository toggle in the repository's settings (Repositories → repo → *Auto PR Mode*).
-Both must be on. The repo settings also control: severity threshold (CRITICAL only, or CRITICAL+HIGH),
+Both must be on; while the master switch is off, enabling or running Auto PR returns `409`.
+Only scans with verified provenance trigger it: HMAC-signed CI imports (`import-json`), signed Snyk
+webhooks, and Code Scanning / Dependabot syncs. The repo settings also control: severity list (an
+exact set of severities, e.g. CRITICAL,HIGH),
 a daily token budget, and three behavior flags (skip low-confidence fixes, require passing CI checks,
 run a security audit before committing).
 
 **Pipeline.** For each eligible finding (ordered by priority score):
 
-1. Budget check — pre-call token estimate; skip with `BUDGET_EXCEEDED` if it would exceed the daily cap.
-2. Generate the fix with `AUTO_PR_FIX_MODEL` (default Sonnet); deduct tokens atomically.
+1. Budget check — the pre-call token estimate is reserved atomically; skip with `BUDGET_EXCEEDED` if it
+   would exceed the daily cap (the reservation is refunded if the pipeline fails before the fix returns).
+2. Generate the fix with `AUTO_PR_FIX_MODEL` (default Sonnet); true up the reservation to actual usage.
 3. Confidence gate — below `AI_MIN_CONFIDENCE_THRESHOLD` → `REVIEW_LOW_CONFIDENCE` (skipped if the flag is on).
 4. Diff heuristic scan — any warning routes to review rather than committing.
-5. **Security audit** — a second, independent Claude pass (`AUTO_PR_AUDIT_MODEL`, default Haiku) reviews
-   the diff for introduced vulnerabilities. A fail → `AUDIT_FAILED`, no commit, optional Slack/Teams alert.
-6. Open a **draft PR** on `nyx/auto-fix/<finding-id>` → `COMMITTED`.
+5. **Security audit** — the diff is applied first (hunks must match the file exactly), then a second,
+   independent Claude pass (`AUTO_PR_AUDIT_MODEL`, default Haiku) reviews the *actual* before/after change
+   for introduced vulnerabilities. Only a JSON boolean `passed: true` with LOW/MEDIUM risk passes; anything
+   else → `AUDIT_FAILED`, no commit, optional Slack/Teams alert.
+6. Open a **draft PR** on `nyx/auto-fix/<finding-id>-<remediation-id>` → `COMMITTED`. If the file changed on
+   the default branch since it was fetched, nothing is committed and the remediation fails.
 7. Optional CI gate — poll the target repo's GitHub Actions check-runs on the pushed commit; a failure → `TEST_FAILED`.
    The draft PR is annotated with the result either way.
 

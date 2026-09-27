@@ -6,37 +6,39 @@ drops: **Auto PR Mode** (`d1c63a4`, #2) and the **AI cost tracker** (`e9b30d5`).
 auth/scope matrix; executable proof-of-concept tests; `pip-audit`, `bandit -ll`, `npm audit --omit=dev`;
 existing test suite.
 
-Every finding marked **[PoC ✔]** is demonstrated by a passing test in
-[`backend/scripts/security_poc_2026_09_27.py`](backend/scripts/security_poc_2026_09_27.py)
-(each test asserts the *vulnerable* behaviour, so it will start failing once the finding is fixed):
+Every finding marked **[PoC ✔]** was demonstrated by an executable proof-of-concept that
+asserted the vulnerable behaviour. **All 18 findings have since been remediated** (see
+[Remediation status](#remediation-status)). The PoC script was retired after it was re-run
+against the fixed code, where 8 of 9 PoCs fail as intended; PoC-08 describes the documented
+semantics of an optional setting (see -08). Its cases live on, inverted, as regression tests in
+[`backend/tests/test_security_regressions.py`](backend/tests/test_security_regressions.py):
 
 ```bash
-cd backend && python -m pytest -q scripts/security_poc_2026_09_27.py -p no:cacheprovider
-# 9 passed
+cd backend && python -m pytest -q     # 110 passed
 ```
 
 ## Summary
 
-| ID | Severity | Title | Area | Status |
+| ID | Severity | Title | Area | Status (2026-09-27) |
 |----|----------|-------|------|--------|
-| NYX-2026-09-01 | **High** | Any API key (even `readonly`) can inject findings via `POST /scans/import`, skipping scope and submission HMAC, which then drives Auto PR in any repo | scans / auto-PR | PoC ✔ |
-| NYX-2026-09-02 | **High** | Security audit gate fails **open** on a non-boolean `"passed"` value | auto-PR audit | PoC ✔ |
-| NYX-2026-09-03 | **High** | Diff applier writes lines the diff never named; the code Nyx commits can differ from the diff that was audited and approved | github_service | PoC ✔ |
-| NYX-2026-09-04 | **High** | PR-merged webhook isn't scoped to its repository: merging PR #N anywhere marks every repo's remediation #N MERGED and its finding FIXED | webhooks | PoC ✔ |
-| NYX-2026-09-05 | Medium | Any API key (even `readonly`/`scanner`) can register repositories and install GitHub webhooks with Nyx's token | repositories | PoC ✔ |
-| NYX-2026-09-06 | Medium | `POST /repositories/{id}/run-auto-pr` ignores the `AUTO_PR_MODE_ENABLED` master switch | auto-PR | PoC ✔ |
-| NYX-2026-09-07 | Medium | Untrusted content can close the prompt fences in the fix and audit prompts | ai_service / audit | PoC ✔ |
-| NYX-2026-09-08 | Medium | Production mode requires `NYX_WEBHOOK_SECRET`, but setting it makes every genuine GitHub webhook fail with 403 | webhooks / config | PoC ✔ |
-| NYX-2026-09-09 | Medium | Advisory pipeline posts raw model output (and a raw title) as GitHub Issues under Nyx's identity | auto-PR advisory | PoC ✔ |
-| NYX-2026-09-10 | Medium | Weekly job auto-bumps "SHA-pinned" actions to whatever `latest` resolves to, then pushes workflows straight to every repo's default branch | supply chain | review |
-| NYX-2026-09-11 | Medium | Vulnerable frontend dependencies, including DOMPurify (the XSS sanitizer for scanner and AI HTML), axios, react-router | frontend deps | npm audit |
-| NYX-2026-09-12 | Low | Auto-PR branch name is deterministic per finding; any retry hits "branch exists" and burns tokens on every scan | auto-PR | review |
-| NYX-2026-09-13 | Low | Fix is computed on an old file snapshot but committed over the current base SHA, which can revert newer commits | github_service | review |
-| NYX-2026-09-14 | Low | Budget accounting races: concurrent pipelines, advisory ignores over-budget, untracked `create_task` handles | auto-PR | review |
-| NYX-2026-09-15 | Low | `check_run` handler ignores `nyx/auto-fix/*` branches and isn't repo-scoped | webhooks | review |
-| NYX-2026-09-16 | Low | `/auth/session` rejects any DB key with an expiry on SQLite (naive/aware datetime `TypeError`) | auth | verified |
-| NYX-2026-09-17 | Low | `rotate_secret_key()` double-encrypts through the ORM TypeDecorator (dead code today) | crypto | review |
-| NYX-2026-09-18 | Info | 4 tests in `test_auto_pr_worker.py` fail on `main`; the test suite is red | tests | verified |
+| NYX-2026-09-01 | **High** | Any API key (even `readonly`) can inject findings via `POST /scans/import`, skipping scope and submission HMAC, which then drives Auto PR in any repo | scans / auto-PR | Fixed (ef49902) |
+| NYX-2026-09-02 | **High** | Security audit gate fails **open** on a non-boolean `"passed"` value | auto-PR audit | Fixed (ef49902) |
+| NYX-2026-09-03 | **High** | Diff applier writes lines the diff never named; the code Nyx commits can differ from the diff that was audited and approved | github_service | Fixed (ef49902) |
+| NYX-2026-09-04 | **High** | PR-merged webhook isn't scoped to its repository: merging PR #N anywhere marks every repo's remediation #N MERGED and its finding FIXED | webhooks | Fixed (ef49902) |
+| NYX-2026-09-05 | Medium | Any API key (even `readonly`/`scanner`) can register repositories and install GitHub webhooks with Nyx's token | repositories | Fixed (63909a9) |
+| NYX-2026-09-06 | Medium | `POST /repositories/{id}/run-auto-pr` ignores the `AUTO_PR_MODE_ENABLED` master switch | auto-PR | Fixed (63909a9) |
+| NYX-2026-09-07 | Medium | Untrusted content can close the prompt fences in the fix and audit prompts | ai_service / audit | Fixed (63909a9) |
+| NYX-2026-09-08 | Medium | Production mode requires `NYX_WEBHOOK_SECRET`, but setting it makes every genuine GitHub webhook fail with 403 | webhooks / config | Fixed (63909a9) |
+| NYX-2026-09-09 | Medium | Advisory pipeline posts raw model output (and a raw title) as GitHub Issues under Nyx's identity | auto-PR advisory | Fixed (63909a9) |
+| NYX-2026-09-10 | Medium | Weekly job auto-bumps "SHA-pinned" actions to whatever `latest` resolves to, then pushes workflows straight to every repo's default branch | supply chain | Fixed (63909a9) |
+| NYX-2026-09-11 | Medium | Vulnerable frontend dependencies, including DOMPurify (the XSS sanitizer for scanner and AI HTML), axios, react-router | frontend deps | Fixed (81d7fd3) |
+| NYX-2026-09-12 | Low | Auto-PR branch name is deterministic per finding; any retry hits "branch exists" and burns tokens on every scan | auto-PR | Fixed (3ed5178) |
+| NYX-2026-09-13 | Low | Fix is computed on an old file snapshot but committed over the current base SHA, which can revert newer commits | github_service | Fixed (3ed5178) |
+| NYX-2026-09-14 | Low | Budget accounting races: concurrent pipelines, advisory ignores over-budget, untracked `create_task` handles | auto-PR | Fixed (3ed5178) |
+| NYX-2026-09-15 | Low | `check_run` handler ignores `nyx/auto-fix/*` branches and isn't repo-scoped | webhooks | Fixed (3ed5178) |
+| NYX-2026-09-16 | Low | `/auth/session` rejects any DB key with an expiry on SQLite (naive/aware datetime `TypeError`) | auth | Fixed (3ed5178) |
+| NYX-2026-09-17 | Low | `rotate_secret_key()` double-encrypts through the ORM TypeDecorator (dead code today) | crypto | Fixed (3ed5178) |
+| NYX-2026-09-18 | Info | 4 tests in `test_auto_pr_worker.py` fail on `main`; the test suite is red | tests | Fixed (3ed5178) |
 
 Tool results: `pip-audit` found no known vulnerable Python deps. `bandit -ll` found nothing at medium or high
 (22 low-severity items). `npm audit` found 11 issues (3 high, 8 moderate); see NYX-2026-09-11.
@@ -258,3 +260,46 @@ tracker (`e9b30d5`) is read-only aggregation, and I found no issues in it.
 2. -02 and -03 (make the Auto PR gate trustworthy), then -07 and -09.
 3. -08 (production webhooks), -10 (workflow supply chain), -11 (`npm audit fix`).
 4. The Low items, then turn the PoC file into regression tests.
+
+---
+
+## Remediation status
+
+Each finding was reproduced again before it was fixed. A regression test was written first and
+confirmed to fail on the pre-fix code, then passed after the fix. Commits on
+`claude/admiring-meitner-gb4nh3`: `ef49902` (-01…-04), `63909a9` (-05…-10), `81d7fd3` (-11),
+`3ed5178` (-12…-18), plus a follow-up wrap-up commit (budget-reservation refund on failure, docs).
+
+| ID | Fix |
+|----|-----|
+| -01 | `/scans/import` requires analyst scope. Auto PR runs only for HMAC-verified imports, signed Snyk webhooks (`submission_verified` now recorded), or scheduled/manual GitHub syncs. |
+| -02 | `passed` must be the JSON boolean `true`; HIGH/CRITICAL risk forces a fail; object-by-object JSON decoding replaces the greedy regex. |
+| -03 | Unmatched hunks and multi-file patches are rejected (matching ignores only line terminators). Every `---`/`+++` header pair is scope-checked. Auto PR applies the diff first and audits the real before/after change. |
+| -04 | The PR-merge lookup is joined to the sending repository and excludes `ADVISORY_OPENED`. |
+| -05 | `POST /repositories` and SBOM alert ack need analyst/admin; SBOM submit needs scanner/analyst. |
+| -06 | The master switch is checked in `enqueue_auto_pr_findings`/`trigger_auto_pr_now`. Enabling or running while it is off → 409, and the UI shows the server message. |
+| -07 | Per-request nonce fences in the fix, test, alternatives, stream and audit prompts. The advisory prompt keeps only `CWE-\d+` IDs. |
+| -08 | `NYX_WEBHOOK_SECRET` is no longer required in production (a warning is logged when it is *set*). Deployment/Installation/README docs aligned. When set, hooks must use that value (documented, tested). |
+| -09 | Advisory bodies: @mentions neutralised (ZWJ), raw HTML stripped, links kept only for https allowlisted hosts, and code spans left verbatim. The title goes through `_sanitize_md`, and an "AI-generated" banner is added. |
+| -10 | The weekly job is detection-only (log + `workflow.pin_update_available` audit event); pins are never mutated or pushed. `actions/checkout` is SHA-pinned (v4.2.2, verified via `git ls-remote`), with `semgrep==1.178.0` and `snyk@1.1307.4` (resolved from PyPI/npm), and the trigger branch is templated. The repo's own `nyx-scan.yml` is pinned the same way. |
+| -11 | `npm audit --omit=dev`: 11 → **0**. dompurify 3.4.16, react-syntax-highlighter 16.1.1, and **react-router-dom 7.18.4** (an additional major bump: the react-router advisories have no v6 fix). Verified with tsc + vite build and a headless-Chromium smoke test of all routes. |
+| -12 | Branch `nyx/auto-fix/<finding8>-<rem8>`. |
+| -13 | `create_fix_pr(expected_base_sha=…)` refuses (and writes nothing) if the blob changed since fetch; used by both the auto and manual flows. |
+| -14 | Atomic conditional reservation (`_reserve_budget`) → true-up → refund on failure. The advisory logs over-budget. Task handles are held in `_BACKGROUND_TASKS`. |
+| -15 | `check_run` handles `nyx/fix/` and `nyx/auto-fix/`, scoped to the sending repository. |
+| -16 | Naive `expires_at` is normalised to UTC in `/auth/session`. |
+| -17 | Rotation writes through textual SQL (single encryption; verified by decrypting with the new key). |
+| -18 | Tests updated to the exact-list threshold semantics used by the UI. |
+
+**Residual notes**
+- The advisory link allowlist includes `github.com` as a whole, so links to arbitrary GitHub repos
+  remain possible. Narrow it to `/advisories/` and commit URLs if that is too broad for your threat model.
+- Semgrep could not be run (its registry is blocked by the audit environment's network policy).
+  bandit, pip-audit and npm audit were re-run and are clean.
+
+**Pre-existing issues observed during verification (not part of the 18 findings, not changed)**
+- `GET /dashboard/hot-repos` and `/dashboard/org-risk-history` return 500
+  (`TypeError: Function.__init__() got an unexpected keyword argument 'else_'`, `dashboard.py:223,354`).
+- `npm run lint` fails: the repo has no ESLint configuration.
+- `ai_service._parse_explanation` raises `AttributeError` if the model returns valid JSON that is
+  not an object (for example `[]`).

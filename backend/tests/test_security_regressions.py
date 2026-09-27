@@ -756,6 +756,34 @@ def test_14_concurrent_reservations_cannot_overspend():
     assert run(_get(Repository, repo.id)).auto_pr_tokens_used_today == 800
 
 
+def test_14_reservation_is_refunded_when_fix_generation_fails(monkeypatch, auto_pr_enabled):
+    from app.services import ai_service, github_service
+    from app.workers import auto_pr_worker
+    repo = run(_mk_repo("victim/refund", auto_pr_mode=True, auto_pr_daily_token_budget=10000))
+    finding = run(_mk_finding(repo.id))
+    rem = run(_mk_remediation(finding.id, status=RemediationStatus.AUTO_TRIGGERED.value, is_auto_triggered=True))
+
+    async def _fetch(*a, **k):
+        return "bad\n", "sha"
+
+    async def _est(*a, **k):
+        return 700
+
+    async def _boom(*a, **k):
+        raise RuntimeError("model unavailable")
+
+    async def _no_tests(*a, **k):
+        return {}
+    monkeypatch.setattr(github_service, "get_file_content_with_sha", _fetch)
+    monkeypatch.setattr(auto_pr_worker, "_estimate_input_tokens", _est)
+    monkeypatch.setattr(auto_pr_worker, "_maybe_fetch_tests", _no_tests)
+    monkeypatch.setattr(ai_service, "generate_fix", _boom)
+    run(auto_pr_worker.process_auto_pr_finding(rem.id, repo.id))
+    assert run(_get(Remediation, rem.id)).status == RemediationStatus.FAILED.value
+    assert run(_get(Finding, finding.id)).status == FindingStatus.OPEN.value
+    assert run(_get(Repository, repo.id)).auto_pr_tokens_used_today == 0
+
+
 def test_14_background_tasks_are_retained_until_done(monkeypatch, auto_pr_enabled):
     from app.workers import auto_pr_worker
     repo = run(_mk_repo("victim/tasks", auto_pr_mode=True))

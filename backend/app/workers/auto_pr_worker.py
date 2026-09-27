@@ -2,22 +2,27 @@
 Auto PR worker — autonomous triage → fix → audit → draft-PR pipeline.
 
 # SECURITY REVIEW — Auto PR Worker
-# Reviewed: 2026-06-17
-# Semgrep: not run in this dev environment (semgrep unavailable) — run `semgrep --config=auto`
-#          over this file + auto_pr_audit_service.py in CI/Docker before merge.
-# Manual checks (PASS by construction — verified by review):
-#  1. Audit prompt is not injectable — every finding field interpolated into the audit
-#     prompt goes through ai_service._safe() (see auto_pr_audit_service); PR-body fields
-#     go through remediation._sanitize_md().
-#  2. Branch names cannot be path-traversed — nyx/auto-fix/{finding.id[:8]} uses a
-#     server-generated String(36) UUID, never user-supplied input.
+# Reviewed: 2026-06-17; re-audited 2026-09-27 (SECURITY-AUDIT-2026-09-27.md, NYX-2026-09-*).
+# Tooling (2026-09-27): bandit -ll clean; regression tests in tests/test_security_regressions.py.
+#   Semgrep registry rules could not be fetched from the audit environment (semgrep.dev blocked
+#   by network policy) — run `semgrep --config=auto` over this module in CI.
+# Manual checks (verified by review + tests):
+#  1. Prompts are fenced with per-request nonce markers (ai_service._Fences, audit prompt), and
+#     finding fields pass through ai_service._safe(); PR/issue bodies go through _sanitize_md()
+#     and _sanitize_advisory_markdown().
+#  2. Branch names cannot be path-traversed — nyx/auto-fix/{finding.id[:8]}-{rem.id[:8]} uses
+#     server-generated UUIDs, never user-supplied input, and is unique per remediation.
 #  3. The check-run SHA is sourced from github_service.get_branch_head_sha() (the GitHub
 #     API response for the branch Nyx created), never from the finding record.
-#  4. Token budget is enforced before the Claude call (pre-call count_tokens estimate +
-#     hard used>=budget gate) AND atomically deducted after, in every code path.
+#  4. Token budget: hard used>=budget gate, then an atomic conditional reservation of the
+#     pre-call estimate (_reserve_budget), trued up after the call and refunded on failure.
 #  5. Draft PRs only — create_fix_pr(draft=True). No path here marks a draft ready-for-review
 #     or merges it (merge_pr is never called from this module).
-#  6. Every early return / terminal state is preceded by a log_event() audit write.
+#  6. The audit reviews the change actually committed (diff applied first; unmatched hunks
+#     fail); the commit is refused if the file changed since it was fetched.
+#  7. Only runs when AUTO_PR_MODE_ENABLED is on, and (via scan_worker) only for scans with
+#     verified provenance.
+#  8. Every early return / terminal state is preceded by a log_event() audit write.
 """
 from __future__ import annotations
 
@@ -329,6 +334,7 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                             reopen_finding=True)
             return
 
+        reserved_tokens = 0  # outstanding reservation, refunded if the pipeline fails before true-up
         try:
             # 2. Gather context (mirrors remediation._run_ai_fix)
             file_content = ""
@@ -353,6 +359,7 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                                  "daily_budget": repo.auto_pr_daily_token_budget},
                                 reopen_finding=True)
                 return
+            reserved_tokens = estimate
             await db.refresh(rem)
             await db.refresh(finding)
 
@@ -383,8 +390,9 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
             # 4. Deduct fix tokens (minus the reservation already taken); stop the queue if
             #    this pushed the repo over budget
             within_budget = await _deduct_tokens_and_check_budget(
-                db, repo.id, fix.prompt_tokens + fix.completion_tokens - estimate
+                db, repo.id, fix.prompt_tokens + fix.completion_tokens - reserved_tokens
             )
+            reserved_tokens = 0
             await db.refresh(rem)
             await db.refresh(finding)
 
@@ -458,6 +466,17 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                 logger.info("Repo %s exceeded auto-PR token budget after this fix", repo.id)
 
         except Exception as e:  # noqa: BLE001
+            try:
+                await db.rollback()
+                if reserved_tokens:
+                    # Failure before the true-up: release the reservation (failures were never
+                    # charged before the reservation scheme was introduced).
+                    await _deduct_tokens_and_check_budget(db, repo.id, -reserved_tokens)
+                await db.refresh(rem)
+                if finding is not None:
+                    await db.refresh(finding)
+            except Exception:  # noqa: BLE001 — refund is best-effort
+                logger.exception("Budget refund failed for remediation %s", rem.id)
             await _finalize(db, rem, finding, RemediationStatus.FAILED.value,
                             "auto_pr.failed", {"finding_id": finding.id if finding else None},
                             reopen_finding=True, error=str(e))
