@@ -224,7 +224,12 @@ export default function FindingDetailPage() {
   if (!finding) return <div className="text-nyx-mist p-8">Finding not found.</div>
 
   let cweList: string[] = []
-  try { cweList = JSON.parse(finding.cwe_ids || '[]') } catch {}
+  try {
+    const parsed: unknown = JSON.parse(finding.cwe_ids || '[]')
+    if (Array.isArray(parsed)) cweList = parsed.filter((c): c is string => typeof c === 'string')
+  } catch {
+    // Malformed cwe_ids — render the finding without CWE links
+  }
 
   const lang = finding.file_path?.split('.').pop() || 'text'
   const langMap: Record<string, string> = { py: 'python', js: 'javascript', ts: 'typescript', go: 'go', java: 'java', rb: 'ruby', rs: 'rust', php: 'php' }

@@ -295,11 +295,17 @@ confirmed to fail on the pre-fix code, then passed after the fix. Commits on
 - The advisory link allowlist includes `github.com` as a whole, so links to arbitrary GitHub repos
   remain possible. Narrow it to `/advisories/` and commit URLs if that is too broad for your threat model.
 - Semgrep could not be run (its registry is blocked by the audit environment's network policy).
-  bandit, pip-audit and npm audit were re-run and are clean.
+  bandit, pip-audit and `npm audit --omit=dev` were re-run and are clean (see the dev-only note below).
 
-**Pre-existing issues observed during verification (not part of the 18 findings, not changed)**
-- `GET /dashboard/hot-repos` and `/dashboard/org-risk-history` return 500
-  (`TypeError: Function.__init__() got an unexpected keyword argument 'else_'`, `dashboard.py:223,354`).
-- `npm run lint` fails: the repo has no ESLint configuration.
-- `ai_service._parse_explanation` raises `AttributeError` if the model returns valid JSON that is
-  not an object (for example `[]`).
+**Pre-existing issues observed during verification (outside the 18 findings) — fixed in `2d51c94` and the follow-up frontend commit**
+
+| Issue | Root cause | Fix | Proof |
+|-------|-----------|-----|-------|
+| `GET /dashboard/hot-repos` and `/dashboard/org-risk-history` returned 500 | `func.case(..., else_=0)` renders a generic SQL function named `case` and rejects `else_` (`dashboard.py:223,224,354`) | `sqlalchemy.case()` | `tests/test_api/test_dashboard.py` (counts asserted); the browser dashboard's own calls now return 200 |
+| `ai_service._parse_explanation` raised `AttributeError` on valid non-object JSON (`[]`, a string), discarding a valid fix | `.get()` called on a non-dict | Fall back to raw text; coerce text fields to `str` | `tests/test_ai_explanation_parsing.py`, including an end-to-end `generate_fix` case |
+| *(found while fixing the above)* `"confidence": NaN` bypassed the low-confidence gate | Python's JSON parser accepts NaN/Infinity, and `NaN < threshold` is `False` | Non-finite or non-numeric → 0.0 (flagged); clamp to [0,1] | same test file |
+| `npm run lint` never worked | No ESLint config existed, yet the code referenced `react/*` and `react-hooks/*` rules whose plugins weren't installed | `.eslintrc.cjs` (ESLint 8 + @typescript-eslint + eslint-plugin-react-hooks@5 + eslint-plugin-react); `react/no-danger` is a warning, so any new `dangerouslySetInnerHTML` needs a reviewed disable under `--max-warnings 0` | `npm run lint` exits 0. A probe file confirmed hooks and no-danger violations are reported. The one real error (an empty `catch` in `FindingDetailPage`) was fixed, with a guard against non-array `cwe_ids`. |
+
+**Remaining (dev-only, not changed):** `npm audit` including dev dependencies reports vite (high) and
+esbuild (moderate). Both affect only the local dev server, and the fix is a Vite 5 → 8 major bump.
+Production dependencies: 0 vulnerabilities.
