@@ -2,30 +2,38 @@
 Auto PR worker — autonomous triage → fix → audit → draft-PR pipeline.
 
 # SECURITY REVIEW — Auto PR Worker
-# Reviewed: 2026-06-17
-# Semgrep: not run in this dev environment (semgrep unavailable) — run `semgrep --config=auto`
-#          over this file + auto_pr_audit_service.py in CI/Docker before merge.
-# Manual checks (PASS by construction — verified by review):
-#  1. Audit prompt is not injectable — every finding field interpolated into the audit
-#     prompt goes through ai_service._safe() (see auto_pr_audit_service); PR-body fields
-#     go through remediation._sanitize_md().
-#  2. Branch names cannot be path-traversed — nyx/auto-fix/{finding.id[:8]} uses a
-#     server-generated String(36) UUID, never user-supplied input.
+# Reviewed: 2026-06-17; re-audited 2026-09-27 (SECURITY-AUDIT-2026-09-27.md, NYX-2026-09-*).
+# Tooling (2026-09-27): bandit -ll clean; regression tests in tests/test_security_regressions.py.
+#   Semgrep registry rules could not be fetched from the audit environment (semgrep.dev blocked
+#   by network policy) — run `semgrep --config=auto` over this module in CI.
+# Manual checks (verified by review + tests):
+#  1. Prompts are fenced with per-request nonce markers (ai_service._Fences, audit prompt), and
+#     finding fields pass through ai_service._safe(); PR/issue bodies go through _sanitize_md()
+#     and _sanitize_advisory_markdown().
+#  2. Branch names cannot be path-traversed — nyx/auto-fix/{finding.id[:8]}-{rem.id[:8]} uses
+#     server-generated UUIDs, never user-supplied input, and is unique per remediation.
 #  3. The check-run SHA is sourced from github_service.get_branch_head_sha() (the GitHub
 #     API response for the branch Nyx created), never from the finding record.
-#  4. Token budget is enforced before the Claude call (pre-call count_tokens estimate +
-#     hard used>=budget gate) AND atomically deducted after, in every code path.
+#  4. Token budget: hard used>=budget gate, then an atomic conditional reservation of the
+#     pre-call estimate (_reserve_budget), trued up after the call and refunded on failure.
 #  5. Draft PRs only — create_fix_pr(draft=True). No path here marks a draft ready-for-review
 #     or merges it (merge_pr is never called from this module).
-#  6. Every early return / terminal state is preceded by a log_event() audit write.
+#  6. The audit reviews the change actually committed (diff applied first; unmatched hunks
+#     fail); the commit is refused if the file changed since it was fetched.
+#  7. Only runs when AUTO_PR_MODE_ENABLED is on, and (via scan_worker) only for scans with
+#     verified provenance.
+#  8. Every early return / terminal state is preceded by a log_event() audit write.
 """
 from __future__ import annotations
 
 import asyncio
+import difflib
 import hashlib
 import json
 import logging
+import re
 from typing import Optional
+from urllib.parse import urlparse
 
 from sqlalchemy import select, update
 
@@ -57,6 +65,16 @@ _TERMINAL_FAILURE_STATES = {
 
 # Global concurrency limiter (lazily created so a settings reload is respected in tests).
 _semaphore: Optional[asyncio.Semaphore] = None
+
+# Strong references to in-flight pipeline tasks. The event loop only keeps weak references,
+# so an unreferenced create_task() can be garbage-collected mid-run (NYX-2026-09-14).
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -96,6 +114,28 @@ async def _deduct_tokens_and_check_budget(db, repository_id: str, tokens: int) -
     return row[0] <= row[1]
 
 
+async def _reserve_budget(db, repository_id: str, tokens: int) -> bool:
+    """
+    Atomically reserve `tokens` of today's budget (NYX-2026-09-14).
+
+    A single conditional UPDATE — `used + tokens <= budget` — so concurrent pipelines
+    cannot all pass a read-then-check and overspend together. Returns False (and
+    reserves nothing) when the reservation does not fit.
+    """
+    result = await db.execute(
+        update(Repository)
+        .where(
+            Repository.id == repository_id,
+            Repository.auto_pr_tokens_used_today + tokens <= Repository.auto_pr_daily_token_budget,
+        )
+        .values(auto_pr_tokens_used_today=Repository.auto_pr_tokens_used_today + tokens)
+        .returning(Repository.auto_pr_tokens_used_today)
+    )
+    row = result.fetchone()
+    await db.commit()
+    return row is not None
+
+
 async def _estimate_input_tokens(finding: Finding, file_content: str, model: str) -> int:
     """Best-effort pre-call input-token estimate so we don't start a call that can't fit the budget."""
     try:
@@ -117,6 +157,8 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
     Called by scan_worker after a scan completes. Queues eligible CRITICAL/HIGH findings
     for autonomous remediation and schedules the per-finding pipeline. Returns count queued.
     """
+    if not settings.AUTO_PR_MODE_ENABLED:  # master switch (NYX-2026-09-06)
+        return 0
     repo_result = await db.execute(select(Repository).where(Repository.id == repository_id))
     repo = repo_result.scalar_one_or_none()
     if not repo or not repo.auto_pr_mode:
@@ -210,9 +252,9 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
     await db.commit()
 
     for rem_id in queued_ids:
-        asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+        _spawn(_run_with_semaphore(rem_id, repository_id))
     for rem_id in advisory_queued_ids:
-        asyncio.create_task(_run_advisory_with_semaphore(rem_id, repository_id))
+        _spawn(_run_advisory_with_semaphore(rem_id, repository_id))
 
     return len(queued_ids) + len(advisory_queued_ids)
 
@@ -292,26 +334,34 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                             reopen_finding=True)
             return
 
+        reserved_tokens = 0  # outstanding reservation, refunded if the pipeline fails before true-up
         try:
             # 2. Gather context (mirrors remediation._run_ai_fix)
             file_content = ""
+            file_blob_sha: Optional[str] = None
             if finding.file_path:
                 try:
-                    file_content = await github_service.get_file_content(
+                    file_content, file_blob_sha = await github_service.get_file_content_with_sha(
                         repo.github_full_name, finding.file_path, repo.default_branch
                     )
                 except Exception:
                     file_content = finding.code_snippet or "# File content unavailable"
 
-            # 2b. Pre-call budget estimate
+            # 2b. Atomically reserve the pre-call estimate (NYX-2026-09-14); the reservation is
+            #     trued up to the real usage once the call returns.
             estimate = await _estimate_input_tokens(finding, file_content, settings.AUTO_PR_FIX_MODEL)
-            if repo.auto_pr_tokens_used_today + estimate > repo.auto_pr_daily_token_budget:
+            if not await _reserve_budget(db, repo.id, estimate):
+                await db.refresh(rem)
+                await db.refresh(finding)
                 await _finalize(db, rem, finding, RemediationStatus.BUDGET_EXCEEDED.value,
                                 "auto_pr.budget_exceeded",
                                 {"finding_id": finding.id, "estimated_input_tokens": estimate,
                                  "daily_budget": repo.auto_pr_daily_token_budget},
                                 reopen_finding=True)
                 return
+            reserved_tokens = estimate
+            await db.refresh(rem)
+            await db.refresh(finding)
 
             # 3. Generate the fix (uses the configured auto-mode model)
             rem.status = RemediationStatus.GENERATING.value
@@ -337,10 +387,12 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
             rem.diff_warnings = json.dumps(fix.diff_warnings) if fix.diff_warnings else None
             await db.commit()
 
-            # 4. Deduct fix tokens; stop the queue if this pushed the repo over budget
+            # 4. Deduct fix tokens (minus the reservation already taken); stop the queue if
+            #    this pushed the repo over budget
             within_budget = await _deduct_tokens_and_check_budget(
-                db, repo.id, fix.prompt_tokens + fix.completion_tokens
+                db, repo.id, fix.prompt_tokens + fix.completion_tokens - reserved_tokens
             )
+            reserved_tokens = 0
             await db.refresh(rem)
             await db.refresh(finding)
 
@@ -360,6 +412,11 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                                 reopen_finding=True)
                 return
 
+            # 6b. Integrity + scope checks and diff application happen BEFORE the audit, so the
+            #     audit reviews the exact change that will be committed (NYX-2026-09-03).
+            fixed_content = _prepare_fixed_content(rem, finding, file_content)
+            committed_diff = _render_committed_diff(finding.file_path, file_content, fixed_content)
+
             # 7. Security audit pass (NEW)
             if repo.auto_pr_security_audit:
                 rem.status = RemediationStatus.AUDIT_IN_PROGRESS.value
@@ -367,7 +424,7 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                                 resource_type="remediation", resource_id=rem.id, metadata={})
                 await db.commit()
 
-                audit = await audit_generated_diff(finding, file_content, fix.fix_diff,
+                audit = await audit_generated_diff(finding, file_content, committed_diff,
                                                    settings.AUTO_PR_AUDIT_MODEL)
                 rem.audit_result = json.dumps(audit)
                 rem.audit_passed = audit["passed"]
@@ -389,7 +446,10 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                     return
 
             # 8. Commit to branch + open DRAFT PR
-            pr_number, pr_url, branch_name = await _create_draft_pr(db, rem, finding, repo, file_content)
+            pr_number, pr_url, branch_name = await _create_draft_pr(
+                db, rem, finding, repo, file_content, fixed_content,
+                expected_base_sha=file_blob_sha,
+            )
             rem.pr_number = pr_number
             rem.pr_url = pr_url
             rem.pr_branch = branch_name
@@ -406,6 +466,17 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
                 logger.info("Repo %s exceeded auto-PR token budget after this fix", repo.id)
 
         except Exception as e:  # noqa: BLE001
+            try:
+                await db.rollback()
+                if reserved_tokens:
+                    # Failure before the true-up: release the reservation (failures were never
+                    # charged before the reservation scheme was introduced).
+                    await _deduct_tokens_and_check_budget(db, repo.id, -reserved_tokens)
+                await db.refresh(rem)
+                if finding is not None:
+                    await db.refresh(finding)
+            except Exception:  # noqa: BLE001 — refund is best-effort
+                logger.exception("Budget refund failed for remediation %s", rem.id)
             await _finalize(db, rem, finding, RemediationStatus.FAILED.value,
                             "auto_pr.failed", {"finding_id": finding.id if finding else None},
                             reopen_finding=True, error=str(e))
@@ -421,9 +492,8 @@ async def _maybe_fetch_tests(repo: Repository, finding: Finding) -> dict[str, st
         return {}
 
 
-async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Repository,
-                           file_content: str):
-    """Apply the diff and open a draft PR on nyx/auto-fix/<short-id>. Returns (number, url, branch)."""
+def _prepare_fixed_content(rem: Remediation, finding: Finding, file_content: str) -> str:
+    """Verify the stored diff (integrity + scope) and apply it. Raises ValueError on any failure."""
     from app.routers.remediation import _validate_diff_scope
 
     # Guard: auto PR needs a file path to commit the fix. Findings without one
@@ -446,8 +516,26 @@ async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Reposit
     fixed_content = github_service.apply_unified_diff(file_content, rem.ai_fix_diff)
     if fixed_content is None:
         raise ValueError("Could not apply diff cleanly — the file may have changed.")
+    return fixed_content
 
-    branch_name = f"nyx/auto-fix/{finding.id[:8]}"
+
+def _render_committed_diff(file_path: str, original: str, fixed: str) -> str:
+    """Unified diff of the content Nyx will actually commit (not the model-authored diff text)."""
+    return "".join(difflib.unified_diff(
+        original.splitlines(keepends=True),
+        fixed.splitlines(keepends=True),
+        fromfile=f"a/{file_path}",
+        tofile=f"b/{file_path}",
+    ))
+
+
+async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Repository,
+                           file_content: str, fixed_content: str,
+                           expected_base_sha: Optional[str] = None):
+    """Open a draft PR with the already-verified fixed content. Returns (number, url, branch)."""
+    # Unique per remediation (NYX-2026-09-12): a retry for the same finding must not collide
+    # with a branch left behind by an earlier attempt.
+    branch_name = f"nyx/auto-fix/{finding.id[:8]}-{rem.id[:8]}"
     pr_title = (rem.ai_fix_summary or finding.title or f"Nyx auto-fix {rem.id[:8]}")[:120]
     pr_title = f"[Nyx Auto] {pr_title}"
     pr_body = _build_auto_pr_body(finding, rem)
@@ -462,6 +550,7 @@ async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Reposit
         pr_body=pr_body,
         base_branch=repo.default_branch,
         draft=True,
+        expected_base_sha=expected_base_sha,
     )
     return pr_number, pr_url, branch_name
 
@@ -649,6 +738,8 @@ async def trigger_auto_pr_now(db, repository_id: str) -> int:
     Also auto-heals findings stuck in IN_REMEDIATION whose auto-remediations all failed,
     so a previous crash never permanently blocks a finding from being retried.
     """
+    if not settings.AUTO_PR_MODE_ENABLED:  # master switch (NYX-2026-09-06)
+        return 0
     repo_result = await db.execute(select(Repository).where(Repository.id == repository_id))
     repo = repo_result.scalar_one_or_none()
     if not repo or not repo.auto_pr_mode:
@@ -740,11 +831,75 @@ async def trigger_auto_pr_now(db, repository_id: str) -> int:
     await db.commit()
 
     for rem_id in queued_ids:
-        asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+        _spawn(_run_with_semaphore(rem_id, repository_id))
     for rem_id in advisory_queued_ids:
-        asyncio.create_task(_run_advisory_with_semaphore(rem_id, repository_id))
+        _spawn(_run_advisory_with_semaphore(rem_id, repository_id))
 
     return len(queued_ids) + len(advisory_queued_ids)
+
+
+# ── Advisory issue sanitisation (NYX-2026-09-09) ──────────────────────────────
+# Model output is posted to GitHub under Nyx's identity, so it is treated as untrusted:
+# no @mentions (notification spam / social engineering), no raw HTML, and links only to
+# well-known vulnerability-reference hosts.
+_ADVISORY_LINK_HOSTS = frozenset({
+    "nvd.nist.gov", "cve.org", "www.cve.org", "cve.mitre.org", "cwe.mitre.org",
+    "github.com", "osv.dev", "owasp.org", "cheatsheetseries.owasp.org",
+})
+_MD_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\(\s*<?([^)\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+_AUTOLINK_RE = re.compile(r"<(https?://[^>\s]+)>")
+_BARE_URL_RE = re.compile(r"(?<![\w(<\[])https?://[^\s)<>\]]+")
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?/?>")  # not <https://…> autolinks
+_MENTION_RE = re.compile(r"(?<![\w.])@(?=[A-Za-z0-9])")  # @user / @org/team, not emails
+_ZWJ = "\u200d"
+
+
+def _allowed_link(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    host = (parsed.hostname or "").lower()
+    return parsed.scheme == "https" and (
+        host in _ADVISORY_LINK_HOSTS or any(host.endswith("." + h) for h in ("owasp.org",))
+    )
+
+
+_CODE_SPAN_RE = re.compile(r"(```.*?```|`[^`\n]*`)", re.DOTALL)
+
+
+def _sanitize_advisory_markdown(text: str) -> str:
+    """Neutralise mentions, raw HTML and non-allowlisted links in model-written Markdown.
+
+    Code spans/blocks are left verbatim: GitHub renders them literally (no links, mentions
+    or HTML), and rewriting them would corrupt commands like `Vec<String>`.
+    """
+    if not text:
+        return ""
+    parts = _CODE_SPAN_RE.split(text)
+    # re.split with one capture group alternates prose (even idx) and code (odd idx).
+    return "".join(p if i % 2 else _sanitize_prose(p) for i, p in enumerate(parts))
+
+
+def _sanitize_prose(text: str) -> str:
+    out = _HTML_TAG_RE.sub("", text)
+
+    def _md_link(m: re.Match) -> str:
+        bang, label, url = m.group(1), m.group(2), m.group(3)
+        if not bang and _allowed_link(url):
+            return f"[{label}]({url})"
+        return label  # drop images and off-allowlist targets, keep the visible text
+
+    out = _MD_LINK_RE.sub(_md_link, out)
+    out = _AUTOLINK_RE.sub(lambda m: m.group(1) if _allowed_link(m.group(1)) else "[link removed]", out)
+    out = _BARE_URL_RE.sub(lambda m: m.group(0) if _allowed_link(m.group(0)) else "[link removed]", out)
+    return _MENTION_RE.sub("@" + _ZWJ, out)
+
+
+def _build_advisory_issue_title(finding: Finding) -> str:
+    from app.routers.remediation import _sanitize_md
+    title = _MENTION_RE.sub("@" + _ZWJ, _sanitize_md(finding.title, 150))
+    return f"[Nyx Advisory] {_sanitize_md(finding.severity, 20)}: {title}"
 
 
 def _build_advisory_issue_body(finding: Finding, guidance_markdown: str) -> str:
@@ -777,7 +932,9 @@ def _build_advisory_issue_body(finding: Finding, guidance_markdown: str) -> str:
 
 ### AI-Generated Remediation Plan
 
-{guidance_markdown}
+> ⚠️ **AI-generated content.** Verify every command and link before running or following it.
+
+{_sanitize_advisory_markdown(guidance_markdown)}
 
 ---
 Generated by Nyx Auto PR Mode. Finding ID: `{finding.id}`.
@@ -831,14 +988,16 @@ async def process_advisory_finding(remediation_id: str, repository_id: str) -> N
             )
 
             # Atomic token deduction
-            await _deduct_tokens_and_check_budget(
+            within_budget = await _deduct_tokens_and_check_budget(
                 db, repo.id, result.prompt_tokens + result.completion_tokens
             )
+            if not within_budget:
+                logger.info("Repo %s exceeded auto-PR token budget after advisory %s", repo.id, rem.id)
             await db.refresh(rem)
             await db.refresh(finding)
 
             # Build and create the GitHub Issue
-            issue_title = f"[Nyx Advisory] {finding.severity}: {finding.title[:150]}"
+            issue_title = _build_advisory_issue_title(finding)
             issue_body = _build_advisory_issue_body(finding, result.guidance_markdown)
             issue_number, issue_url = await github_service.create_advisory_issue(
                 repo.github_full_name, issue_title, issue_body,

@@ -16,7 +16,7 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN
+from app.core.security import get_client_ip, require_api_key, require_scope, SCOPE_ANALYST, SCOPE_ADMIN, SCOPE_SCANNER
 
 logger = logging.getLogger("nyx.sbom")
 from app.database import get_db
@@ -93,7 +93,7 @@ async def submit_sbom(
     repo_id: str,
     body: SbomSubmitRequest,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_SCANNER, SCOPE_ANALYST)),  # NYX-2026-09-05
 ):
     """
     Submit a new SBOM for a repository.  Diffs against the previous snapshot
@@ -370,7 +370,7 @@ async def acknowledge_alert(
     request: Request,
     alert_id: str,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),  # NYX-2026-09-05
 ):
     result = await db.execute(select(SbomAlert).where(SbomAlert.id == alert_id))
     alert = result.scalar_one_or_none()

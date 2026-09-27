@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.constants import FindingStatus, Severity
@@ -220,8 +220,8 @@ async def get_hot_repos(
         select(
             Finding.repository_id,
             func.count().label("new_findings"),
-            func.sum(func.case((Finding.severity == "CRITICAL", 1), else_=0)).label("critical_new"),
-            func.sum(func.case((Finding.severity == "HIGH", 1), else_=0)).label("high_new"),
+            func.sum(case((Finding.severity == "CRITICAL", 1), else_=0)).label("critical_new"),
+            func.sum(case((Finding.severity == "HIGH", 1), else_=0)).label("high_new"),
         )
         .where(Finding.first_seen_at >= since)
         .group_by(Finding.repository_id)
@@ -351,7 +351,7 @@ async def get_org_risk_history(
             func.sum(RepoRiskHistory.open_critical + RepoRiskHistory.open_high +
                      RepoRiskHistory.open_medium + RepoRiskHistory.open_low).label("total_open"),
             func.sum(RepoRiskHistory.open_critical).label("total_critical"),
-            func.sum(func.case((RepoRiskHistory.risk_score >= 50, 1), else_=0)).label("repos_at_risk"),
+            func.sum(case((RepoRiskHistory.risk_score >= 50, 1), else_=0)).label("repos_at_risk"),
         )
         .where(RepoRiskHistory.snapshot_date >= since)
         .group_by(RepoRiskHistory.snapshot_date)

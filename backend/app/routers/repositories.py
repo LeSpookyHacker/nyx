@@ -21,6 +21,16 @@ from app.services.audit_service import log_event
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
 
+def _require_auto_pr_master_switch() -> None:
+    """Auto PR Mode cannot be enabled or run while the global master switch is off (NYX-2026-09-06)."""
+    from app.config import get_settings
+    if not get_settings().AUTO_PR_MODE_ENABLED:
+        raise HTTPException(
+            status_code=409,
+            detail="Auto PR Mode is disabled on this Nyx instance (AUTO_PR_MODE_ENABLED=false).",
+        )
+
+
 @router.get("", response_model=List[RepositoryResponse])
 async def list_repositories(
     db: AsyncSession = Depends(get_db),
@@ -36,7 +46,8 @@ async def add_repository(
     request: Request,
     body: RepositoryCreate,
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    # NYX-2026-09-05: installs a webhook with Nyx's GITHUB_TOKEN — analyst/admin only.
+    _key: str = Depends(require_scope(SCOPE_ANALYST, SCOPE_ADMIN)),
 ):
     """Register a GitHub repository with Nyx and install the webhook."""
     # Check not already registered
@@ -107,6 +118,8 @@ async def update_repository(
     repo = result.scalar_one_or_none()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
+    if body.auto_pr_mode:
+        _require_auto_pr_master_switch()
 
     changes: dict = {}
     if body.enabled_scanners is not None:
@@ -156,6 +169,8 @@ async def set_auto_pr_mode(
     repo = result.scalar_one_or_none()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
+    if body.enabled:
+        _require_auto_pr_master_switch()
 
     repo.auto_pr_mode = body.enabled
     await log_event(db, actor=_key, action="repository.auto_pr_mode_toggled",
@@ -185,6 +200,7 @@ async def run_auto_pr_now(
     repo = result.scalar_one_or_none()
     if not repo:
         raise HTTPException(status_code=404, detail="Repository not found")
+    _require_auto_pr_master_switch()
     if not repo.auto_pr_mode:
         raise HTTPException(status_code=400, detail="Auto PR Mode is not enabled for this repository")
 

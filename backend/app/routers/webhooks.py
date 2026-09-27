@@ -91,7 +91,7 @@ async def github_webhook(
         elif event == "pull_request":
             await _handle_pull_request(payload, repo, db, background_tasks)
         elif event == "check_run":
-            await _handle_check_run(payload, db)
+            await _handle_check_run(payload, repo, db)
         # Other events are accepted but ignored
 
         await db.commit()
@@ -209,6 +209,8 @@ async def snyk_webhook(
             status=ScanStatus.RUNNING.value,
             git_ref=repo.default_branch,
             started_at=datetime.now(timezone.utc),
+            # verify_snyk_signature() above only skips verification when no secret is set
+            submission_verified=bool(settings.SNYK_WEBHOOK_SECRET),
         )
         db.add(scan)
         await db.flush()
@@ -267,9 +269,17 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
 
     now = datetime.now(timezone.utc)
 
-    # 1. Close remediations that tracked this PR number
+    # 1. Close remediations that tracked this PR number — in THIS repository only.
+    #    PR numbers are per-repo (NYX-2026-09-04), and advisory remediations store a GitHub
+    #    *issue* number in pr_number, so they are never closed by a PR merge.
     rem_result = await db.execute(
-        select(Remediation).where(Remediation.pr_number == pr_number)
+        select(Remediation)
+        .join(Finding, Remediation.finding_id == Finding.id)
+        .where(
+            Finding.repository_id == repo.id,
+            Remediation.pr_number == pr_number,
+            Remediation.status != RemediationStatus.ADVISORY_OPENED.value,
+        )
     )
     remediations = rem_result.scalars().all()
     fixed_finding_ids = set()
@@ -282,7 +292,10 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
     # 2. Also fix any findings directly linked via fix_pr_url (manual PRs)
     if pr_url:
         manual_result = await db.execute(
-            select(Finding).where(Finding.fix_pr_url == pr_url)
+            select(Finding).where(
+                Finding.repository_id == repo.id,
+                Finding.fix_pr_url == pr_url,
+            )
         )
         for finding in manual_result.scalars().all():
             fixed_finding_ids.add(finding.id)
@@ -309,10 +322,12 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
             )
 
 
-async def _handle_check_run(payload: dict, db) -> None:
+async def _handle_check_run(payload: dict, repo, db) -> None:
     """
-    When a CI check run completes on a nyx/fix/** branch, stamp the matching
-    remediation with ci_status=pass|fail and store failure details.
+    When a CI check run completes on a nyx/fix/** or nyx/auto-fix/** branch of THIS
+    repository, stamp the matching remediation with ci_status=pass|fail and store
+    failure details (NYX-2026-09-15: previously auto-fix branches were ignored and the
+    lookup was not scoped to the sending repository).
 
     GitHub delivers check_run events for every individual check (ESLint,
     TypeScript, etc.).  We aggregate: any failure marks the remediation
@@ -326,13 +341,17 @@ async def _handle_check_run(payload: dict, db) -> None:
     conclusion = check_run.get("conclusion")  # success | failure | cancelled | skipped | ...
     branch = check_run.get("check_suite", {}).get("head_branch", "")
 
-    if not branch.startswith("nyx/fix/"):
+    if not branch.startswith(("nyx/fix/", "nyx/auto-fix/")):
         return  # Only care about Nyx-created branches
 
+    from app.models.finding import Finding
     from app.models.remediation import Remediation
 
     rem_result = await db.execute(
-        select(Remediation).where(Remediation.pr_branch == branch)
+        select(Remediation)
+        .join(Finding, Remediation.finding_id == Finding.id)
+        .where(Remediation.pr_branch == branch, Finding.repository_id == repo.id)
+        .limit(1)
     )
     rem = rem_result.scalar_one_or_none()
     if not rem:

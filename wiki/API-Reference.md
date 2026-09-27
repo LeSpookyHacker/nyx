@@ -62,9 +62,11 @@ Each router lives under `backend/app/routers/`. The path prefix is `/api/v1/<rou
 
 ### Ingest scan results
 ```
-POST /api/v1/scans/import
+POST /api/v1/scans/import-json    CI/CD — scanner or analyst scope (admin supersedes); X-Nyx-Submission-HMAC required by default
+POST /api/v1/scans/import         manual multipart upload from the UI — analyst scope (admin supersedes)
 ```
-The one endpoint every CI pipeline hits. Requires `scanner` or `admin` scope.
+`import-json` is the endpoint every CI pipeline hits. Only HMAC-verified imports (or scans Nyx
+pulls from GitHub itself) can trigger Auto PR Mode.
 
 ### Request an AI fix
 ```

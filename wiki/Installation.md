@@ -30,7 +30,7 @@ cd nyx
 The wizard will:
 
 1. **Check tooling.** Verify Docker, Compose, Python 3, and curl are installed.
-2. **Bootstrap `.env`.** Copy `.env.example` → `.env` and generate values for `NYX_API_KEY`, `NYX_SECRET_KEY`, and `NYX_WEBHOOK_SECRET` using `secrets.token_hex(32)`.
+2. **Bootstrap `.env`.** Copy `.env.example` → `.env` and generate values for `NYX_API_KEY` and `NYX_SECRET_KEY` using `secrets.token_hex(32)`. `NYX_WEBHOOK_SECRET` is intentionally left empty (see `.env.example`).
 3. **Prompt for credentials.** Ask for your `GITHUB_TOKEN` and `ANTHROPIC_API_KEY` — press Enter to skip either and you can set them later in **Settings**.
 4. **Validate.** Probe GitHub and Anthropic to verify the tokens actually work before writing them.
 5. **Build and start.** Run `docker compose build && docker compose up -d`.
@@ -65,7 +65,7 @@ ANTHROPIC_API_KEY=sk-ant-...
 GITHUB_TOKEN=ghp_...
 NYX_API_KEY=any-secret-string-you-pick
 NYX_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-NYX_WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+# Leave NYX_WEBHOOK_SECRET empty — setting it breaks per-repo GitHub webhooks.
 ```
 
 All other variables have sane defaults. See **[Configuration Reference](Configuration.md)** for the full list.

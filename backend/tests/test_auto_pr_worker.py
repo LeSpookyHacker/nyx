@@ -34,6 +34,14 @@ def _db():
 
 
 @pytest.fixture(autouse=True)
+def _master_switch_on(monkeypatch):
+    """These tests exercise the worker itself; the global master switch is covered in
+    test_security_regressions.py (NYX-2026-09-06)."""
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "AUTO_PR_MODE_ENABLED", True)
+
+
+@pytest.fixture(autouse=True)
 def _clean():
     async def _wipe():
         async with AsyncSessionLocal() as db:
@@ -53,7 +61,7 @@ async def _make_repo(**overrides) -> Repository:
         repo = Repository(
             github_full_name=overrides.pop("github_full_name", "octo/repo"),
             auto_pr_mode=overrides.pop("auto_pr_mode", True),
-            auto_pr_severity_threshold=overrides.pop("auto_pr_severity_threshold", "HIGH"),
+            auto_pr_severity_threshold=overrides.pop("auto_pr_severity_threshold", "CRITICAL,HIGH"),
             auto_pr_daily_token_budget=overrides.pop("auto_pr_daily_token_budget", 50000),
             auto_pr_tokens_used_today=overrides.pop("auto_pr_tokens_used_today", 0),
             **overrides,
@@ -130,7 +138,7 @@ def _patch_common(monkeypatch, *, fix: AIFixResult, audit_passed: bool = True):
     async def _tests(*_a, **_kw):
         return {}
     async def _file(*_a, **_kw):
-        return "bad\n"
+        return "bad\n", "blob-sha"
     async def _audit(*_a, **_kw):
         return {"passed": audit_passed, "risk_level": "LOW" if audit_passed else "HIGH",
                 "findings": [], "summary": "ok", "token_input": 20, "token_output": 10}
@@ -141,7 +149,7 @@ def _patch_common(monkeypatch, *, fix: AIFixResult, audit_passed: bool = True):
     monkeypatch.setattr(auto_pr_worker, "_estimate_input_tokens", _est)
     monkeypatch.setattr(auto_pr_worker, "_maybe_fetch_tests", _tests)
     monkeypatch.setattr(auto_pr_worker, "audit_generated_diff", _audit)
-    monkeypatch.setattr(github_service, "get_file_content", _file)
+    monkeypatch.setattr(github_service, "get_file_content_with_sha", _file)
     monkeypatch.setattr(github_service, "apply_unified_diff", lambda *_a, **_kw: "good\n")
     monkeypatch.setattr(github_service, "create_fix_pr", _create_pr)
     # Bypass strict diff-scope validation (validated separately in the manual flow)
@@ -174,15 +182,16 @@ def test_enqueue_skips_when_budget_exhausted():
 def test_enqueue_queues_critical_findings(monkeypatch):
     monkeypatch.setattr(auto_pr_worker, "_run_with_semaphore",
                         lambda *_a, **_kw: asyncio.sleep(0))
-    repo = run(_make_repo(auto_pr_severity_threshold="HIGH"))
+    repo = run(_make_repo(auto_pr_severity_threshold="CRITICAL,HIGH"))
     run(_make_finding(repo.id, "CRITICAL"))
     assert run(_enqueue(repo.id)) == 1
 
 
 def test_enqueue_queues_high_findings_when_threshold_is_high(monkeypatch):
+    # The threshold is an exact severity list (matches the UI multi-select), not "X and above".
     monkeypatch.setattr(auto_pr_worker, "_run_with_semaphore",
                         lambda *_a, **_kw: asyncio.sleep(0))
-    repo = run(_make_repo(auto_pr_severity_threshold="HIGH"))
+    repo = run(_make_repo(auto_pr_severity_threshold="CRITICAL,HIGH"))
     run(_make_finding(repo.id, "CRITICAL", priority=90))
     run(_make_finding(repo.id, "HIGH", priority=80))
     run(_make_finding(repo.id, "MEDIUM", priority=70))  # excluded
@@ -266,6 +275,45 @@ def test_pipeline_commits_draft_pr(monkeypatch):
     assert "auto_pr.audit_started" in actions
 
 
+def test_pipeline_audits_the_committed_change_not_the_model_diff(monkeypatch):
+    """NYX-2026-09-03: the audit must review the exact content Nyx commits."""
+    repo = run(_make_repo(auto_pr_security_audit=True, auto_pr_require_passing_checks=False))
+    f = run(_make_finding(repo.id, "CRITICAL"))
+    _patch_common(monkeypatch, fix=_fix_result(), audit_passed=True)
+
+    seen = {}
+    async def _audit(finding, original, diff, model):
+        seen["diff"] = diff
+        return {"passed": True, "risk_level": "LOW", "findings": [], "summary": "ok",
+                "token_input": 1, "token_output": 1}
+    monkeypatch.setattr(auto_pr_worker, "audit_generated_diff", _audit)
+    # The applier yields content that differs from what the model's diff text claims.
+    monkeypatch.setattr(github_service, "apply_unified_diff", lambda *_a, **_kw: "actually_committed\n")
+
+    rem_id = run(_seed_auto_remediation(f.id))
+    run(auto_pr_worker.process_auto_pr_finding(rem_id, repo.id))
+    assert "+actually_committed" in seen["diff"]
+    assert "-bad" in seen["diff"]
+    assert "+good" not in seen["diff"]
+
+
+def test_pipeline_fails_before_audit_when_diff_does_not_apply(monkeypatch):
+    repo = run(_make_repo(auto_pr_security_audit=True))
+    f = run(_make_finding(repo.id, "CRITICAL"))
+    _patch_common(monkeypatch, fix=_fix_result(), audit_passed=True)
+    audited = []
+    async def _audit(*a, **k):
+        audited.append(1)
+        return {"passed": True, "risk_level": "LOW", "findings": [], "summary": "", "token_input": 0, "token_output": 0}
+    monkeypatch.setattr(auto_pr_worker, "audit_generated_diff", _audit)
+    monkeypatch.setattr(github_service, "apply_unified_diff", lambda *_a, **_kw: None)
+
+    rem_id = run(_seed_auto_remediation(f.id))
+    run(auto_pr_worker.process_auto_pr_finding(rem_id, repo.id))
+    assert run(_get_remediation(rem_id)).status == RemediationStatus.FAILED.value
+    assert audited == []
+
+
 # ── budget tests ────────────────────────────────────────────────────────────────
 
 def test_budget_deduction_is_atomic():
@@ -304,8 +352,13 @@ def test_budget_reset_zeros_all_repos():
 
 
 def test_severities_for_threshold():
+    # Exact-list semantics: each listed severity, nothing implied above or below it.
     assert auto_pr_worker._severities_for_threshold("CRITICAL") == [Severity.CRITICAL.value]
-    assert set(auto_pr_worker._severities_for_threshold("HIGH")) == {Severity.CRITICAL.value, Severity.HIGH.value}
+    assert auto_pr_worker._severities_for_threshold("HIGH") == [Severity.HIGH.value]
+    assert auto_pr_worker._severities_for_threshold("critical, high") == [Severity.CRITICAL.value, Severity.HIGH.value]
+    # Empty / entirely invalid input falls back to the CRITICAL,HIGH default.
+    assert auto_pr_worker._severities_for_threshold("") == [Severity.CRITICAL.value, Severity.HIGH.value]
+    assert auto_pr_worker._severities_for_threshold("bogus") == [Severity.CRITICAL.value, Severity.HIGH.value]
 
 
 # ── shared seeding helper for pipeline tests ────────────────────────────────────

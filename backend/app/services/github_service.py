@@ -33,11 +33,16 @@ settings = get_settings()
 
 # ── Pinned versions ───────────────────────────────────────────────────────────
 # Single source of truth for everything pinned in the generated workflow.
-# The background loop in main.py refreshes these weekly and re-pushes the
-# workflow to all onboarded repos when a newer release is found.
+# NYX-2026-09-10: pins change only through a reviewed code change. The weekly loop in
+# main.py merely *reports* newer releases (log + audit event); it never rewrites these
+# pins or pushes workflows, so a hijacked upstream release cannot propagate automatically.
 
 # GitHub Actions pins — referenced by commit SHA for supply-chain safety.
 PINNED_ACTIONS: dict[str, dict[str, str]] = {
+    "actions/checkout": {
+        "sha": "11bd71901bbe5b1630ceea73d27597364c9af683",
+        "tag": "v4.2.2",
+    },
     "zaproxy/action-baseline": {
         "sha": "de8ad967d3548d44ef623df22cf95c3b0baf8b25",
         "tag": "v0.15.0",
@@ -53,6 +58,12 @@ PINNED_TOOLS: dict[str, str] = {
     "gitleaks/gitleaks": "v8.30.1",
     "hadolint/hadolint": "v2.14.0",
 }
+
+# Package-manager pins for tools installed inside the workflow.
+PINNED_TOOLS.update({
+    "semgrep": "1.178.0",   # PyPI
+    "snyk": "1.1307.4",     # npm
+})
 
 
 async def _resolve_tag_sha(client: httpx.AsyncClient, repo: str, tag: str) -> str | None:
@@ -81,16 +92,18 @@ async def _resolve_tag_sha(client: httpx.AsyncClient, repo: str, tag: str) -> st
     return tag_resp.json()["object"]["sha"]
 
 
-async def refresh_pinned_actions() -> list[str]:
+async def check_pinned_action_updates() -> list[dict[str, str]]:
     """
-    Check GitHub for newer releases of every pinned action and binary tool.
-    Updates PINNED_ACTIONS and PINNED_TOOLS in place.
-    Returns the names of everything that changed so the caller can re-push workflows.
+    Report newer upstream releases of every pinned GitHub Action and binary tool.
+
+    Read-only (NYX-2026-09-10): returns [{"name", "current", "latest", "sha"?}, …] and never
+    mutates PINNED_ACTIONS / PINNED_TOOLS or pushes workflows. Adopting an update is a
+    reviewed code change, after which admins re-push via POST /repositories/{id}/push-workflow.
     """
     if not settings.GITHUB_TOKEN:
         return []
 
-    updated: list[str] = []
+    updates: list[dict[str, str]] = []
     log = __import__("logging").getLogger("nyx.github")
     headers = {
         "Authorization": f"Bearer {settings.GITHUB_TOKEN}",
@@ -112,17 +125,15 @@ async def refresh_pinned_actions() -> list[str]:
                 if not latest_tag or latest_tag == pin["tag"]:
                     continue
                 sha = await _resolve_tag_sha(client, action, latest_tag)
-                if not sha:
-                    continue
-                log.info("Pinned action update: %s %s → %s (%s)", action, pin["tag"], latest_tag, sha[:12])
-                PINNED_ACTIONS[action]["sha"] = sha
-                PINNED_ACTIONS[action]["tag"] = latest_tag
-                updated.append(action)
+                updates.append({"name": action, "current": pin["tag"], "latest": latest_tag,
+                                "sha": sha or ""})
             except Exception:
                 log.debug("Failed to check latest release for %s", action, exc_info=True)
 
-        # ── Binary tools (version-pinned) ─────────────────────────────────────
+        # ── Binary tools (GitHub-released, version-pinned) ────────────────────
         for repo, current_tag in PINNED_TOOLS.items():
+            if "/" not in repo:
+                continue  # package-manager pins (semgrep, snyk) are not GitHub repos
             try:
                 rel_resp = await client.get(
                     f"https://api.github.com/repos/{repo}/releases/latest",
@@ -133,39 +144,11 @@ async def refresh_pinned_actions() -> list[str]:
                 latest_tag = rel_resp.json().get("tag_name", "")
                 if not latest_tag or latest_tag == current_tag:
                     continue
-                log.info("Pinned tool update: %s %s → %s", repo, current_tag, latest_tag)
-                PINNED_TOOLS[repo] = latest_tag
-                updated.append(repo)
+                updates.append({"name": repo, "current": current_tag, "latest": latest_tag})
             except Exception:
                 log.debug("Failed to check latest release for %s", repo, exc_info=True)
 
-    return updated
-
-
-async def push_workflow_to_all_repos(db) -> int:
-    """
-    Re-push the generated nyx-scan.yml to every active repo.
-    Called after pinned actions are updated. Returns the count of repos updated.
-    """
-    from sqlalchemy import select
-    from app.models.repository import Repository
-
-    result = await db.execute(
-        select(Repository).where(Repository.webhook_active.is_(True))
-    )
-    repos = result.scalars().all()
-
-    count = 0
-    for repo in repos:
-        try:
-            await push_nyx_workflow(repo.github_full_name, str(repo.id), repo.default_branch)
-            count += 1
-        except Exception:
-            import logging
-            logging.getLogger("nyx.github").warning(
-                "Failed to update workflow for %s", repo.github_full_name, exc_info=True,
-            )
-    return count
+    return updates
 
 
 def _get_client() -> Github:
@@ -175,7 +158,7 @@ def _get_client() -> Github:
     return Github(settings.GITHUB_TOKEN)
 
 
-def generate_nyx_workflow(repo_id: str) -> str:
+def generate_nyx_workflow(repo_id: str, default_branch: str = "main") -> str:
     """
     Generate the canonical nyx-scan.yml workflow content for a repository.
 
@@ -191,12 +174,15 @@ def generate_nyx_workflow(repo_id: str) -> str:
       vars.NYX_ZAP_TARGET  — full URL for DAST scan (e.g. https://myapp.com)
       secrets.SNYK_TOKEN   — enables Snyk SCA step
     """
+    import json as _json
+    branch_yaml = _json.dumps(default_branch)   # JSON string == valid quoted YAML scalar
+    checkout = PINNED_ACTIONS["actions/checkout"]
     return f"""\
 name: Nyx Security Scan
 
 on:
   push:
-    branches: [main]
+    branches: [{branch_yaml}]
   workflow_dispatch:
 
 jobs:
@@ -208,14 +194,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@{checkout["sha"]}  # {checkout["tag"]}
         with:
           fetch-depth: 0  # Gitleaks needs full history to scan all commits
 
       # ── Semgrep (SAST) ────────────────────────────────────────────────────────
       - name: Run Semgrep
         run: |
-          pip install semgrep --quiet
+          pip install semgrep=={PINNED_TOOLS["semgrep"]} --quiet
           semgrep --config=p/javascript --config=p/secrets --config=p/security-audit \\
             --json --output semgrep.json . || true
 
@@ -338,7 +324,7 @@ jobs:
             echo "⏭ SNYK_TOKEN not set — skipping Snyk (add it to repo secrets to enable)"
             exit 0
           fi
-          npm install -g snyk --quiet
+          npm install -g snyk@{PINNED_TOOLS["snyk"]} --quiet
           snyk test --json --all-projects > snyk.json 2>/dev/null || true
           echo "Snyk scan complete"
 
@@ -441,7 +427,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@{checkout["sha"]}  # {checkout["tag"]}
 
       - name: Fix workspace permissions for ZAP container
         run: |
@@ -497,7 +483,7 @@ async def push_nyx_workflow(repo_full_name: str, repo_id: str, default_branch: s
     if not settings.GITHUB_TOKEN:
         raise GitHubError("GITHUB_TOKEN is not configured")
 
-    content = generate_nyx_workflow(repo_id)
+    content = generate_nyx_workflow(repo_id, default_branch)
     encoded = base64.b64encode(content.encode()).decode()
     path = ".github/workflows/nyx-scan.yml"
     url = f"https://api.github.com/repos/{repo_full_name}/contents/{path}"
@@ -617,6 +603,23 @@ async def get_file_content(repo_full_name: str, file_path: str, ref: str = "") -
         raise GitHubError(f"Failed to fetch {file_path} from {repo_full_name}: {e}") from e
 
 
+async def get_file_content_with_sha(repo_full_name: str, file_path: str, ref: str = "") -> Tuple[str, str]:
+    """Fetch a file's content together with its blob SHA (for stale-write detection, NYX-2026-09-13)."""
+    def _sync():
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        kwargs = {"ref": ref} if ref else {}
+        contents = repo.get_contents(file_path, **kwargs)
+        if isinstance(contents, list):
+            raise GitHubError(f"{file_path} is a directory, not a file")
+        return base64.b64decode(contents.content).decode("utf-8", errors="replace"), contents.sha
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except GithubException as e:
+        raise GitHubError(f"Failed to fetch {file_path} from {repo_full_name}: {e}") from e
+
+
 async def list_directory(repo_full_name: str, dir_path: str, ref: str = "") -> list[str]:
     """Return sorted list of entry names in a repository directory. Returns [] on any error."""
     def _sync():
@@ -643,6 +646,7 @@ async def create_fix_pr(
     pr_body: str,
     base_branch: str,
     draft: bool = False,
+    expected_base_sha: Optional[str] = None,
 ) -> Tuple[int, str]:
     """
     Create a branch with the fixed file and open a pull request.
@@ -651,10 +655,21 @@ async def create_fix_pr(
     When draft=True the PR is opened as a GitHub draft — it cannot be merged
     until a human explicitly marks it ready for review. Auto PR Mode always
     uses draft=True so a human owns the merge decision.
+
+    expected_base_sha is the blob SHA of the file the fix was computed from. If the file
+    on base_branch has changed since, the fix would silently revert those newer commits,
+    so nothing is written and GitHubError is raised (NYX-2026-09-13).
     """
     def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
+
+        existing = repo.get_contents(file_path, ref=base_branch)
+        if expected_base_sha and existing.sha != expected_base_sha:
+            raise GitHubError(
+                f"{file_path} changed on {base_branch} since the fix was generated "
+                f"(blob {expected_base_sha[:10]} -> {existing.sha[:10]}); regenerate the fix."
+            )
 
         # Get the SHA of the base branch HEAD
         base_ref = repo.get_branch(base_branch)
@@ -664,7 +679,6 @@ async def create_fix_pr(
         repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=base_sha)
 
         # Update the file on the fix branch
-        existing = repo.get_contents(file_path, ref=base_branch)
         repo.update_file(
             path=file_path,
             message=f"fix: apply Nyx AI remediation for {file_path}",
@@ -974,57 +988,65 @@ def _fix_hunk_headers(diff: str) -> str:
 
 def apply_unified_diff(original: str, diff: str) -> Optional[str]:
     """
-    Apply a unified diff string to original file content.
+    Apply a single-file unified diff string to original file content.
     Returns the modified content, or None if patch cannot be applied cleanly.
 
     Uses fuzzy line matching (±FUZZ lines) so minor offsets between the diff
-    and the actual file do not cause a hard failure.
+    and the actual file do not cause a hard failure — but every hunk's removed
+    and context lines must match the file exactly at the located position.
+    A hunk that cannot be located is a failure, never a blind overwrite
+    (NYX-2026-09-03): otherwise the committed change could differ from the diff
+    that was reviewed and audited.
     """
     FUZZ = 10  # lines of tolerance around the expected hunk position
 
     try:
         import unidiff
         patch = unidiff.PatchSet(_fix_hunk_headers(diff))
-        lines = original.splitlines(keepends=True)
-        result_lines = list(lines)  # safe default: empty/unparseable patch returns original
+        if len(patch) != 1:
+            # Nyx only ever commits one file; a multi-file (or empty) patch is out of scope.
+            return None
 
-        for patched_file in patch:
-            result_lines = list(lines)
-            offset = 0
-            for hunk in patched_file:
-                # Context lines at the start of the hunk used to locate position
-                context_lines = [
-                    line.value for line in hunk if line.line_type == " "
-                ]
-                source_lines = [
-                    line.value for line in hunk if line.line_type in (" ", "-")
-                ]
+        result_lines = original.splitlines(keepends=True)
+        offset = 0
+        for hunk in patch[0]:
+            source_lines = [
+                line.value for line in hunk if line.line_type in (" ", "-")
+            ]
+            new_lines = [
+                line.value for line in hunk if line.line_type in (" ", "+")
+            ]
 
-                expected_start = hunk.source_start - 1 + offset
-                actual_start = expected_start  # default: trust the diff
+            # unidiff reports source_start=0 for a pure insertion at the top of the file.
+            expected_start = max(hunk.source_start - 1, 0) + offset
+            if not source_lines and hunk.source_length == 0:
+                # Pure insertion: unified diff places it *after* line source_start.
+                expected_start = hunk.source_start + offset
 
-                # Fuzzy search: look for the source lines near the expected position
-                if context_lines:
-                    search_start = max(0, expected_start - FUZZ)
-                    search_end = min(len(result_lines), expected_start + FUZZ + len(source_lines))
-                    for candidate in range(search_start, search_end):
-                        window = [
-                            l for l in result_lines[candidate: candidate + len(source_lines)]
-                        ]
-                        if window == source_lines:
-                            actual_start = candidate
-                            break
+            if source_lines:
+                search_start = max(0, expected_start - FUZZ)
+                search_end = min(len(result_lines), expected_start + FUZZ + 1)
+                candidates = sorted(
+                    range(search_start, search_end),
+                    key=lambda c: abs(c - expected_start),  # prefer the closest match
+                )
+                # Compare content exactly, ignoring only line terminators (CRLF files,
+                # or a final line with no trailing newline).
+                wanted = [l.rstrip("\r\n") for l in source_lines]
+                actual_start = next(
+                    (c for c in candidates
+                     if [l.rstrip("\r\n") for l in result_lines[c: c + len(source_lines)]] == wanted),
+                    None,
+                )
+                if actual_start is None:
+                    return None
+            else:
+                if expected_start > len(result_lines):
+                    return None
+                actual_start = expected_start
 
-                new_lines = []
-                for line in hunk:
-                    if line.line_type == "+":
-                        new_lines.append(line.value)
-                    elif line.line_type == " ":
-                        new_lines.append(line.value)
-                    # "-" lines are dropped
-
-                result_lines[actual_start: actual_start + len(source_lines)] = new_lines
-                offset += len(new_lines) - len(source_lines)
+            result_lines[actual_start: actual_start + len(source_lines)] = new_lines
+            offset += len(new_lines) - len(source_lines)
 
         return "".join(result_lines)
     except (unidiff.errors.UnidiffParseError, IndexError, ValueError) as exc:

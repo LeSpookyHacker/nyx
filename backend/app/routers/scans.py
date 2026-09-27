@@ -169,7 +169,9 @@ async def import_scan_results(
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: AsyncSession = Depends(get_db),
-    _key: str = Depends(require_api_key),
+    # NYX-2026-09-01: manual UI upload — analyst/admin only. CI must use /import-json,
+    # which enforces the scanner scope plus X-Nyx-Submission-HMAC.
+    _key: str = Depends(require_scope(SCOPE_ANALYST)),
 ):
     """
     Import raw scanner JSON output for a repository.

@@ -287,6 +287,13 @@ export default function AutoPrModeCard({ repo }: { repo: Repository }) {
           </button>
         </div>
 
+        {/* Server-side refusal (e.g. AUTO_PR_MODE_ENABLED=false on the Nyx instance) */}
+        {(confirmEnable.error || save.error) && (
+          <p className="mt-3 text-xs text-red-400">
+            {errorDetail(confirmEnable.error || save.error) || 'Could not update Auto PR Mode.'}
+          </p>
+        )}
+
         {/* Triggered notice */}
         {triggeredCount !== null && repo.auto_pr_mode && (
           <div className="mt-3 flex items-center gap-2 text-xs text-amber-400 bg-amber-900/20 border border-amber-700/30 rounded-lg px-3 py-2">
@@ -404,4 +411,10 @@ export default function AutoPrModeCard({ repo }: { repo: Repository }) {
       </div>
     </>
   )
+}
+
+/** Extract FastAPI's `detail` string from an axios error, if present. */
+function errorDetail(err: unknown): string {
+  const detail = (err as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail
+  return typeof detail === 'string' ? detail : ''
 }
