@@ -34,6 +34,14 @@ def _db():
 
 
 @pytest.fixture(autouse=True)
+def _master_switch_on(monkeypatch):
+    """These tests exercise the worker itself; the global master switch is covered in
+    test_security_regressions.py (NYX-2026-09-06)."""
+    from app.config import get_settings
+    monkeypatch.setattr(get_settings(), "AUTO_PR_MODE_ENABLED", True)
+
+
+@pytest.fixture(autouse=True)
 def _clean():
     async def _wipe():
         async with AsyncSessionLocal() as db:

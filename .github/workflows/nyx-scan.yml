@@ -22,7 +22,7 @@ jobs:
       # ── Semgrep (SAST) ────────────────────────────────────────────────────────
       - name: Run Semgrep
         run: |
-          pip install semgrep --quiet
+          pip install semgrep==1.178.0 --quiet
           semgrep --config=p/javascript --config=p/secrets --config=p/security-audit \
             --json --output semgrep.json . || true
 
@@ -148,7 +148,7 @@ jobs:
             echo "⏭ SNYK_TOKEN not set — skipping Snyk (add it to repo secrets to enable)"
             exit 0
           fi
-          npm install -g snyk --quiet
+          npm install -g snyk@1.1307.4 --quiet
           snyk test --json --all-projects > snyk.json 2>/dev/null || true
           echo "Snyk scan complete"
 

@@ -258,7 +258,7 @@ ANTHROPIC_API_KEY=sk-ant-...          # AI fix generation
 GITHUB_TOKEN=ghp_...                   # GitHub integration
 NYX_API_KEY=any-secret-string          # Your login key
 NYX_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
-NYX_WEBHOOK_SECRET=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+# Leave NYX_WEBHOOK_SECRET empty — setting it breaks per-repo GitHub webhooks.
 ```
 
 Then start:
@@ -1767,7 +1767,7 @@ Nyx is designed to be deployed in security-sensitive environments and holds data
 | **BREACH mitigation** | gzip compression is disabled on `/api/` proxy routes in nginx. Only static asset types (`text/css`, `application/javascript`, etc.) are gzip-compressed. This eliminates the BREACH attack surface on JSON API responses over HTTPS. |
 | **Container hardening** | Both backend and frontend containers run as non-root users (`nyx` for backend, `nginx` for frontend). No `gosu` or setuid required — fully compatible with `no-new-privileges: true`. Both containers use `cap_drop: ALL` (nginx adds back only `NET_BIND_SERVICE`). |
 | **No Docker socket mount** | The `autoheal` sidecar — which required mounting `/var/run/docker.sock` and granting container escape capability — has been removed. Container self-healing uses Docker's native `restart: unless-stopped` policy instead. |
-| **Production startup checks** | In `ENVIRONMENT=production`, startup raises `RuntimeError` if: `NYX_API_KEY` is not set, `NYX_SECRET_KEY` is not set, `NYX_WEBHOOK_SECRET` is not set, `DEBUG=true`, or `DATABASE_URL` points to SQLite. The process will not start in an unsafe configuration. |
+| **Production startup checks** | In `ENVIRONMENT=production`, startup raises `RuntimeError` if: `NYX_API_KEY` is not set, `NYX_SECRET_KEY` is not set, `DEBUG=true`, or `DATABASE_URL` points to SQLite. The process will not start in an unsafe configuration. |
 | **API docs hidden in production** | `/docs` and `/redoc` are only served when `ENVIRONMENT != production`. This prevents CSP relaxation and Swagger UI CDN asset loading in production environments. |
 
 ### Supply Chain

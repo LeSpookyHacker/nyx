@@ -33,11 +33,16 @@ settings = get_settings()
 
 # ── Pinned versions ───────────────────────────────────────────────────────────
 # Single source of truth for everything pinned in the generated workflow.
-# The background loop in main.py refreshes these weekly and re-pushes the
-# workflow to all onboarded repos when a newer release is found.
+# NYX-2026-09-10: pins change only through a reviewed code change. The weekly loop in
+# main.py merely *reports* newer releases (log + audit event); it never rewrites these
+# pins or pushes workflows, so a hijacked upstream release cannot propagate automatically.
 
 # GitHub Actions pins — referenced by commit SHA for supply-chain safety.
 PINNED_ACTIONS: dict[str, dict[str, str]] = {
+    "actions/checkout": {
+        "sha": "11bd71901bbe5b1630ceea73d27597364c9af683",
+        "tag": "v4.2.2",
+    },
     "zaproxy/action-baseline": {
         "sha": "de8ad967d3548d44ef623df22cf95c3b0baf8b25",
         "tag": "v0.15.0",
@@ -53,6 +58,12 @@ PINNED_TOOLS: dict[str, str] = {
     "gitleaks/gitleaks": "v8.30.1",
     "hadolint/hadolint": "v2.14.0",
 }
+
+# Package-manager pins for tools installed inside the workflow.
+PINNED_TOOLS.update({
+    "semgrep": "1.178.0",   # PyPI
+    "snyk": "1.1307.4",     # npm
+})
 
 
 async def _resolve_tag_sha(client: httpx.AsyncClient, repo: str, tag: str) -> str | None:
@@ -81,16 +92,18 @@ async def _resolve_tag_sha(client: httpx.AsyncClient, repo: str, tag: str) -> st
     return tag_resp.json()["object"]["sha"]
 
 
-async def refresh_pinned_actions() -> list[str]:
+async def check_pinned_action_updates() -> list[dict[str, str]]:
     """
-    Check GitHub for newer releases of every pinned action and binary tool.
-    Updates PINNED_ACTIONS and PINNED_TOOLS in place.
-    Returns the names of everything that changed so the caller can re-push workflows.
+    Report newer upstream releases of every pinned GitHub Action and binary tool.
+
+    Read-only (NYX-2026-09-10): returns [{"name", "current", "latest", "sha"?}, …] and never
+    mutates PINNED_ACTIONS / PINNED_TOOLS or pushes workflows. Adopting an update is a
+    reviewed code change, after which admins re-push via POST /repositories/{id}/push-workflow.
     """
     if not settings.GITHUB_TOKEN:
         return []
 
-    updated: list[str] = []
+    updates: list[dict[str, str]] = []
     log = __import__("logging").getLogger("nyx.github")
     headers = {
         "Authorization": f"Bearer {settings.GITHUB_TOKEN}",
@@ -112,17 +125,15 @@ async def refresh_pinned_actions() -> list[str]:
                 if not latest_tag or latest_tag == pin["tag"]:
                     continue
                 sha = await _resolve_tag_sha(client, action, latest_tag)
-                if not sha:
-                    continue
-                log.info("Pinned action update: %s %s → %s (%s)", action, pin["tag"], latest_tag, sha[:12])
-                PINNED_ACTIONS[action]["sha"] = sha
-                PINNED_ACTIONS[action]["tag"] = latest_tag
-                updated.append(action)
+                updates.append({"name": action, "current": pin["tag"], "latest": latest_tag,
+                                "sha": sha or ""})
             except Exception:
                 log.debug("Failed to check latest release for %s", action, exc_info=True)
 
-        # ── Binary tools (version-pinned) ─────────────────────────────────────
+        # ── Binary tools (GitHub-released, version-pinned) ────────────────────
         for repo, current_tag in PINNED_TOOLS.items():
+            if "/" not in repo:
+                continue  # package-manager pins (semgrep, snyk) are not GitHub repos
             try:
                 rel_resp = await client.get(
                     f"https://api.github.com/repos/{repo}/releases/latest",
@@ -133,39 +144,11 @@ async def refresh_pinned_actions() -> list[str]:
                 latest_tag = rel_resp.json().get("tag_name", "")
                 if not latest_tag or latest_tag == current_tag:
                     continue
-                log.info("Pinned tool update: %s %s → %s", repo, current_tag, latest_tag)
-                PINNED_TOOLS[repo] = latest_tag
-                updated.append(repo)
+                updates.append({"name": repo, "current": current_tag, "latest": latest_tag})
             except Exception:
                 log.debug("Failed to check latest release for %s", repo, exc_info=True)
 
-    return updated
-
-
-async def push_workflow_to_all_repos(db) -> int:
-    """
-    Re-push the generated nyx-scan.yml to every active repo.
-    Called after pinned actions are updated. Returns the count of repos updated.
-    """
-    from sqlalchemy import select
-    from app.models.repository import Repository
-
-    result = await db.execute(
-        select(Repository).where(Repository.webhook_active.is_(True))
-    )
-    repos = result.scalars().all()
-
-    count = 0
-    for repo in repos:
-        try:
-            await push_nyx_workflow(repo.github_full_name, str(repo.id), repo.default_branch)
-            count += 1
-        except Exception:
-            import logging
-            logging.getLogger("nyx.github").warning(
-                "Failed to update workflow for %s", repo.github_full_name, exc_info=True,
-            )
-    return count
+    return updates
 
 
 def _get_client() -> Github:
@@ -175,7 +158,7 @@ def _get_client() -> Github:
     return Github(settings.GITHUB_TOKEN)
 
 
-def generate_nyx_workflow(repo_id: str) -> str:
+def generate_nyx_workflow(repo_id: str, default_branch: str = "main") -> str:
     """
     Generate the canonical nyx-scan.yml workflow content for a repository.
 
@@ -191,12 +174,15 @@ def generate_nyx_workflow(repo_id: str) -> str:
       vars.NYX_ZAP_TARGET  — full URL for DAST scan (e.g. https://myapp.com)
       secrets.SNYK_TOKEN   — enables Snyk SCA step
     """
+    import json as _json
+    branch_yaml = _json.dumps(default_branch)   # JSON string == valid quoted YAML scalar
+    checkout = PINNED_ACTIONS["actions/checkout"]
     return f"""\
 name: Nyx Security Scan
 
 on:
   push:
-    branches: [main]
+    branches: [{branch_yaml}]
   workflow_dispatch:
 
 jobs:
@@ -208,14 +194,14 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@{checkout["sha"]}  # {checkout["tag"]}
         with:
           fetch-depth: 0  # Gitleaks needs full history to scan all commits
 
       # ── Semgrep (SAST) ────────────────────────────────────────────────────────
       - name: Run Semgrep
         run: |
-          pip install semgrep --quiet
+          pip install semgrep=={PINNED_TOOLS["semgrep"]} --quiet
           semgrep --config=p/javascript --config=p/secrets --config=p/security-audit \\
             --json --output semgrep.json . || true
 
@@ -338,7 +324,7 @@ jobs:
             echo "⏭ SNYK_TOKEN not set — skipping Snyk (add it to repo secrets to enable)"
             exit 0
           fi
-          npm install -g snyk --quiet
+          npm install -g snyk@{PINNED_TOOLS["snyk"]} --quiet
           snyk test --json --all-projects > snyk.json 2>/dev/null || true
           echo "Snyk scan complete"
 
@@ -441,7 +427,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@{checkout["sha"]}  # {checkout["tag"]}
 
       - name: Fix workspace permissions for ZAP container
         run: |
@@ -497,7 +483,7 @@ async def push_nyx_workflow(repo_full_name: str, repo_id: str, default_branch: s
     if not settings.GITHUB_TOKEN:
         raise GitHubError("GITHUB_TOKEN is not configured")
 
-    content = generate_nyx_workflow(repo_id)
+    content = generate_nyx_workflow(repo_id, default_branch)
     encoded = base64.b64encode(content.encode()).decode()
     path = ".github/workflows/nyx-scan.yml"
     url = f"https://api.github.com/repos/{repo_full_name}/contents/{path}"

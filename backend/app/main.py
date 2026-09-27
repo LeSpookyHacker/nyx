@@ -405,30 +405,37 @@ async def _api_key_expiry_warning_loop() -> None:
 
 async def _pinned_action_refresh_loop() -> None:
     """
-    Weekly: check GitHub for newer releases of pinned GitHub Actions used in the
-    generated nyx-scan.yml. When a newer version is found, update the in-memory
-    pins and re-push the workflow to all active repos so they stay current without
-    any manual intervention.
+    Weekly: report newer releases of the actions/tools pinned in the generated
+    nyx-scan.yml (NYX-2026-09-10). Detection only — pins are never rewritten and
+    workflows are never pushed automatically; a hijacked upstream release must not
+    propagate to every onboarded repository. Updating a pin is a reviewed code change,
+    followed by an admin-triggered POST /repositories/{id}/push-workflow.
     """
-    from app.services.github_service import refresh_pinned_actions, push_workflow_to_all_repos
+    from app.database import AsyncSessionLocal
+    from app.services.audit_service import log_event
+    from app.services.github_service import check_pinned_action_updates
 
     # Run once shortly after startup to catch any pins that went stale while Nyx was offline
     await asyncio.sleep(STARTUP_DELAY_SECONDS)
     while True:
         try:
-            updated = await refresh_pinned_actions()
-            if updated:
-                logger.info(
-                    "Pinned action refresh: %d action(s) updated (%s) — pushing workflow to all repos",
-                    len(updated), ", ".join(updated),
+            updates = await check_pinned_action_updates()
+            if updates:
+                logger.warning(
+                    "Pinned workflow dependencies have newer releases (not applied automatically): %s",
+                    ", ".join(f"{u['name']} {u['current']} -> {u['latest']}" for u in updates),
                 )
                 async with AsyncSessionLocal() as db:
-                    count = await push_workflow_to_all_repos(db)
-                logger.info("Pinned action refresh: updated workflow in %d repo(s)", count)
+                    await log_event(
+                        db, actor="system", action="workflow.pin_update_available",
+                        resource_type="workflow", resource_id="nyx-scan.yml",
+                        metadata={"updates": updates},
+                    )
+                    await db.commit()
             else:
-                logger.debug("Pinned action refresh: all pins are current")
+                logger.debug("Pinned workflow dependencies are current")
         except Exception:
-            logger.exception("Error in pinned action refresh loop")
+            logger.exception("Error in pinned action check loop")
         await asyncio.sleep(WEEKLY_INTERVAL_SECONDS)
 
 

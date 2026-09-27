@@ -497,14 +497,15 @@ def warn_insecure_config() -> None:
     if not settings.SNYK_WEBHOOK_SECRET:
         issues.append("SNYK_WEBHOOK_SECRET is not set — Snyk webhooks are accepted without signature verification")
 
-    if not settings.NYX_WEBHOOK_SECRET:
-        msg = "NYX_WEBHOOK_SECRET is not set — GitHub webhook repo enumeration is possible before HMAC check"
-        if settings.ENVIRONMENT == "production":
-            raise RuntimeError(
-                f"[SECURITY] {msg}. Cannot start in production mode without NYX_WEBHOOK_SECRET. "
-                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
-            )
-        issues.append(msg)
+    # NYX-2026-09-08: NYX_WEBHOOK_SECRET is an OPTIONAL global pre-check. GitHub signs each
+    # delivery with a single secret — the per-repo secret Nyx registers — so when this is set,
+    # every hook must be configured with this same value or all deliveries fail with 403.
+    # It is therefore never required, not even in production.
+    if settings.NYX_WEBHOOK_SECRET:
+        issues.append(
+            "NYX_WEBHOOK_SECRET is set — GitHub webhook deliveries are rejected unless each hook's "
+            "secret equals this value. Leave it empty for standard per-repo webhook secrets."
+        )
 
     if settings.JIRA_MOCK_MODE and settings.ENVIRONMENT == "production":
         issues.append("JIRA_MOCK_MODE=true in production — JIRA tickets will not be created")

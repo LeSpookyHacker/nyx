@@ -107,7 +107,8 @@ sudo certbot --nginx -d nyx.example.com
 # --- Hard requirements ---
 NYX_API_KEY=<strong random>
 NYX_SECRET_KEY=<64 hex>
-NYX_WEBHOOK_SECRET=<64 hex>
+# NYX_WEBHOOK_SECRET — leave EMPTY. It is an optional global pre-check; setting it rejects
+# every GitHub delivery unless each hook is configured with this same value.
 DATABASE_URL=postgresql+asyncpg://nyx:...@postgres:5432/nyx
 GITHUB_WEBHOOK_ENDPOINT=https://nyx.example.com
 
@@ -213,7 +214,7 @@ Migrations run automatically. For breaking-change releases, read the changelog f
 Before pointing the outside world at Nyx, confirm all of:
 
 - [ ] `NYX_API_KEY` set, and the bootstrap key has been rotated or revoked via Settings → API Keys
-- [ ] `NYX_SECRET_KEY` and `NYX_WEBHOOK_SECRET` are random, not `change-me`
+- [ ] `NYX_SECRET_KEY` is random, not `change-me` (leave `NYX_WEBHOOK_SECRET` empty unless every GitHub hook uses that exact value)
 - [ ] `ENVIRONMENT=production` and `HTTPS_ONLY=true`
 - [ ] `CORS_ORIGINS_STR` restricted to your dashboard hostname (no wildcard)
 - [ ] `TRUSTED_PROXY_CIDRS` lists only your reverse proxy's private CIDRs
