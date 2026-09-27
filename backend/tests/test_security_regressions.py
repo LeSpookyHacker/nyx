@@ -622,3 +622,236 @@ def test_10_pin_check_reports_but_never_mutates_or_pushes(monkeypatch):
     assert github_service.PINNED_TOOLS == before_tools
     assert not hasattr(github_service, "push_workflow_to_all_repos")
     assert not hasattr(github_service, "refresh_pinned_actions")
+
+
+# ═══ NYX-2026-09-12 — auto-fix branch names are unique per remediation ═══════
+
+def test_12_retry_uses_a_fresh_branch_name(monkeypatch, auto_pr_enabled):
+    from app.services import github_service
+    from app.workers import auto_pr_worker
+    repo = run(_mk_repo("victim/branch", auto_pr_mode=True))
+    finding = run(_mk_finding(repo.id))
+    branches = []
+
+    async def _create_pr(**kw):
+        branches.append(kw["branch_name"])
+        return len(branches), f"https://github.com/victim/branch/pull/{len(branches)}"
+    monkeypatch.setattr(github_service, "create_fix_pr", _create_pr)
+
+    async def _go():
+        for _ in range(2):
+            rem = await _mk_remediation(finding.id, status=RemediationStatus.AUTO_TRIGGERED.value)
+            async with AsyncSessionLocal() as db:
+                rem = (await db.execute(select(Remediation).where(Remediation.id == rem.id))).scalar_one()
+                f = (await db.execute(select(Finding).where(Finding.id == finding.id))).scalar_one()
+                r = (await db.execute(select(Repository).where(Repository.id == repo.id))).scalar_one()
+                await auto_pr_worker._create_draft_pr(db, rem, f, r, "old\n", "new\n")
+    run(_go())
+    assert len(set(branches)) == 2
+    assert all(b.startswith(f"nyx/auto-fix/{finding.id[:8]}-") for b in branches)
+
+
+# ═══ NYX-2026-09-13 — never commit over a file that changed since the fetch ══
+
+class _FakeGhRepo:
+    def __init__(self, current_sha):
+        self.current_sha, self.calls = current_sha, []
+
+    def get_branch(self, name):
+        from types import SimpleNamespace
+        return SimpleNamespace(commit=SimpleNamespace(sha="base"))
+
+    def create_git_ref(self, **kw):
+        self.calls.append("create_git_ref")
+
+    def get_contents(self, path, ref=None):
+        from types import SimpleNamespace
+        return SimpleNamespace(sha=self.current_sha, content="")
+
+    def update_file(self, **kw):
+        self.calls.append("update_file")
+
+    def create_pull(self, **kw):
+        from types import SimpleNamespace
+        self.calls.append("create_pull")
+        return SimpleNamespace(number=1, html_url="u", add_to_labels=lambda *a: None)
+
+
+def _fake_gh(monkeypatch, fake_repo):
+    from types import SimpleNamespace
+    from app.services import github_service
+    monkeypatch.setattr(github_service, "_get_client",
+                        lambda: SimpleNamespace(get_repo=lambda name: fake_repo))
+
+
+def test_13_create_fix_pr_refuses_when_file_changed(monkeypatch):
+    from app.core.exceptions import GitHubError
+    from app.services import github_service
+    fake = _FakeGhRepo(current_sha="sha-now")
+    _fake_gh(monkeypatch, fake)
+    with pytest.raises(GitHubError):
+        run(github_service.create_fix_pr("o/r", "a.py", "old", "new", "nyx/fix/x", "t", "b", "main",
+                                         expected_base_sha="sha-when-fetched"))
+    assert fake.calls == []            # nothing written, no orphan branch
+
+
+def test_13_create_fix_pr_commits_when_file_unchanged(monkeypatch):
+    from app.services import github_service
+    fake = _FakeGhRepo(current_sha="same")
+    _fake_gh(monkeypatch, fake)
+    run(github_service.create_fix_pr("o/r", "a.py", "old", "new", "nyx/fix/x", "t", "b", "main",
+                                     expected_base_sha="same"))
+    assert fake.calls == ["create_git_ref", "update_file", "create_pull"]
+
+
+def test_13_auto_pr_passes_fetched_sha_to_commit(monkeypatch, auto_pr_enabled):
+    from app.services import ai_service, github_service
+    from app.services.ai_service import AIFixResult
+    from app.workers import auto_pr_worker
+    import app.routers.remediation as rem_router
+    repo = run(_mk_repo("victim/sha", auto_pr_mode=True, auto_pr_security_audit=False))
+    finding = run(_mk_finding(repo.id))
+    rem = run(_mk_remediation(finding.id, status=RemediationStatus.AUTO_TRIGGERED.value, is_auto_triggered=True))
+    seen = {}
+
+    async def _fetch(*a, **k):
+        return "bad\n", "blob-sha-1"
+
+    async def _gen(*a, **k):
+        return AIFixResult(explanation="e", fix_diff="--- a/app/db.py\n+++ b/app/db.py\n@@ -1 +1 @@\n-bad\n+good\n",
+                           fix_summary="s", confidence=0.9, model="m", prompt_tokens=1, completion_tokens=1)
+
+    async def _create_pr(**kw):
+        seen.update(kw)
+        return 1, "https://github.com/victim/sha/pull/1"
+
+    async def _zero(*a, **k):
+        return 0
+
+    async def _no_tests(*a, **k):
+        return {}
+    monkeypatch.setattr(github_service, "get_file_content_with_sha", _fetch)
+    monkeypatch.setattr(ai_service, "generate_fix", _gen)
+    monkeypatch.setattr(github_service, "create_fix_pr", _create_pr)
+    monkeypatch.setattr(auto_pr_worker, "_estimate_input_tokens", _zero)
+    monkeypatch.setattr(auto_pr_worker, "_maybe_fetch_tests", _no_tests)
+    run(auto_pr_worker.process_auto_pr_finding(rem.id, repo.id))
+    assert seen.get("expected_base_sha") == "blob-sha-1"
+
+
+# ═══ NYX-2026-09-14 — budget reservation is atomic; tasks are retained ═══════
+
+def test_14_concurrent_reservations_cannot_overspend():
+    from app.workers import auto_pr_worker
+    repo = run(_mk_repo("victim/budget", auto_pr_daily_token_budget=1000, auto_pr_tokens_used_today=0))
+
+    async def _reserve(n):
+        async with AsyncSessionLocal() as db:
+            return await auto_pr_worker._reserve_budget(db, repo.id, n)
+
+    async def _go():
+        return await asyncio.gather(*[_reserve(400) for _ in range(3)])
+    results = run(_go())
+    assert sorted(results) == [False, True, True]
+    assert run(_get(Repository, repo.id)).auto_pr_tokens_used_today == 800
+
+
+def test_14_background_tasks_are_retained_until_done(monkeypatch, auto_pr_enabled):
+    from app.workers import auto_pr_worker
+    repo = run(_mk_repo("victim/tasks", auto_pr_mode=True))
+    run(_mk_finding(repo.id, scan_id="scan-t"))
+
+    async def _go():
+        gate = asyncio.Event()
+
+        async def _slow(rid, repo_id):
+            await gate.wait()
+        monkeypatch.setattr(auto_pr_worker, "_run_with_semaphore", _slow)
+        async with AsyncSessionLocal() as db:
+            n = await auto_pr_worker.enqueue_auto_pr_findings(db, repo.id, "scan-t")
+        held = len(auto_pr_worker._BACKGROUND_TASKS)
+        gate.set()
+        await asyncio.sleep(0.05)
+        return n, held, len(auto_pr_worker._BACKGROUND_TASKS)
+    assert run(_go()) == (1, 1, 0)
+
+
+# ═══ NYX-2026-09-15 — check_run handler covers auto-fix branches, per repo ════
+
+def _check_run_payload(repo_name: str, branch: str, conclusion: str = "failure") -> dict:
+    return {"action": "completed", "repository": {"full_name": repo_name},
+            "check_run": {"name": "tests", "conclusion": conclusion, "details_url": "",
+                          "output": {"summary": "boom"}, "check_suite": {"head_branch": branch}}}
+
+
+def test_15_auto_fix_branch_ci_result_is_recorded(client, no_global_webhook_secret):
+    repo = run(_mk_repo("victim/ci", webhook_secret="ci-secret"))
+    finding = run(_mk_finding(repo.id))
+    branch = f"nyx/auto-fix/{finding.id[:8]}-abcdef12"
+    rem = run(_mk_remediation(finding.id, status=RemediationStatus.COMMITTED.value, pr_branch=branch))
+    r = _post_webhook(client, "check_run", _check_run_payload(repo.github_full_name, branch), "ci-secret", "reg-15a")
+    assert r.status_code == 200
+    assert run(_get(Remediation, rem.id)).ci_status == "fail"
+
+
+def test_15_check_run_from_other_repo_is_ignored(client, no_global_webhook_secret):
+    victim = run(_mk_repo("victim/ci2", webhook_secret="v-secret"))
+    other = run(_mk_repo("other/ci2", webhook_secret="o-secret"))
+    finding = run(_mk_finding(victim.id))
+    rem = run(_mk_remediation(finding.id, status=RemediationStatus.PR_OPEN.value, pr_branch="nyx/fix/deadbeef"))
+    r = _post_webhook(client, "check_run", _check_run_payload(other.github_full_name, "nyx/fix/deadbeef"),
+                      "o-secret", "reg-15b")
+    assert r.status_code == 200
+    assert run(_get(Remediation, rem.id)).ci_status is None
+
+
+# ═══ NYX-2026-09-16 — session login with an expiring DB key ═════════════════
+
+async def _mk_key_expiring(delta: timedelta) -> str:
+    from app.core.security import _compute_key_hashes
+    raw = secrets.token_urlsafe(24)
+    async with AsyncSessionLocal() as db:
+        db.add(ApiKey(name=f"reg-exp-{raw[:6]}", key_hash=_compute_key_hashes(raw)[0], is_active=True,
+                      created_by="test", scopes="analyst", expires_at=datetime.now(timezone.utc) + delta))
+        await db.commit()
+    return raw
+
+
+@pytest.fixture
+def fresh_rate_limits():
+    """/auth/session is limited to 5/minute; other test modules may have used that budget."""
+    from app.core.limiter import limiter
+    limiter.reset()
+
+
+def test_16_session_login_works_for_unexpired_key(client, fresh_rate_limits):
+    key = run(_mk_key_expiring(timedelta(days=30)))
+    r = client.post("/auth/session", json={"api_key": key})
+    assert r.status_code == 200 and r.json()["scopes"] == "analyst"
+
+
+def test_16_session_login_rejects_expired_key(client, fresh_rate_limits):
+    key = run(_mk_key_expiring(timedelta(days=-1)))
+    assert client.post("/auth/session", json={"api_key": key}).status_code == 401
+
+
+# ═══ NYX-2026-09-17 — secret-key rotation encrypts exactly once ══════════════
+
+def test_17_rotate_secret_key_single_encryption():
+    import base64
+    from cryptography.fernet import Fernet
+    from sqlalchemy import text
+    from app.core.crypto import _V2_PREFIX, _derive_key_v2
+    from app.core.security import rotate_secret_key
+    repo = run(_mk_repo("victim/rotate", webhook_secret="hook-secret"))
+    new_key = "d" * 64
+    assert run(rotate_secret_key(new_key))["rotated"] == 1
+
+    async def _raw():
+        async with AsyncSessionLocal() as db:
+            return (await db.execute(text("SELECT webhook_secret FROM repositories WHERE id = :id"),
+                                     {"id": repo.id})).scalar_one()
+    raw = run(_raw())
+    assert raw.startswith(_V2_PREFIX)
+    fernet = Fernet(base64.urlsafe_b64encode(_derive_key_v2(new_key)))
+    assert fernet.decrypt(raw[len(_V2_PREFIX):].encode()).decode() == "hook-secret"

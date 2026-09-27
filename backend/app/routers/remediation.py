@@ -545,8 +545,8 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
         repo = repo_result.scalar_one_or_none()
 
         try:
-            # Fetch current file content
-            file_content = await github_service.get_file_content(
+            # Fetch current file content (+ blob SHA so a concurrent change is detected, NYX-2026-09-13)
+            file_content, file_blob_sha = await github_service.get_file_content_with_sha(
                 repo.github_full_name,
                 finding.file_path,
                 repo.default_branch,
@@ -586,6 +586,7 @@ async def _create_pr(remediation_id: str, auto_merge: bool = False, jira_assigne
                 pr_title=pr_title,
                 pr_body=pr_body,
                 base_branch=repo.default_branch,
+                expected_base_sha=file_blob_sha,
             )
 
             rem.pr_number = pr_number

@@ -61,7 +61,7 @@ async def _make_repo(**overrides) -> Repository:
         repo = Repository(
             github_full_name=overrides.pop("github_full_name", "octo/repo"),
             auto_pr_mode=overrides.pop("auto_pr_mode", True),
-            auto_pr_severity_threshold=overrides.pop("auto_pr_severity_threshold", "HIGH"),
+            auto_pr_severity_threshold=overrides.pop("auto_pr_severity_threshold", "CRITICAL,HIGH"),
             auto_pr_daily_token_budget=overrides.pop("auto_pr_daily_token_budget", 50000),
             auto_pr_tokens_used_today=overrides.pop("auto_pr_tokens_used_today", 0),
             **overrides,
@@ -138,7 +138,7 @@ def _patch_common(monkeypatch, *, fix: AIFixResult, audit_passed: bool = True):
     async def _tests(*_a, **_kw):
         return {}
     async def _file(*_a, **_kw):
-        return "bad\n"
+        return "bad\n", "blob-sha"
     async def _audit(*_a, **_kw):
         return {"passed": audit_passed, "risk_level": "LOW" if audit_passed else "HIGH",
                 "findings": [], "summary": "ok", "token_input": 20, "token_output": 10}
@@ -149,7 +149,7 @@ def _patch_common(monkeypatch, *, fix: AIFixResult, audit_passed: bool = True):
     monkeypatch.setattr(auto_pr_worker, "_estimate_input_tokens", _est)
     monkeypatch.setattr(auto_pr_worker, "_maybe_fetch_tests", _tests)
     monkeypatch.setattr(auto_pr_worker, "audit_generated_diff", _audit)
-    monkeypatch.setattr(github_service, "get_file_content", _file)
+    monkeypatch.setattr(github_service, "get_file_content_with_sha", _file)
     monkeypatch.setattr(github_service, "apply_unified_diff", lambda *_a, **_kw: "good\n")
     monkeypatch.setattr(github_service, "create_fix_pr", _create_pr)
     # Bypass strict diff-scope validation (validated separately in the manual flow)
@@ -182,15 +182,16 @@ def test_enqueue_skips_when_budget_exhausted():
 def test_enqueue_queues_critical_findings(monkeypatch):
     monkeypatch.setattr(auto_pr_worker, "_run_with_semaphore",
                         lambda *_a, **_kw: asyncio.sleep(0))
-    repo = run(_make_repo(auto_pr_severity_threshold="HIGH"))
+    repo = run(_make_repo(auto_pr_severity_threshold="CRITICAL,HIGH"))
     run(_make_finding(repo.id, "CRITICAL"))
     assert run(_enqueue(repo.id)) == 1
 
 
 def test_enqueue_queues_high_findings_when_threshold_is_high(monkeypatch):
+    # The threshold is an exact severity list (matches the UI multi-select), not "X and above".
     monkeypatch.setattr(auto_pr_worker, "_run_with_semaphore",
                         lambda *_a, **_kw: asyncio.sleep(0))
-    repo = run(_make_repo(auto_pr_severity_threshold="HIGH"))
+    repo = run(_make_repo(auto_pr_severity_threshold="CRITICAL,HIGH"))
     run(_make_finding(repo.id, "CRITICAL", priority=90))
     run(_make_finding(repo.id, "HIGH", priority=80))
     run(_make_finding(repo.id, "MEDIUM", priority=70))  # excluded
@@ -351,8 +352,13 @@ def test_budget_reset_zeros_all_repos():
 
 
 def test_severities_for_threshold():
+    # Exact-list semantics: each listed severity, nothing implied above or below it.
     assert auto_pr_worker._severities_for_threshold("CRITICAL") == [Severity.CRITICAL.value]
-    assert set(auto_pr_worker._severities_for_threshold("HIGH")) == {Severity.CRITICAL.value, Severity.HIGH.value}
+    assert auto_pr_worker._severities_for_threshold("HIGH") == [Severity.HIGH.value]
+    assert auto_pr_worker._severities_for_threshold("critical, high") == [Severity.CRITICAL.value, Severity.HIGH.value]
+    # Empty / entirely invalid input falls back to the CRITICAL,HIGH default.
+    assert auto_pr_worker._severities_for_threshold("") == [Severity.CRITICAL.value, Severity.HIGH.value]
+    assert auto_pr_worker._severities_for_threshold("bogus") == [Severity.CRITICAL.value, Severity.HIGH.value]
 
 
 # ── shared seeding helper for pipeline tests ────────────────────────────────────

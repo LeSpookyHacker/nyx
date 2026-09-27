@@ -684,7 +684,12 @@ async def create_session(request: Request, response: Response):
             record = result.scalar_one_or_none()
             if record:
                 now = datetime.now(timezone.utc)
-                if not (record.expires_at and record.expires_at < now):
+                # SQLite drops tzinfo; stored values are UTC (NYX-2026-09-16 — comparing a naive
+                # value to an aware one raised TypeError and rejected every expiring key).
+                expires = record.expires_at
+                if expires is not None and expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if not (expires and expires < now):
                     record.last_used_at = now
                     await db.commit()
                     key_valid = True

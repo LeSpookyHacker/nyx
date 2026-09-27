@@ -828,12 +828,14 @@ async def rotate_secret_key(new_secret_key: str) -> dict:
                 new_fernet = Fernet(base64.urlsafe_b64encode(new_key_bytes))
                 new_encrypted = _V2PFX + new_fernet.encrypt(current_secret.encode()).decode()
 
-                # Store raw encrypted value directly (bypass the ORM type decorator)
-                from sqlalchemy import update
+                # Store the raw encrypted value directly. An ORM/Core update() on
+                # Repository.webhook_secret would still run EncryptedString.process_bind_param
+                # and encrypt a second time with the OLD key (NYX-2026-09-17), so use
+                # textual SQL, which carries no column type.
+                from sqlalchemy import text
                 await db.execute(
-                    update(Repository)
-                    .where(Repository.id == repo.id)
-                    .values(webhook_secret=new_encrypted)
+                    text("UPDATE repositories SET webhook_secret = :v WHERE id = :id"),
+                    {"v": new_encrypted, "id": repo.id},
                 )
                 rotated += 1
             except Exception as e:

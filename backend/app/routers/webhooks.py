@@ -91,7 +91,7 @@ async def github_webhook(
         elif event == "pull_request":
             await _handle_pull_request(payload, repo, db, background_tasks)
         elif event == "check_run":
-            await _handle_check_run(payload, db)
+            await _handle_check_run(payload, repo, db)
         # Other events are accepted but ignored
 
         await db.commit()
@@ -322,10 +322,12 @@ async def _handle_pull_request(payload: dict, repo, db, background_tasks) -> Non
             )
 
 
-async def _handle_check_run(payload: dict, db) -> None:
+async def _handle_check_run(payload: dict, repo, db) -> None:
     """
-    When a CI check run completes on a nyx/fix/** branch, stamp the matching
-    remediation with ci_status=pass|fail and store failure details.
+    When a CI check run completes on a nyx/fix/** or nyx/auto-fix/** branch of THIS
+    repository, stamp the matching remediation with ci_status=pass|fail and store
+    failure details (NYX-2026-09-15: previously auto-fix branches were ignored and the
+    lookup was not scoped to the sending repository).
 
     GitHub delivers check_run events for every individual check (ESLint,
     TypeScript, etc.).  We aggregate: any failure marks the remediation
@@ -339,13 +341,17 @@ async def _handle_check_run(payload: dict, db) -> None:
     conclusion = check_run.get("conclusion")  # success | failure | cancelled | skipped | ...
     branch = check_run.get("check_suite", {}).get("head_branch", "")
 
-    if not branch.startswith("nyx/fix/"):
+    if not branch.startswith(("nyx/fix/", "nyx/auto-fix/")):
         return  # Only care about Nyx-created branches
 
+    from app.models.finding import Finding
     from app.models.remediation import Remediation
 
     rem_result = await db.execute(
-        select(Remediation).where(Remediation.pr_branch == branch)
+        select(Remediation)
+        .join(Finding, Remediation.finding_id == Finding.id)
+        .where(Remediation.pr_branch == branch, Finding.repository_id == repo.id)
+        .limit(1)
     )
     rem = rem_result.scalar_one_or_none()
     if not rem:

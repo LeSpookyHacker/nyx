@@ -61,6 +61,16 @@ _TERMINAL_FAILURE_STATES = {
 # Global concurrency limiter (lazily created so a settings reload is respected in tests).
 _semaphore: Optional[asyncio.Semaphore] = None
 
+# Strong references to in-flight pipeline tasks. The event loop only keeps weak references,
+# so an unreferenced create_task() can be garbage-collected mid-run (NYX-2026-09-14).
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> None:
+    task = asyncio.create_task(coro)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
 
 def _get_semaphore() -> asyncio.Semaphore:
     global _semaphore
@@ -97,6 +107,28 @@ async def _deduct_tokens_and_check_budget(db, repository_id: str, tokens: int) -
     if row is None:
         return False
     return row[0] <= row[1]
+
+
+async def _reserve_budget(db, repository_id: str, tokens: int) -> bool:
+    """
+    Atomically reserve `tokens` of today's budget (NYX-2026-09-14).
+
+    A single conditional UPDATE — `used + tokens <= budget` — so concurrent pipelines
+    cannot all pass a read-then-check and overspend together. Returns False (and
+    reserves nothing) when the reservation does not fit.
+    """
+    result = await db.execute(
+        update(Repository)
+        .where(
+            Repository.id == repository_id,
+            Repository.auto_pr_tokens_used_today + tokens <= Repository.auto_pr_daily_token_budget,
+        )
+        .values(auto_pr_tokens_used_today=Repository.auto_pr_tokens_used_today + tokens)
+        .returning(Repository.auto_pr_tokens_used_today)
+    )
+    row = result.fetchone()
+    await db.commit()
+    return row is not None
 
 
 async def _estimate_input_tokens(finding: Finding, file_content: str, model: str) -> int:
@@ -215,9 +247,9 @@ async def enqueue_auto_pr_findings(db, repository_id: str, scan_id: str) -> int:
     await db.commit()
 
     for rem_id in queued_ids:
-        asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+        _spawn(_run_with_semaphore(rem_id, repository_id))
     for rem_id in advisory_queued_ids:
-        asyncio.create_task(_run_advisory_with_semaphore(rem_id, repository_id))
+        _spawn(_run_advisory_with_semaphore(rem_id, repository_id))
 
     return len(queued_ids) + len(advisory_queued_ids)
 
@@ -300,23 +332,29 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
         try:
             # 2. Gather context (mirrors remediation._run_ai_fix)
             file_content = ""
+            file_blob_sha: Optional[str] = None
             if finding.file_path:
                 try:
-                    file_content = await github_service.get_file_content(
+                    file_content, file_blob_sha = await github_service.get_file_content_with_sha(
                         repo.github_full_name, finding.file_path, repo.default_branch
                     )
                 except Exception:
                     file_content = finding.code_snippet or "# File content unavailable"
 
-            # 2b. Pre-call budget estimate
+            # 2b. Atomically reserve the pre-call estimate (NYX-2026-09-14); the reservation is
+            #     trued up to the real usage once the call returns.
             estimate = await _estimate_input_tokens(finding, file_content, settings.AUTO_PR_FIX_MODEL)
-            if repo.auto_pr_tokens_used_today + estimate > repo.auto_pr_daily_token_budget:
+            if not await _reserve_budget(db, repo.id, estimate):
+                await db.refresh(rem)
+                await db.refresh(finding)
                 await _finalize(db, rem, finding, RemediationStatus.BUDGET_EXCEEDED.value,
                                 "auto_pr.budget_exceeded",
                                 {"finding_id": finding.id, "estimated_input_tokens": estimate,
                                  "daily_budget": repo.auto_pr_daily_token_budget},
                                 reopen_finding=True)
                 return
+            await db.refresh(rem)
+            await db.refresh(finding)
 
             # 3. Generate the fix (uses the configured auto-mode model)
             rem.status = RemediationStatus.GENERATING.value
@@ -342,9 +380,10 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
             rem.diff_warnings = json.dumps(fix.diff_warnings) if fix.diff_warnings else None
             await db.commit()
 
-            # 4. Deduct fix tokens; stop the queue if this pushed the repo over budget
+            # 4. Deduct fix tokens (minus the reservation already taken); stop the queue if
+            #    this pushed the repo over budget
             within_budget = await _deduct_tokens_and_check_budget(
-                db, repo.id, fix.prompt_tokens + fix.completion_tokens
+                db, repo.id, fix.prompt_tokens + fix.completion_tokens - estimate
             )
             await db.refresh(rem)
             await db.refresh(finding)
@@ -401,6 +440,7 @@ async def process_auto_pr_finding(remediation_id: str, repository_id: str) -> No
             # 8. Commit to branch + open DRAFT PR
             pr_number, pr_url, branch_name = await _create_draft_pr(
                 db, rem, finding, repo, file_content, fixed_content,
+                expected_base_sha=file_blob_sha,
             )
             rem.pr_number = pr_number
             rem.pr_url = pr_url
@@ -471,9 +511,12 @@ def _render_committed_diff(file_path: str, original: str, fixed: str) -> str:
 
 
 async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Repository,
-                           file_content: str, fixed_content: str):
+                           file_content: str, fixed_content: str,
+                           expected_base_sha: Optional[str] = None):
     """Open a draft PR with the already-verified fixed content. Returns (number, url, branch)."""
-    branch_name = f"nyx/auto-fix/{finding.id[:8]}"
+    # Unique per remediation (NYX-2026-09-12): a retry for the same finding must not collide
+    # with a branch left behind by an earlier attempt.
+    branch_name = f"nyx/auto-fix/{finding.id[:8]}-{rem.id[:8]}"
     pr_title = (rem.ai_fix_summary or finding.title or f"Nyx auto-fix {rem.id[:8]}")[:120]
     pr_title = f"[Nyx Auto] {pr_title}"
     pr_body = _build_auto_pr_body(finding, rem)
@@ -488,6 +531,7 @@ async def _create_draft_pr(db, rem: Remediation, finding: Finding, repo: Reposit
         pr_body=pr_body,
         base_branch=repo.default_branch,
         draft=True,
+        expected_base_sha=expected_base_sha,
     )
     return pr_number, pr_url, branch_name
 
@@ -768,9 +812,9 @@ async def trigger_auto_pr_now(db, repository_id: str) -> int:
     await db.commit()
 
     for rem_id in queued_ids:
-        asyncio.create_task(_run_with_semaphore(rem_id, repository_id))
+        _spawn(_run_with_semaphore(rem_id, repository_id))
     for rem_id in advisory_queued_ids:
-        asyncio.create_task(_run_advisory_with_semaphore(rem_id, repository_id))
+        _spawn(_run_advisory_with_semaphore(rem_id, repository_id))
 
     return len(queued_ids) + len(advisory_queued_ids)
 
@@ -925,9 +969,11 @@ async def process_advisory_finding(remediation_id: str, repository_id: str) -> N
             )
 
             # Atomic token deduction
-            await _deduct_tokens_and_check_budget(
+            within_budget = await _deduct_tokens_and_check_budget(
                 db, repo.id, result.prompt_tokens + result.completion_tokens
             )
+            if not within_budget:
+                logger.info("Repo %s exceeded auto-PR token budget after advisory %s", repo.id, rem.id)
             await db.refresh(rem)
             await db.refresh(finding)
 

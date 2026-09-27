@@ -603,6 +603,23 @@ async def get_file_content(repo_full_name: str, file_path: str, ref: str = "") -
         raise GitHubError(f"Failed to fetch {file_path} from {repo_full_name}: {e}") from e
 
 
+async def get_file_content_with_sha(repo_full_name: str, file_path: str, ref: str = "") -> Tuple[str, str]:
+    """Fetch a file's content together with its blob SHA (for stale-write detection, NYX-2026-09-13)."""
+    def _sync():
+        g = _get_client()
+        repo = g.get_repo(repo_full_name)
+        kwargs = {"ref": ref} if ref else {}
+        contents = repo.get_contents(file_path, **kwargs)
+        if isinstance(contents, list):
+            raise GitHubError(f"{file_path} is a directory, not a file")
+        return base64.b64decode(contents.content).decode("utf-8", errors="replace"), contents.sha
+
+    try:
+        return await asyncio.to_thread(_sync)
+    except GithubException as e:
+        raise GitHubError(f"Failed to fetch {file_path} from {repo_full_name}: {e}") from e
+
+
 async def list_directory(repo_full_name: str, dir_path: str, ref: str = "") -> list[str]:
     """Return sorted list of entry names in a repository directory. Returns [] on any error."""
     def _sync():
@@ -629,6 +646,7 @@ async def create_fix_pr(
     pr_body: str,
     base_branch: str,
     draft: bool = False,
+    expected_base_sha: Optional[str] = None,
 ) -> Tuple[int, str]:
     """
     Create a branch with the fixed file and open a pull request.
@@ -637,10 +655,21 @@ async def create_fix_pr(
     When draft=True the PR is opened as a GitHub draft — it cannot be merged
     until a human explicitly marks it ready for review. Auto PR Mode always
     uses draft=True so a human owns the merge decision.
+
+    expected_base_sha is the blob SHA of the file the fix was computed from. If the file
+    on base_branch has changed since, the fix would silently revert those newer commits,
+    so nothing is written and GitHubError is raised (NYX-2026-09-13).
     """
     def _sync():
         g = _get_client()
         repo = g.get_repo(repo_full_name)
+
+        existing = repo.get_contents(file_path, ref=base_branch)
+        if expected_base_sha and existing.sha != expected_base_sha:
+            raise GitHubError(
+                f"{file_path} changed on {base_branch} since the fix was generated "
+                f"(blob {expected_base_sha[:10]} -> {existing.sha[:10]}); regenerate the fix."
+            )
 
         # Get the SHA of the base branch HEAD
         base_ref = repo.get_branch(base_branch)
@@ -650,7 +679,6 @@ async def create_fix_pr(
         repo.create_git_ref(ref=f"refs/heads/{branch_name}", sha=base_sha)
 
         # Update the file on the fix branch
-        existing = repo.get_contents(file_path, ref=base_branch)
         repo.update_file(
             path=file_path,
             message=f"fix: apply Nyx AI remediation for {file_path}",
